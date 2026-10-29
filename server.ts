@@ -63,6 +63,7 @@ import {
   getUploadedPdfByUrl,
 } from './src/db/repository.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
+import { executeScheduledBackup } from './src/lib/backup-service.ts';
 
 // Validate AUTH_SESSION_SECRET at module load / startup (fails fast if missing or weak)
 validateAuthConfiguration();
@@ -1291,6 +1292,43 @@ app.get('/api/admin/export-csv', requireAuth, requireAdmin, async (_req, res) =>
     return sendErrorResponse(res, error, 'Failed to export question bank.', 500);
   }
 });
+
+// Automated & Admin-triggered Database Backup Endpoint (Vercel Cron & Administrator Dashboard)
+app.all(
+  '/api/cron/backup',
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    const authHeader = req.headers.authorization || '';
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+      return next();
+    }
+    return requireAuth(req, res, () => {
+      return requireAdmin(req, res, next);
+    });
+  },
+  async (_req, res) => {
+    try {
+      const result = await executeScheduledBackup();
+      return res.json({
+        success: true,
+        backupId: result.backupId,
+        storageProvider: result.storageProvider,
+        isDurable: result.isDurableStorage,
+        location: result.location,
+        tables: result.metadata.tables,
+        restoreVerification: result.verificationResult.status,
+        prunedCount: result.prunedCount,
+        durationMs: result.durationMs,
+      });
+    } catch (error: any) {
+      console.error('[CRON_BACKUP_ERROR]', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Scheduled backup execution failed.',
+      });
+    }
+  }
+);
 
 // Global Express error handler to prevent unhandled internal error leaks or stack traces
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

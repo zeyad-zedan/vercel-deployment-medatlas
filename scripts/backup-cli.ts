@@ -1,11 +1,11 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import {
-  generateBackupArchive,
+  executeScheduledBackup,
   testRestoreBackup,
-  pruneOldBackups,
   DEFAULT_BACKUP_RETENTION_DAYS,
 } from '../src/lib/backup-service.ts';
+import { resolveBackupStorageProvider } from '../src/lib/backup-storage.ts';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -15,15 +15,15 @@ async function main() {
     case 'create': {
       console.log('🔄 Initiating full encrypted database backup...');
       const retentionDays = args[1] ? Number.parseInt(args[1], 10) : DEFAULT_BACKUP_RETENTION_DAYS;
-      const { filePath, envelope, prunedFiles } = await generateBackupArchive({ retentionDays });
-      console.log(`✅ Backup created successfully: ${filePath}`);
-      console.log(`📊 Total tables backed up: ${Object.keys(envelope.metadata.tables).length}`);
-      console.log('📈 Table breakdown:');
-      for (const [table, count] of Object.entries(envelope.metadata.tables)) {
-        console.log(`   - ${table}: ${count} records`);
-      }
-      if (prunedFiles.length > 0) {
-        console.log(`🧹 Pruned ${prunedFiles.length} expired backups (> ${retentionDays} days):`, prunedFiles);
+      const result = await executeScheduledBackup({ retentionDays });
+      console.log(`✅ Backup created successfully: ${result.backupId}`);
+      console.log(`📦 Storage destination: ${result.storageProvider} (${result.isDurableStorage ? 'Durable Off-site' : 'Local Ephemeral'})`);
+      console.log(`📍 Location: ${result.location}`);
+      console.log(`📊 Tables backed up: ${Object.keys(result.metadata.tables).length}`);
+      console.log(`⏱️ Duration: ${result.durationMs}ms`);
+      console.log(`🧪 Restore verification status: ${result.verificationResult.status}`);
+      if (result.prunedCount > 0) {
+        console.log(`🧹 Pruned ${result.prunedCount} expired backups (> ${retentionDays} days)`);
       }
       break;
     }
@@ -35,7 +35,7 @@ async function main() {
         // Find most recent backup in backups/
         const backupDir = path.resolve(process.cwd(), 'backups');
         if (!fs.existsSync(backupDir)) {
-          console.error('❌ No backups directory found. Run "npm run backup:create" first.');
+          console.error('❌ No local backups directory found. Pass a backup file path or run "npm run backup:create" first.');
           process.exit(1);
         }
         const files = fs.readdirSync(backupDir).filter((f) => f.endsWith('.enc.json')).sort().reverse();
@@ -46,17 +46,21 @@ async function main() {
         backupPath = path.join(backupDir, files[0]);
       }
 
-      console.log(`🔍 Running isolated non-destructive restore test on: ${backupPath}`);
+      console.log(`🔍 Running genuine isolated restore verification on: ${backupPath}`);
       const result = await testRestoreBackup(backupPath);
 
-      if (result.success) {
-        console.log('✅ Integrity and non-destructive restore test PASSED!');
+      if (result.status === 'verified') {
+        console.log('✅ Genuine isolated restore test VERIFIED!');
+        console.log(`🏛️ Tested isolated schema: ${result.isolatedSchemaTested}`);
         console.log(`⏱️ Duration: ${result.durationMs}ms`);
         console.log(`📦 Verified total records: ${result.totalRecords}`);
         console.log('📊 Table record counts:');
         for (const [table, count] of Object.entries(result.tableCounts)) {
           console.log(`   - ${table}: ${count}`);
         }
+      } else if (result.status === 'incomplete') {
+        console.warn('⚠️ Restore verification INCOMPLETE (not failed):');
+        console.warn(`Reason: ${result.reason}`);
       } else {
         console.error('❌ Restore verification FAILED!');
         console.error(`Error: ${result.error}`);
@@ -67,10 +71,18 @@ async function main() {
 
     case 'prune': {
       const days = args[1] ? Number.parseInt(args[1], 10) : DEFAULT_BACKUP_RETENTION_DAYS;
-      const backupDir = path.resolve(process.cwd(), 'backups');
-      console.log(`🧹 Pruning backups older than ${days} days...`);
-      const pruned = pruneOldBackups({ backupDir, maxAgeDays: days });
-      console.log(`Pruned ${pruned.length} backup(s).`);
+      console.log(`🧹 Pruning off-site backups older than ${days} days...`);
+      const storage = await resolveBackupStorageProvider();
+      const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+      const remoteObjects = await storage.list('medatlas_backup_');
+      let pruned = 0;
+      for (const obj of remoteObjects) {
+        if (obj.lastModified.getTime() < cutoffTime) {
+          await storage.delete(obj.key);
+          pruned++;
+        }
+      }
+      console.log(`Pruned ${pruned} backup(s) from ${storage.name}.`);
       break;
     }
 
@@ -81,11 +93,11 @@ MedAtlas Automated Backup & Disaster Recovery CLI
 
 Usage:
   tsx scripts/backup-cli.ts create [retentionDays]
-      Creates a full AES-256-GCM encrypted snapshot, generates SHA-256 integrity checksums,
-      and prunes archives older than 30 days (or specified days).
+      Creates a consistent snapshot (Repeatable Read), encrypts with BACKUP_ENCRYPTION_KEY,
+      uploads to durable off-site storage, runs genuine restore verification, and prunes old backups.
 
   tsx scripts/backup-cli.ts verify [backupFilePath]
-      Decrypts, checks SHA-256 checksums, and performs an isolated transactional dry-run restore.
+      Decrypts, checks SHA-256 checksums, and executes a real restore verification in a disposable schema.
       If no path is provided, tests the most recent backup in backups/.
 
   tsx scripts/backup-cli.ts restore-test [backupFilePath]
