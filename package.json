@@ -34,17 +34,12 @@
     "vite": "^8.3.0"
   },
   "devDependencies": {
-    "@esbuild/win32-x64": "^0.28.2",
-    "@rolldown/binding-win32-x64-msvc": "^1.2.15",
-    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.3",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@typescript/typescript-win32-x64": "^7.0.2",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
-    "lightningcss-win32-x64-msvc": "^1.33.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
