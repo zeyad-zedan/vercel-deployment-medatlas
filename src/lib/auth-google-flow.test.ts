@@ -54,6 +54,7 @@ import {
   subscribeToAuthChanges,
   setFirebaseClientAuthHandlersForTests,
 } from './api.ts';
+import { auth } from './firebase.ts';
 
 // Connect test handlers
 setFirebaseClientAuthHandlersForTests({
@@ -212,6 +213,53 @@ test('5. Google Redirect Result: Returns null when no redirect was pending witho
 
   const result = await api.handleGoogleRedirectResult();
   assert.equal(result, null);
+});
+
+test('5b. Google Redirect Result: Recovers session when getRedirectResult returns null but auth.currentUser is present', async () => {
+  mockSessionStorage['medatlas_google_redirect_in_progress'] = 'true';
+  mockRedirectResult = null;
+  mockRedirectError = null;
+
+  // Simulate Firebase auth.currentUser populated asynchronously after redirect
+  (auth as any).currentUser = {
+    uid: 'google_recovered_uid_888',
+    getIdToken: async () => 'mock_recovered_id_token_888',
+  };
+
+  mockFetchHandler = async (url: string, init?: RequestInit) => {
+    if (url === '/api/auth/me') {
+      const authHeader = (init?.headers as any)?.['Authorization'];
+      assert.equal(authHeader, 'Bearer mock_recovered_id_token_888');
+      return new Response(
+        JSON.stringify({
+          token: 'medatlas.hmac.server_session_token_recovered_888',
+          user: {
+            id: 888,
+            uid: 'google_recovered_uid_888',
+            email: 'recovered@hospital.org',
+            displayName: 'Recovered User',
+            role: 'student',
+            subscriptionTier: 'free',
+            subscriptionStatus: 'active',
+            emailVerified: true,
+            preferences: '{}',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response('Not found', { status: 404 });
+  };
+
+  const user = await api.handleGoogleRedirectResult();
+  assert.notEqual(user, null);
+  assert.equal(user?.email, 'recovered@hospital.org');
+  assert.equal(getAuthToken(), 'medatlas.hmac.server_session_token_recovered_888');
+
+  // Cleanup
+  (auth as any).currentUser = null;
 });
 
 test('6. Google Redirect Result: Handles redirect cancellation and surfaces error while cleaning up state', async () => {

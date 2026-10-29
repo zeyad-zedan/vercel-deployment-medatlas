@@ -3,6 +3,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   signOut,
+  onAuthStateChanged,
   type UserCredential,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from './firebase.ts';
@@ -144,8 +145,36 @@ export function subscribeToAuthChanges(
     }
   })();
 
+  // Also bind onAuthStateChanged to catch asynchronously restored Firebase credentials
+  const unsubscribeFirebase =
+    typeof onAuthStateChanged === 'function'
+      ? onAuthStateChanged(auth, async (firebaseUser) => {
+          if (cancelled) return;
+          if (firebaseUser) {
+            const currentMedatlasToken = getAuthToken();
+            if (!currentMedatlasToken) {
+              try {
+                const idToken = await firebaseUser.getIdToken(false);
+                setAuthToken(idToken);
+                const data = await api.getCurrentUser();
+                if (data.token) {
+                  setAuthToken(data.token);
+                }
+                setCachedUserProfile(data.user);
+                if (!cancelled) onUserResolved(data.user);
+              } catch (err) {
+                console.warn('Failed to exchange asynchronously resolved Firebase credential:', err);
+              }
+            }
+          }
+        })
+      : () => {};
+
   return () => {
     cancelled = true;
+    try {
+      unsubscribeFirebase();
+    } catch {}
   };
 }
 
@@ -252,6 +281,7 @@ export const api = {
     if (typeof window !== 'undefined') {
       try {
         window.sessionStorage.setItem('medatlas_google_redirect_in_progress', 'true');
+        window.localStorage.setItem('medatlas_google_redirect_in_progress', 'true');
       } catch {}
     }
     const redirectFn =
@@ -265,7 +295,9 @@ export const api = {
     if (typeof window === 'undefined') return null;
     let isRedirectExpected = false;
     try {
-      isRedirectExpected = window.sessionStorage.getItem('medatlas_google_redirect_in_progress') === 'true';
+      isRedirectExpected =
+        window.sessionStorage.getItem('medatlas_google_redirect_in_progress') === 'true' ||
+        window.localStorage.getItem('medatlas_google_redirect_in_progress') === 'true';
     } catch {}
 
     const getRedirectResultFn =
@@ -277,15 +309,35 @@ export const api = {
       const result = await getRedirectResultFn(auth);
       try {
         window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
+        window.localStorage.removeItem('medatlas_google_redirect_in_progress');
       } catch {}
 
-      if (!result || !result.user) {
-        return null;
+      if (result && result.user) {
+        return await exchangeFirebaseCredentialForSession(result);
       }
-      return await exchangeFirebaseCredentialForSession(result);
+
+      // If redirect was in progress or Firebase user is present, wait for authStateReady and exchange
+      if (isRedirectExpected || auth.currentUser) {
+        if (typeof auth.authStateReady === 'function') {
+          await auth.authStateReady();
+        }
+        if (auth.currentUser) {
+          const idToken = await auth.currentUser.getIdToken(false);
+          setAuthToken(idToken);
+          const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
+          if (data.token) {
+            setAuthToken(data.token);
+          }
+          setCachedUserProfile(data.user);
+          return data.user;
+        }
+      }
+
+      return null;
     } catch (err: any) {
       try {
         window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
+        window.localStorage.removeItem('medatlas_google_redirect_in_progress');
       } catch {}
 
       // If no redirect was in progress and there's no auth event, swallow cleanly
