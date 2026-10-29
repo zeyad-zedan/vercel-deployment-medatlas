@@ -192,6 +192,11 @@ export default function App() {
     loadCatalog();
     const unsubscribe = subscribeToAuthChanges(
       (resolvedUser) => {
+        if (resolvedUser) {
+          setAuthRedirectError(null);
+          const route = parseCurrentRoute();
+          setActiveTab(route.tab || 'dashboard');
+        }
         setUser(resolvedUser);
         setInitializingAuth(false);
       },
@@ -289,6 +294,7 @@ export default function App() {
     const route = parseCurrentRoute();
     setActiveTab(initialTab || route.tab || 'dashboard');
     setGlobalError(null);
+    setAuthRedirectError(null);
   };
 
   const handleLogout = async () => {

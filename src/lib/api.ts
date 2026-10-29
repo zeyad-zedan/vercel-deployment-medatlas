@@ -37,6 +37,9 @@ export function getCachedUserProfile(): UserProfile | null {
 
 export function setAuthToken(token: string | null) {
   inMemoryAuthToken = token;
+  if (!token) {
+    lastExchangedFirebaseUser = null;
+  }
   if (typeof window !== 'undefined') {
     if (token) {
       window.localStorage.setItem(STORAGE_TOKEN_KEY, token);
@@ -48,6 +51,17 @@ export function setAuthToken(token: string | null) {
 }
 
 export function getAuthToken(): string | null {
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = window.localStorage.getItem(STORAGE_TOKEN_KEY);
+      if (stored !== inMemoryAuthToken) {
+        inMemoryAuthToken = stored;
+        if (!stored) {
+          lastExchangedFirebaseUser = null;
+        }
+      }
+    } catch {}
+  }
   return inMemoryAuthToken;
 }
 
@@ -56,6 +70,11 @@ export type FirebaseClientAuthHandlersForTests = {
   signInWithRedirect?: (auth: any, provider: any) => Promise<void>;
   getRedirectResult?: (auth: any) => Promise<any>;
   signOut?: (auth: any) => Promise<void>;
+  onAuthStateChanged?: (
+    auth: any,
+    nextOrObserver: (user: any) => void,
+    error?: (err: Error) => void
+  ) => () => void;
 };
 
 let customClientAuthHandlersForTests: FirebaseClientAuthHandlersForTests | null = null;
@@ -67,37 +86,146 @@ export function setFirebaseClientAuthHandlersForTests(
     throw new Error('Security violation: setFirebaseClientAuthHandlersForTests is forbidden outside test environment.');
   }
   customClientAuthHandlersForTests = handlers;
+  inFlightFirebaseExchange = null;
+  lastExchangedFirebaseUser = null;
 }
 
+const REDIRECT_PENDING_STORAGE_KEY = 'medatlas_google_redirect_in_progress';
+
+function setPendingRedirectMarker(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(REDIRECT_PENDING_STORAGE_KEY, 'true');
+  } catch {}
+  try {
+    window.localStorage.setItem(REDIRECT_PENDING_STORAGE_KEY, 'true');
+  } catch {}
+}
+
+function hasPendingRedirectMarker(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.sessionStorage.getItem(REDIRECT_PENDING_STORAGE_KEY) === 'true') {
+      return true;
+    }
+  } catch {}
+  try {
+    if (window.localStorage.getItem(REDIRECT_PENDING_STORAGE_KEY) === 'true') {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function clearPendingRedirectMarker(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+  } catch {}
+  try {
+    window.localStorage.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+  } catch {}
+}
+
+let inFlightFirebaseExchange: {
+  uid: string;
+  promise: Promise<UserProfile>;
+} | null = null;
+
+let lastExchangedFirebaseUser: {
+  uid: string;
+  profile: UserProfile;
+} | null = null;
+
 /**
- * Exchanges a verified Firebase UserCredential with the MedAtlas backend
+ * Exchanges a verified Firebase User with the MedAtlas backend (/api/auth/me)
+ * using only supported public Firebase Auth APIs (user.getIdToken())
  * to establish an authoritative server-signed HMAC session.
+ * Deduplicates concurrent calls for the same Firebase UID.
  */
+async function exchangeFirebaseUserForSession(
+  firebaseUser: { uid?: string; getIdToken?: (forceRefresh?: boolean) => Promise<string> }
+): Promise<UserProfile> {
+  if (!firebaseUser || typeof firebaseUser.getIdToken !== 'function') {
+    throw new Error('Invalid Google authentication credential: missing user.getIdToken().');
+  }
+
+  const uidKey = firebaseUser.uid || '__anonymous_firebase_uid__';
+
+  const currentToken = getAuthToken();
+  if (
+    firebaseUser.uid &&
+    lastExchangedFirebaseUser?.uid === firebaseUser.uid &&
+    currentToken &&
+    currentToken.startsWith('medatlas.')
+  ) {
+    return lastExchangedFirebaseUser.profile;
+  }
+
+  if (inFlightFirebaseExchange && inFlightFirebaseExchange.uid === uidKey) {
+    return inFlightFirebaseExchange.promise;
+  }
+
+  const exchangePromise = (async (): Promise<UserProfile> => {
+    const idToken = await firebaseUser.getIdToken!();
+    if (!idToken || typeof idToken !== 'string') {
+      throw new Error('Could not retrieve authentication token from Google credential.');
+    }
+
+    // Send the Firebase ID token in the Authorization header without overwriting
+    // the stored MedAtlas session token until the backend returns a verified medatlas.* token.
+    const data = await apiRequest<{ token?: string; user?: UserProfile }>('/api/auth/me', {
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+
+    if (
+      !data ||
+      typeof data.token !== 'string' ||
+      !data.token.startsWith('medatlas.') ||
+      !data.user ||
+      typeof data.user.uid !== 'string'
+    ) {
+      throw new Error('MedAtlas server did not return a valid authenticated session.');
+    }
+
+    setAuthToken(data.token);
+    setCachedUserProfile(data.user);
+    clearPendingRedirectMarker();
+
+    if (firebaseUser.uid) {
+      lastExchangedFirebaseUser = { uid: firebaseUser.uid, profile: data.user };
+    }
+
+    // Clear in-memory Firebase client session after MedAtlas session is safely established
+    const signOutFn =
+      process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signOut
+        ? customClientAuthHandlersForTests.signOut
+        : signOut;
+    await signOutFn(auth).catch(() => {});
+
+    return data.user;
+  })();
+
+  inFlightFirebaseExchange = { uid: uidKey, promise: exchangePromise };
+
+  try {
+    return await exchangePromise;
+  } finally {
+    if (inFlightFirebaseExchange?.promise === exchangePromise) {
+      inFlightFirebaseExchange = null;
+    }
+  }
+}
+
 async function exchangeFirebaseCredentialForSession(
   result: UserCredential
 ): Promise<UserProfile> {
-  const idToken: string =
-    (result as any)?._tokenResponse?.idToken ||
-    (result.user as any)?.stsTokenManager?.accessToken ||
-    (await result.user.getIdToken(false));
-
-  if (!idToken) {
-    throw new Error('Could not retrieve authentication token from Google credential.');
+  if (!result || !result.user) {
+    throw new Error('Google authentication did not return a valid user credential.');
   }
-
-  setAuthToken(idToken);
-  const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
-  if (data.token) {
-    setAuthToken(data.token);
-  }
-  setCachedUserProfile(data.user);
-  // Clear in-memory Firebase client session to prevent extraneous token refresh cycles
-  const signOutFn =
-    process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signOut
-      ? customClientAuthHandlersForTests.signOut
-      : signOut;
-  await signOutFn(auth).catch(() => {});
-  return data.user;
+  return await exchangeFirebaseUserForSession(result.user);
 }
 
 export function subscribeToAuthChanges(
@@ -105,6 +233,91 @@ export function subscribeToAuthChanges(
   onRedirectError?: (error: Error) => void
 ): () => void {
   let cancelled = false;
+  let hasResolvedAuthenticatedUser = false;
+  let pendingListenerExchange: Promise<UserProfile | null> | null = null;
+  let resolveInitialAuthState: ((user: any) => void) | null = null;
+  const wasRedirectExpected = hasPendingRedirectMarker();
+  const graceTimeoutMs = process.env.NODE_ENV === 'test' ? 60 : 500;
+
+  const emitAuthenticatedUser = (profile: UserProfile) => {
+    if (cancelled || hasResolvedAuthenticatedUser) return;
+    hasResolvedAuthenticatedUser = true;
+    onUserResolved(profile);
+  };
+
+  const initialAuthStatePromise = new Promise<any>((resolve) => {
+    resolveInitialAuthState = resolve;
+    setTimeout(() => {
+      if (resolveInitialAuthState) {
+        const r = resolveInitialAuthState;
+        resolveInitialAuthState = null;
+        r(null);
+      }
+    }, graceTimeoutMs);
+  });
+
+  const onAuthStateChangedFn =
+    process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.onAuthStateChanged
+      ? customClientAuthHandlersForTests.onAuthStateChanged
+      : typeof onAuthStateChanged === 'function'
+      ? onAuthStateChanged
+      : null;
+
+  // Bind onAuthStateChanged to catch asynchronously restored Firebase credentials
+  // and coordinate with getRedirectResult() via deduplicated exchangeFirebaseUserForSession.
+  const unsubscribeFirebase = onAuthStateChangedFn
+    ? onAuthStateChangedFn(
+        auth,
+        (firebaseUser: any) => {
+          if (cancelled || !firebaseUser) {
+            if (resolveInitialAuthState && !wasRedirectExpected) {
+              const r = resolveInitialAuthState;
+              resolveInitialAuthState = null;
+              r(null);
+            }
+            return;
+          }
+
+          const task = exchangeFirebaseUserForSession(firebaseUser)
+            .then((profile) => {
+              emitAuthenticatedUser(profile);
+              return profile;
+            })
+            .catch((err: any) => {
+              if (!cancelled && !hasResolvedAuthenticatedUser) {
+                onRedirectError?.(
+                  err instanceof Error
+                    ? err
+                    : new Error(err?.message || 'Failed to complete Google authentication.')
+                );
+              }
+              return null;
+            })
+            .finally(() => {
+              if (pendingListenerExchange === task) {
+                pendingListenerExchange = null;
+              }
+            });
+
+          pendingListenerExchange = task;
+          if (resolveInitialAuthState) {
+            const r = resolveInitialAuthState;
+            resolveInitialAuthState = null;
+            r(firebaseUser);
+          }
+        },
+        (err: Error) => {
+          if (resolveInitialAuthState) {
+            const r = resolveInitialAuthState;
+            resolveInitialAuthState = null;
+            r(null);
+          }
+          if (!cancelled && !hasResolvedAuthenticatedUser) {
+            onRedirectError?.(err);
+          }
+        }
+      )
+    : () => {};
 
   (async () => {
     try {
@@ -112,63 +325,87 @@ export function subscribeToAuthChanges(
       try {
         const redirectUser = await api.handleGoogleRedirectResult();
         if (redirectUser) {
-          if (!cancelled) onUserResolved(redirectUser);
+          emitAuthenticatedUser(redirectUser);
           return;
         }
       } catch (redirectErr: any) {
         console.warn('Google redirect resolution error:', redirectErr);
-        if (!cancelled && onRedirectError) {
-          onRedirectError(redirectErr);
+        if (!cancelled) {
+          if (onRedirectError) {
+            onRedirectError(
+              redirectErr instanceof Error
+                ? redirectErr
+                : new Error(redirectErr?.message || 'Google sign-in via redirect failed.')
+            );
+          }
+          if (!hasResolvedAuthenticatedUser) {
+            onUserResolved(null);
+          }
+        }
+        return;
+      }
+
+      // 2. Wait for initial onAuthStateChanged emission / in-flight exchange if no token is present yet
+      if (!hasResolvedAuthenticatedUser && !pendingListenerExchange && (wasRedirectExpected || !getAuthToken())) {
+        await initialAuthStatePromise;
+      }
+      if (pendingListenerExchange) {
+        const listenerUser = await pendingListenerExchange;
+        if (listenerUser || hasResolvedAuthenticatedUser || cancelled) {
+          return;
+        }
+      }
+      if (hasResolvedAuthenticatedUser || cancelled) {
+        return;
+      }
+
+      // 3. Otherwise verify existing MedAtlas server session token
+      const existingToken = getAuthToken();
+      if (existingToken) {
+        if (!existingToken.startsWith('medatlas.')) {
+          setAuthToken(null);
+        } else {
+          const data = await api.getCurrentUser();
+          if (data && data.user && data.user.uid) {
+            if (data.token && data.token.startsWith('medatlas.')) {
+              setAuthToken(data.token);
+            }
+            setCachedUserProfile(data.user);
+            emitAuthenticatedUser(data.user);
+            return;
+          } else {
+            setAuthToken(null);
+          }
         }
       }
 
-      // 2. Otherwise verify existing MedAtlas session token
-      const existingToken = getAuthToken();
-      if (existingToken) {
-        const data = await api.getCurrentUser();
-        if (data.token) {
-          setAuthToken(data.token);
-        }
-        setCachedUserProfile(data.user);
-        if (!cancelled) onUserResolved(data.user);
-      } else {
-        if (!cancelled) onUserResolved(null);
+      // 4. If a Google redirect was explicitly initiated by the user, but the browser returned
+      // with no Firebase credential (e.g. due to cross-domain third-party storage partitioning),
+      // surface a clear diagnostic error rather than silently rendering an unauthenticated homepage.
+      if (wasRedirectExpected && !hasResolvedAuthenticatedUser && !cancelled) {
+        const blockedErr: any = new Error(
+          'Google sign-in returned to MedAtlas, but your browser blocked cross-domain redirect storage. Please click "Continue with Google" to sign in via popup, or sign in with Email & Password below.'
+        );
+        blockedErr.code = 'auth/redirect-session-blocked';
+        onRedirectError?.(blockedErr);
+        onUserResolved(null);
+        return;
+      }
+
+      if (!cancelled && !hasResolvedAuthenticatedUser) {
+        onUserResolved(null);
       }
     } catch (err: any) {
-      if (err?.status === 401 || err?.message?.includes('401')) {
+      if (err?.status === 401 || err?.status === 403 || err?.message?.includes('401')) {
         setAuthToken(null);
-        if (!cancelled) onUserResolved(null);
       } else {
-        console.warn('Transient network delay during session verification:', err);
-        if (!cancelled) onUserResolved(getCachedUserProfile());
+        console.warn('Error verifying existing MedAtlas session:', err);
+      }
+      if (!cancelled && !hasResolvedAuthenticatedUser) {
+        onUserResolved(null);
       }
     }
   })();
-
-  // Also bind onAuthStateChanged to catch asynchronously restored Firebase credentials
-  const unsubscribeFirebase =
-    typeof onAuthStateChanged === 'function'
-      ? onAuthStateChanged(auth, async (firebaseUser) => {
-          if (cancelled) return;
-          if (firebaseUser) {
-            const currentMedatlasToken = getAuthToken();
-            if (!currentMedatlasToken) {
-              try {
-                const idToken = await firebaseUser.getIdToken(false);
-                setAuthToken(idToken);
-                const data = await api.getCurrentUser();
-                if (data.token) {
-                  setAuthToken(data.token);
-                }
-                setCachedUserProfile(data.user);
-                if (!cancelled) onUserResolved(data.user);
-              } catch (err) {
-                console.warn('Failed to exchange asynchronously resolved Firebase credential:', err);
-              }
-            }
-          }
-        })
-      : () => {};
 
   return () => {
     cancelled = true;
@@ -187,8 +424,9 @@ async function apiRequest<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
 
-  if (inMemoryAuthToken) {
-    headers['Authorization'] = `Bearer ${inMemoryAuthToken}`;
+  const currentToken = getAuthToken();
+  if (currentToken && !headers['Authorization']) {
+    headers['Authorization'] = `Bearer ${currentToken}`;
   }
 
   const res = await fetch(path, {
@@ -278,12 +516,7 @@ export const api = {
   },
 
   loginWithGoogleRedirect: async (): Promise<void> => {
-    if (typeof window !== 'undefined') {
-      try {
-        window.sessionStorage.setItem('medatlas_google_redirect_in_progress', 'true');
-        window.localStorage.setItem('medatlas_google_redirect_in_progress', 'true');
-      } catch {}
-    }
+    setPendingRedirectMarker();
     const redirectFn =
       process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signInWithRedirect
         ? customClientAuthHandlersForTests.signInWithRedirect
@@ -293,12 +526,7 @@ export const api = {
 
   handleGoogleRedirectResult: async (): Promise<UserProfile | null> => {
     if (typeof window === 'undefined') return null;
-    let isRedirectExpected = false;
-    try {
-      isRedirectExpected =
-        window.sessionStorage.getItem('medatlas_google_redirect_in_progress') === 'true' ||
-        window.localStorage.getItem('medatlas_google_redirect_in_progress') === 'true';
-    } catch {}
+    const isRedirectExpected = hasPendingRedirectMarker();
 
     const getRedirectResultFn =
       process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.getRedirectResult
@@ -307,10 +535,7 @@ export const api = {
 
     try {
       const result = await getRedirectResultFn(auth);
-      try {
-        window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
-        window.localStorage.removeItem('medatlas_google_redirect_in_progress');
-      } catch {}
+      clearPendingRedirectMarker();
 
       if (result && result.user) {
         return await exchangeFirebaseCredentialForSession(result);
@@ -322,23 +547,13 @@ export const api = {
           await auth.authStateReady();
         }
         if (auth.currentUser) {
-          const idToken = await auth.currentUser.getIdToken(false);
-          setAuthToken(idToken);
-          const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
-          if (data.token) {
-            setAuthToken(data.token);
-          }
-          setCachedUserProfile(data.user);
-          return data.user;
+          return await exchangeFirebaseUserForSession(auth.currentUser);
         }
       }
 
       return null;
     } catch (err: any) {
-      try {
-        window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
-        window.localStorage.removeItem('medatlas_google_redirect_in_progress');
-      } catch {}
+      clearPendingRedirectMarker();
 
       // If no redirect was in progress and there's no auth event, swallow cleanly
       if (!isRedirectExpected && (err?.code === 'auth/no-auth-event' || !err?.code)) {
@@ -423,9 +638,16 @@ export const api = {
         // ignore if token already expired
       }
     }
+    inFlightFirebaseExchange = null;
+    lastExchangedFirebaseUser = null;
+    clearPendingRedirectMarker();
     setAuthToken(null);
+    const signOutFn =
+      process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signOut
+        ? customClientAuthHandlersForTests.signOut
+        : signOut;
     try {
-      await signOut(auth);
+      await signOutFn(auth);
     } catch {
       // ignore if not signed in via firebase
     }

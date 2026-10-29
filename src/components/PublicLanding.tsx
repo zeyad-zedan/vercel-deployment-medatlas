@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
+import { warmUpFirebaseAuth } from '../lib/firebase.ts';
 
 interface PublicLandingProps {
   catalog: {
@@ -46,6 +47,13 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   const [authError, setAuthError] = useState<string | null>(initialAuthError || null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialAuthError) {
+      setAuthError(initialAuthError);
+      setAuthModalOpen(true);
+    }
+  }, [initialAuthError]);
 
   // Automatically detect Firebase Auth password-reset oobCode, recovery token, or return from hosted action page
   useEffect(() => {
@@ -100,6 +108,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   }, []);
 
   const openAuth = (tab: AuthTab) => {
+    warmUpFirebaseAuth();
     setAuthTab(tab);
     setResetStep('request');
     setRecoveryToken('');
