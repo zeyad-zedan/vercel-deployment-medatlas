@@ -7,7 +7,8 @@
     "node": ">=20.0.0"
   },
   "overrides": {
-    "jwks-rsa": "3.1.0"
+    "jwks-rsa": "3.1.0",
+    "@grpc/grpc-js": "1.13.6"
   },
   "scripts": {
     "dev": "tsx server.ts",
@@ -17,7 +18,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts src/lib/security-audit.test.ts",
+    "backup:create": "tsx scripts/backup-cli.ts create",
+    "backup:verify": "tsx scripts/backup-cli.ts verify",
+    "backup:restore-test": "tsx scripts/backup-cli.ts restore-test",
+    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts src/lib/security-audit.test.ts src/lib/backup-service.test.ts",
     "test:features": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts"
   },
   "dependencies": {

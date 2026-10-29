@@ -9,3 +9,8 @@ coverage/
 .aistudio/
 .gemini/
 cloudflared.exe
+backups/
+*.dump
+*.sql.gz
+*.enc
+

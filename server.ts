@@ -80,6 +80,9 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
     'Permissions-Policy',
     'camera=(), microphone=(), geolocation=(), payment=()'
   );
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   next();
 });
 
@@ -90,7 +93,13 @@ app.use(express.static(path.resolve(process.cwd(), 'public')));
 app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const safeFilename = path.basename(req.params.filename);
-    const filePath = path.resolve(process.cwd(), 'public', 'lectures', safeFilename);
+    const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
+    const filePath = path.resolve(lecturesDir, safeFilename);
+
+    // Defensive path-containment validation against directory traversal
+    if (!filePath.startsWith(lecturesDir)) {
+      return res.status(400).json({ error: 'Invalid file path' });
+    }
 
     if (fs.existsSync(filePath)) {
       return res.sendFile(filePath);
@@ -1280,6 +1289,20 @@ app.get('/api/admin/export-csv', requireAuth, requireAdmin, async (_req, res) =>
     return res.send(csv);
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to export question bank.', 500);
+  }
+});
+
+// Global Express error handler to prevent unhandled internal error leaks or stack traces
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (status >= 500) {
+    console.error('[ServerError]', err?.message || err);
+  }
+  if (!res.headersSent) {
+    res.status(status).json({
+      error: status === 500 && isProd ? 'Internal server error' : (err?.message || 'Unexpected error'),
+    });
   }
 });
 

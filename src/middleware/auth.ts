@@ -14,7 +14,10 @@ if (!process.env.AUTH_SESSION_SECRET || process.env.AUTH_SESSION_SECRET.trim().l
 }
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
-export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10; // 10 years (permanent session until explicit sign-out)
+const configuredTtlDays = Number.parseInt(process.env.SESSION_TTL_DAYS || '30', 10);
+const sessionTtlDays =
+  Number.isFinite(configuredTtlDays) && configuredTtlDays > 0 ? Math.min(configuredTtlDays, 365) : 30;
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * sessionTtlDays; // Default: 30 days (configurable via SESSION_TTL_DAYS)
 export const RECOVERY_TOKEN_TTL_MS = 1000 * 60 * 15; // 15 minutes
 
 export const MIN_PASSWORD_LENGTH = 8;
