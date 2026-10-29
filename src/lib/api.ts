@@ -173,11 +173,77 @@ export const api = {
   },
 
   loginWithGooglePopup: async () => {
-    const result = await signInWithPopup(
-      auth,
-      googleAuthProvider,
-      browserPopupRedirectResolver
-    );
+    let preOpenedWin: Window | null = null;
+    let popupClaimed = false;
+    const originalWindowOpen =
+      typeof window !== 'undefined' && typeof window.open === 'function'
+        ? window.open
+        : null;
+
+    // Open the popup window synchronously on the exact user click call-stack BEFORE any
+    // async Firebase iframe/gapi initialization can expire the browser's user-gesture token.
+    if (typeof window !== 'undefined' && originalWindowOpen) {
+      const width = 500;
+      const height = 600;
+      const top = Math.max(((window.screen?.availHeight || 800) - height) / 2, 0);
+      const left = Math.max(((window.screen?.availWidth || 1200) - width) / 2, 0);
+      const features = `location=yes,resizable=yes,statusbar=yes,toolbar=no,scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`;
+      try {
+        preOpenedWin = originalWindowOpen.call(window, 'about:blank', '_blank', features);
+        if (preOpenedWin && preOpenedWin.document) {
+          preOpenedWin.document.write(
+            '<!DOCTYPE html><html><head><title>Sign in with Google</title></head><body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;margin:0;color:#334155;background:#f8fafc;"><div style="text-align:center;"><p style="font-size:15px;font-weight:600;">Connecting to Google Sign-In...</p></div></body></html>'
+          );
+          preOpenedWin.document.close();
+        }
+      } catch {}
+
+      if (preOpenedWin) {
+        window.open = function (
+          url?: string | URL,
+          target?: string,
+          winFeatures?: string
+        ): WindowProxy | null {
+          window.open = originalWindowOpen;
+          if (preOpenedWin && !preOpenedWin.closed) {
+            popupClaimed = true;
+            if (url) {
+              preOpenedWin.location.href = String(url);
+            }
+            try {
+              preOpenedWin.focus();
+            } catch {}
+            return preOpenedWin;
+          }
+          return originalWindowOpen.call(window, url as any, target, winFeatures);
+        };
+      }
+    }
+
+    let result;
+    try {
+      result = await signInWithPopup(
+        auth,
+        googleAuthProvider,
+        browserPopupRedirectResolver
+      );
+    } catch (err) {
+      if (!popupClaimed && preOpenedWin && !preOpenedWin.closed) {
+        try {
+          preOpenedWin.close();
+        } catch {}
+      }
+      throw err;
+    } finally {
+      if (
+        typeof window !== 'undefined' &&
+        originalWindowOpen &&
+        window.open !== originalWindowOpen
+      ) {
+        window.open = originalWindowOpen;
+      }
+    }
+
     // Extract the freshly issued ID token directly from the signInWithIdp response
     // WITHOUT calling getIdToken(true), which would hit securetoken.googleapis.com
     const idToken: string =
