@@ -1,7 +1,9 @@
 import {
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
-  browserPopupRedirectResolver,
+  type UserCredential,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from './firebase.ts';
 
@@ -48,13 +50,78 @@ export function getAuthToken(): string | null {
   return inMemoryAuthToken;
 }
 
+export type FirebaseClientAuthHandlersForTests = {
+  signInWithPopup?: (auth: any, provider: any) => Promise<any>;
+  signInWithRedirect?: (auth: any, provider: any) => Promise<void>;
+  getRedirectResult?: (auth: any) => Promise<any>;
+  signOut?: (auth: any) => Promise<void>;
+};
+
+let customClientAuthHandlersForTests: FirebaseClientAuthHandlersForTests | null = null;
+
+export function setFirebaseClientAuthHandlersForTests(
+  handlers: FirebaseClientAuthHandlersForTests | null
+): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('Security violation: setFirebaseClientAuthHandlersForTests is forbidden outside test environment.');
+  }
+  customClientAuthHandlersForTests = handlers;
+}
+
+/**
+ * Exchanges a verified Firebase UserCredential with the MedAtlas backend
+ * to establish an authoritative server-signed HMAC session.
+ */
+async function exchangeFirebaseCredentialForSession(
+  result: UserCredential
+): Promise<UserProfile> {
+  const idToken: string =
+    (result as any)?._tokenResponse?.idToken ||
+    (result.user as any)?.stsTokenManager?.accessToken ||
+    (await result.user.getIdToken(false));
+
+  if (!idToken) {
+    throw new Error('Could not retrieve authentication token from Google credential.');
+  }
+
+  setAuthToken(idToken);
+  const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
+  if (data.token) {
+    setAuthToken(data.token);
+  }
+  setCachedUserProfile(data.user);
+  // Clear in-memory Firebase client session to prevent extraneous token refresh cycles
+  const signOutFn =
+    process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signOut
+      ? customClientAuthHandlersForTests.signOut
+      : signOut;
+  await signOutFn(auth).catch(() => {});
+  return data.user;
+}
+
 export function subscribeToAuthChanges(
-  onUserResolved: (user: UserProfile | null) => void
+  onUserResolved: (user: UserProfile | null) => void,
+  onRedirectError?: (error: Error) => void
 ): () => void {
   let cancelled = false;
 
   (async () => {
     try {
+      // 1. Process pending Google Redirect authentication if returning from Google OAuth
+      try {
+        const redirectUser = await api.handleGoogleRedirectResult();
+        if (redirectUser) {
+          if (!cancelled) onUserResolved(redirectUser);
+          return;
+        }
+      } catch (redirectErr: any) {
+        console.warn('Google redirect resolution error:', redirectErr);
+        if (!cancelled && onRedirectError) {
+          onRedirectError(redirectErr);
+        }
+      }
+
+      // 2. Otherwise verify existing MedAtlas session token
       const existingToken = getAuthToken();
       if (existingToken) {
         const data = await api.getCurrentUser();
@@ -172,94 +239,61 @@ export const api = {
     return data.user;
   },
 
-  loginWithGooglePopup: async () => {
-    let preOpenedWin: Window | null = null;
-    let popupClaimed = false;
-    const originalWindowOpen =
-      typeof window !== 'undefined' && typeof window.open === 'function'
-        ? window.open
-        : null;
+  loginWithGooglePopup: async (): Promise<UserProfile> => {
+    const popupFn =
+      process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signInWithPopup
+        ? customClientAuthHandlersForTests.signInWithPopup
+        : signInWithPopup;
+    const result = await popupFn(auth, googleAuthProvider);
+    return await exchangeFirebaseCredentialForSession(result);
+  },
 
-    // Open the popup window synchronously on the exact user click call-stack BEFORE any
-    // async Firebase iframe/gapi initialization can expire the browser's user-gesture token.
-    if (typeof window !== 'undefined' && originalWindowOpen) {
-      const width = 500;
-      const height = 600;
-      const top = Math.max(((window.screen?.availHeight || 800) - height) / 2, 0);
-      const left = Math.max(((window.screen?.availWidth || 1200) - width) / 2, 0);
-      const features = `location=yes,resizable=yes,statusbar=yes,toolbar=no,scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`;
+  loginWithGoogleRedirect: async (): Promise<void> => {
+    if (typeof window !== 'undefined') {
       try {
-        preOpenedWin = originalWindowOpen.call(window, 'about:blank', '_blank', features);
-        if (preOpenedWin && preOpenedWin.document) {
-          preOpenedWin.document.write(
-            '<!DOCTYPE html><html><head><title>Sign in with Google</title></head><body style="font-family:system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;margin:0;color:#334155;background:#f8fafc;"><div style="text-align:center;"><p style="font-size:15px;font-weight:600;">Connecting to Google Sign-In...</p></div></body></html>'
-          );
-          preOpenedWin.document.close();
-        }
+        window.sessionStorage.setItem('medatlas_google_redirect_in_progress', 'true');
+      } catch {}
+    }
+    const redirectFn =
+      process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.signInWithRedirect
+        ? customClientAuthHandlersForTests.signInWithRedirect
+        : signInWithRedirect;
+    await redirectFn(auth, googleAuthProvider);
+  },
+
+  handleGoogleRedirectResult: async (): Promise<UserProfile | null> => {
+    if (typeof window === 'undefined') return null;
+    let isRedirectExpected = false;
+    try {
+      isRedirectExpected = window.sessionStorage.getItem('medatlas_google_redirect_in_progress') === 'true';
+    } catch {}
+
+    const getRedirectResultFn =
+      process.env.NODE_ENV === 'test' && customClientAuthHandlersForTests?.getRedirectResult
+        ? customClientAuthHandlersForTests.getRedirectResult
+        : getRedirectResult;
+
+    try {
+      const result = await getRedirectResultFn(auth);
+      try {
+        window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
       } catch {}
 
-      if (preOpenedWin) {
-        window.open = function (
-          url?: string | URL,
-          target?: string,
-          winFeatures?: string
-        ): WindowProxy | null {
-          window.open = originalWindowOpen;
-          if (preOpenedWin && !preOpenedWin.closed) {
-            popupClaimed = true;
-            if (url) {
-              preOpenedWin.location.href = String(url);
-            }
-            try {
-              preOpenedWin.focus();
-            } catch {}
-            return preOpenedWin;
-          }
-          return originalWindowOpen.call(window, url as any, target, winFeatures);
-        };
+      if (!result || !result.user) {
+        return null;
       }
-    }
+      return await exchangeFirebaseCredentialForSession(result);
+    } catch (err: any) {
+      try {
+        window.sessionStorage.removeItem('medatlas_google_redirect_in_progress');
+      } catch {}
 
-    let result;
-    try {
-      result = await signInWithPopup(
-        auth,
-        googleAuthProvider,
-        browserPopupRedirectResolver
-      );
-    } catch (err) {
-      if (!popupClaimed && preOpenedWin && !preOpenedWin.closed) {
-        try {
-          preOpenedWin.close();
-        } catch {}
+      // If no redirect was in progress and there's no auth event, swallow cleanly
+      if (!isRedirectExpected && (err?.code === 'auth/no-auth-event' || !err?.code)) {
+        return null;
       }
       throw err;
-    } finally {
-      if (
-        typeof window !== 'undefined' &&
-        originalWindowOpen &&
-        window.open !== originalWindowOpen
-      ) {
-        window.open = originalWindowOpen;
-      }
     }
-
-    // Extract the freshly issued ID token directly from the signInWithIdp response
-    // WITHOUT calling getIdToken(true), which would hit securetoken.googleapis.com
-    const idToken: string =
-      (result as any)?._tokenResponse?.idToken ||
-      (result.user as any)?.stsTokenManager?.accessToken ||
-      (await result.user.getIdToken(false));
-    setAuthToken(idToken);
-    const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
-    if (data.token) {
-      setAuthToken(data.token);
-    }
-    setCachedUserProfile(data.user);
-    // Immediately clear in-memory Firebase client user so Firebase never attempts
-    // a background refresh against securetoken.googleapis.com after 1 hour
-    await signOut(auth).catch(() => {});
-    return data.user;
   },
 
   requestPasswordReset: async (email: string) => {

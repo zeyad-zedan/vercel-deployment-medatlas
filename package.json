@@ -17,8 +17,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/security-audit.test.ts",
-    "test:features": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts"
+    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts src/lib/security-audit.test.ts",
+    "test:features": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

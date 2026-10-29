@@ -29,7 +29,7 @@ export const createPool = () => {
     const poolConfig = process.env.DATABASE_URL
       ? {
           connectionString: process.env.DATABASE_URL,
-          max: 10,
+          max: 5,
           connectionTimeoutMillis: 15000,
           ssl: isCloudDb ? { rejectUnauthorized: false } : undefined,
         }

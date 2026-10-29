@@ -145,6 +145,7 @@ export default function App() {
   const [activeSession, setActiveSession] = useState<any | null>(null);
   const [sessionShortfall, setSessionShortfall] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
 
   const loadCatalog = useCallback(async () => {
@@ -189,10 +190,16 @@ export default function App() {
 
   useEffect(() => {
     loadCatalog();
-    const unsubscribe = subscribeToAuthChanges((resolvedUser) => {
-      setUser(resolvedUser);
-      setInitializingAuth(false);
-    });
+    const unsubscribe = subscribeToAuthChanges(
+      (resolvedUser) => {
+        setUser(resolvedUser);
+        setInitializingAuth(false);
+      },
+      (error) => {
+        setAuthRedirectError(error.message || 'Google sign-in via redirect could not be completed.');
+        setInitializingAuth(false);
+      }
+    );
     return () => unsubscribe();
   }, [loadCatalog]);
 
@@ -334,6 +341,7 @@ export default function App() {
         catalog={catalog}
         loadingCatalog={loadingCatalog}
         onAuthenticated={handleAuthenticated}
+        initialAuthError={authRedirectError}
       />
     );
   }

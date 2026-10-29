@@ -21,6 +21,7 @@ interface PublicLandingProps {
   } | null;
   loadingCatalog: boolean;
   onAuthenticated: (user: UserProfile, initialTab?: string) => void;
+  initialAuthError?: string | null;
 }
 
 type AuthTab = 'login' | 'register' | 'reset';
@@ -30,8 +31,9 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   catalog,
   loadingCatalog,
   onAuthenticated,
+  initialAuthError,
 }) => {
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(Boolean(initialAuthError));
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [legalModal, setLegalModal] = useState<LegalModalType>(null);
 
@@ -41,7 +43,8 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   const [recoveryToken, setRecoveryToken] = useState('');
   const [resetStep, setResetStep] = useState<'request' | 'confirm'>('request');
   const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(initialAuthError || null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
   // Automatically detect Firebase Auth password-reset oobCode, recovery token, or return from hosted action page
@@ -140,32 +143,80 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
     }
   };
 
+  const formatGoogleAuthError = (err: any): string => {
+    const code = err?.code || '';
+    const msg = err?.message || '';
+
+    if (code === 'auth/unauthorized-domain' || msg.includes('auth/unauthorized-domain')) {
+      return 'This domain is not yet authorized in Firebase Console settings. Please add your current domain in Firebase Console -> Authentication -> Settings -> Authorized domains, or sign in with Email & Password below.';
+    }
+    if (
+      code === 'auth/account-exists-with-different-credential' ||
+      err?.status === 409 ||
+      msg.includes('different sign-in method')
+    ) {
+      return 'An account with this email address already exists. Please sign in using your Email and Password below.';
+    }
+    if (code === 'auth/network-request-failed' || msg.includes('network-request-failed')) {
+      return 'Network connection error while contacting Google. Please check your internet connection and try again.';
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return 'Google sign-in is disabled in Firebase Console. Please enable Google provider under Sign-in method.';
+    }
+    return msg || 'Google sign-in could not be completed. You can also sign in with Email & Password below.';
+  };
+
   const handleGoogleLogin = async () => {
-    const loginPromise = api.loginWithGooglePopup();
+    if (authLoading) return;
     setAuthError(null);
+    setAuthNotice(null);
     setAuthLoading(true);
+
     try {
-      const user = await loginPromise;
+      const user = await api.loginWithGooglePopup();
       setAuthModalOpen(false);
       onAuthenticated(user, 'dashboard');
     } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('auth/popup-closed-by-user')) {
+      const code = err?.code || '';
+      const msg = err?.message || '';
+
+      if (code === 'auth/popup-closed-by-user' || msg.includes('auth/popup-closed-by-user')) {
+        // User closed the popup intentionally
+        setAuthNotice(null);
         setAuthError(null);
-      } else if (err?.code === 'auth/popup-blocked' || err?.message?.includes('auth/popup-blocked')) {
-        setAuthError(
-          'Your browser blocked the sign-in popup. Please allow popups for this site in your browser address bar (look for the popup icon at top right), or sign in with Email & Password below.'
-        );
-      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
-        setAuthError(
-          'Google Sign-in domain is not authorized yet in Firebase Console. Please register or sign in with Email & Password below!'
-        );
+      } else if (
+        code === 'auth/popup-blocked' ||
+        msg.includes('auth/popup-blocked') ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        // Popup was blocked by browser policy -> automatically fall back to standard redirect!
+        setAuthNotice('Popup blocked by browser. Redirecting you to Google Sign-In...');
+        try {
+          await api.loginWithGoogleRedirect();
+          return; // Browser is navigating to accounts.google.com
+        } catch (redirectErr: any) {
+          setAuthNotice(null);
+          setAuthError(formatGoogleAuthError(redirectErr));
+        }
       } else {
-        setAuthError(
-          err.message ||
-            'Google sign-in popup could not complete. You can also sign in with Email & Password below.'
-        );
+        setAuthError(formatGoogleAuthError(err));
       }
     } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleRedirectLogin = async () => {
+    if (authLoading) return;
+    setAuthError(null);
+    setAuthNotice('Redirecting to Google Sign-In...');
+    setAuthLoading(true);
+
+    try {
+      await api.loginWithGoogleRedirect();
+    } catch (err: any) {
+      setAuthNotice(null);
+      setAuthError(formatGoogleAuthError(err));
       setAuthLoading(false);
     }
   };
@@ -711,6 +762,16 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
               </div>
             )}
 
+            {authNotice && (
+              <div
+                role="status"
+                className="p-3 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-800 flex items-center gap-2"
+              >
+                <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse shrink-0" />
+                <span>{authNotice}</span>
+              </div>
+            )}
+
             {authSuccess && (
               <div
                 role="status"
@@ -849,15 +910,44 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
               )}
             </form>
 
-            <div className="pt-3 border-t border-slate-200">
+            <div className="pt-3 border-t border-slate-200 space-y-2">
               <button
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={authLoading}
-                className="w-full py-2.5 px-4 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
               >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                  />
+                </svg>
                 Continue with Google Sign-In
               </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={handleGoogleRedirectLogin}
+                  disabled={authLoading}
+                  className="text-[11px] text-slate-500 hover:text-[#0284C7] underline cursor-pointer"
+                >
+                  Popup blocked or on mobile? Sign in via page redirect →
+                </button>
+              </div>
             </div>
           </div>
         </div>
