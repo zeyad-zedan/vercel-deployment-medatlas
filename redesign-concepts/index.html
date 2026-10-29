@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MedAtlas MCQ — 10 Design Concepts Gallery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0F172A;
+      --panel: #1E293B;
+      --border: #334155;
+      --accent: #38BDF8;
+      --text: #F8FAFC;
+      --text-muted: #94A3B8;
+      --font: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Master Control Bar */
+    .master-bar {
+      background: #0B1120;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      shrink: 0;
+      z-index: 20;
+    }
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge-hub {
+      background: var(--accent);
+      color: #0F172A;
+      font-weight: 800;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+    .hub-title { font-weight: 800; font-size: 16px; color: #FFF; }
+
+    /* Concept Selector Dropdown / Pills */
+    .concept-select {
+      background: var(--panel);
+      color: #FFF;
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-family: var(--font);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      min-width: 320px;
+    }
+
+    /* Device Switcher (Tablet vs Desktop) */
+    .device-switcher {
+      display: flex;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .dev-btn {
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .dev-btn.active {
+      background: #334155;
+      color: #FFF;
+    }
+
+    /* Workspace */
+    .workspace {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Left Drawer: Concept Cards */
+    .concepts-drawer {
+      width: 320px;
+      background: #111827;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      shrink: 0;
+    }
+    .concept-item {
+      background: var(--panel);
+      border: 1.5px solid transparent;
+      border-radius: 10px;
+      padding: 14px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .concept-item:hover {
+      background: #273549;
+    }
+    .concept-item.active {
+      border-color: var(--accent);
+      background: #1E293B;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.15);
+    }
+    .item-num {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 2px;
+    }
+    .item-name { font-weight: 700; font-size: 14px; color: #FFF; }
+    .item-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+    .palette-dots {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .dot {
+      width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    /* Live Preview Container */
+    .preview-container {
+      flex: 1;
+      background: #090D16;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .iframe-wrapper {
+      width: 100%;
+      height: 100%;
+      background: #FFF;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      transition: width 0.3s ease;
+      border: 1px solid var(--border);
+    }
+    .iframe-wrapper.tablet {
+      width: 768px;
+    }
+    .iframe-wrapper.mobile {
+      width: 390px;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Control Bar -->
+  <div class="master-bar">
+    <div class="brand-group">
+      <span class="badge-hub">10 Redesign Concepts</span>
+      <span class="hub-title">MedAtlas Exploration Studio</span>
+    </div>
+
+    <!-- Live Concept Switcher -->
+    <select id="conceptSelect" class="concept-select" onchange="switchConcept(this.value)">
+      <option value="01-clean-clinical.html">01 · Clean Clinical Blue (Modern &amp; Crisp)</option>
+      <option value="02-nordic-editorial.html">02 · Nordic Editorial (Warm Paper, Low Eye-Strain)</option>
+      <option value="03-dark-obsidian.html">03 · Dark Obsidian (OLED Night Shift Stealth)</option>
+      <option value="04-bento-glass.html">04 · Bento Grid &amp; Frosted Glass (Apple Style)</option>
+      <option value="05-uworld-high-density.html">05 · Academic USMLE / UWorld Split-Pane</option>
+      <option value="06-gamified-resident.html">06 · Gamified Resident (XP, Streaks &amp; Badges)</option>
+      <option value="07-neo-brutalist-med.html">07 · Neo-Brutalist Clinical (Bold High-Contrast)</option>
+      <option value="08-focus-zen-card.html">08 · Distraction-Free Focus Zen Mode</option>
+      <option value="09-university-classic.html">09 · University Hospital Classic (Navy &amp; Gold)</option>
+      <option value="10-linear-zinc-saas.html">10 · Linear-Style Zinc SaaS (Minimalist Pro)</option>
+    </select>
+
+    <!-- Tablet / Desktop View Switcher -->
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <div class="device-switcher">
+        <button class="dev-btn active" id="btnDesktop" onclick="setDevice('desktop')">🖥 Desktop</button>
+        <button class="dev-btn" id="btnTablet" onclick="setDevice('tablet')">📱 Tablet (iPad/Tab)</button>
+        <button class="dev-btn" id="btnMobile" onclick="setDevice('mobile')">📱 Phone</button>
+      </div>
+
+      <a id="btnOpenDirect" href="01-clean-clinical.html" target="_blank" class="dev-btn" style="background: var(--accent); color: #0F172A; font-weight: 700; text-decoration: none;">
+        Open Standalone ↗
+      </a>
+    </div>
+  </div>
+
+  <!-- Workspace -->
+  <div class="workspace">
+    <!-- Left Drawer with all 10 Designs -->
+    <div class="concepts-drawer">
+      <div class="concept-item active" onclick="switchConcept('01-clean-clinical.html')">
+        <div class="item-num">CONCEPT 01</div>
+        <div class="item-name">Clean Clinical Blue</div>
+        <div class="item-desc">Crisp healthcare blue, structured cards, fast reading for long study days.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #0284C7;"></div>
+          <div class="dot" style="background: #E0F2FE;"></div>
+          <div class="dot" style="background: #F8FAFC;"></div>
+          <div class="dot" style="background: #10B981;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('02-nordic-editorial.html')">
+        <div class="item-num">CONCEPT 02</div>
+        <div class="item-name">Nordic Editorial Paper</div>
+        <div class="item-desc">Warm cream canvas, serif typography, zero glare, feels like a luxury medical journal.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #FBF9F5;"></div>
+          <div class="dot" style="background: #2C6E49;"></div>
+          <div class="dot" style="background: #C94A29;"></div>
+          <div class="dot" style="background: #202020;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('03-dark-obsidian.html')">
+        <div class="item-num">CONCEPT 03</div>
+        <div class="item-name">Dark Mode Stealth Pro</div>
+        <div class="item-desc">True OLED obsidian black with cyan &amp; emerald neon outlines for hospital night shifts.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #0B0F19;"></div>
+          <div class="dot" style="background: #38BDF8;"></div>
+          <div class="dot" style="background: #34D399;"></div>
+          <div class="dot" style="background: #FB7185;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('04-bento-glass.html')">
+        <div class="item-num">CONCEPT 04</div>
+        <div class="item-name">Bento Grid &amp; Frosted Glass</div>
+        <div class="item-desc">Modern Apple-style modular bento widgets with soft translucent glassmorphism.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #6366F1;"></div>
+          <div class="dot" style="background: #8B5CF6;"></div>
+          <div class="dot" style="background: #EEF2FF;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('05-uworld-high-density.html')">
+        <div class="item-num">CONCEPT 05</div>
+        <div class="item-name">Academic USMLE / UWorld</div>
+        <div class="item-desc">High data density, 3-column split with persistent question palette and slide dock.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #1C3D5A;"></div>
+          <div class="dot" style="background: #3182CE;"></div>
+          <div class="dot" style="background: #EDF2F7;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('06-gamified-resident.html')">
+        <div class="item-num">CONCEPT 06</div>
+        <div class="item-name">Gamified Resident</div>
+        <div class="item-desc">Duolingo-inspired chunky buttons, animated streak counters, and XP progression.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #22C55E;"></div>
+          <div class="dot" style="background: #3B82F6;"></div>
+          <div class="dot" style="background: #F97316;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('07-neo-brutalist-med.html')">
+        <div class="item-num">CONCEPT 07</div>
+        <div class="item-name">Neo-Brutalist Clinical</div>
+        <div class="item-desc">Stark 3px borders, hard drop-shadows, electric highlighter yellow, snappy and bold.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #FFE600;"></div>
+          <div class="dot" style="background: #00F0FF;"></div>
+          <div class="dot" style="background: #000000;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('08-focus-zen-card.html')">
+        <div class="item-num">CONCEPT 08</div>
+        <div class="item-name">Distraction-Free Zen Card</div>
+        <div class="item-desc">Single prominent question card in the center with hotkey triggers (A/B/C/D).</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #FAFAF9;"></div>
+          <div class="dot" style="background: #1C1917;"></div>
+          <div class="dot" style="background: #2563EB;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('09-university-classic.html')">
+        <div class="item-num">CONCEPT 09</div>
+        <div class="item-name">University Hospital Classic</div>
+        <div class="item-desc">Prestigious navy blue header, gold seal accents, formal academic faculty tables.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #0F2942;"></div>
+          <div class="dot" style="background: #D4AF37;"></div>
+          <div class="dot" style="background: #FFFFFF;"></div>
+        </div>
+      </div>
+
+      <div class="concept-item" onclick="switchConcept('10-linear-zinc-saas.html')">
+        <div class="item-num">CONCEPT 10</div>
+        <div class="item-name">Linear-Style Zinc SaaS</div>
+        <div class="item-desc">Deep dark zinc, monospace tags, 1px hairlines, and modern developer-grade polish.</div>
+        <div class="palette-dots">
+          <div class="dot" style="background: #09090B;"></div>
+          <div class="dot" style="background: #5E6AD2;"></div>
+          <div class="dot" style="background: #27272A;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center Preview Frame -->
+    <div class="preview-container">
+      <div id="iframeWrapper" class="iframe-wrapper">
+        <iframe id="previewIframe" src="01-clean-clinical.html"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchConcept(file) {
+      document.getElementById('previewIframe').src = file;
+      document.getElementById('conceptSelect').value = file;
+      document.getElementById('btnOpenDirect').href = file;
+
+      // Update active list card
+      const items = document.querySelectorAll('.concept-item');
+      items.forEach(el => {
+        if (el.getAttribute('onclick').includes(file)) {
+          el.classList.add('active');
+        } else {
+          el.classList.remove('active');
+        }
+      });
+    }
+
+    function setDevice(mode) {
+      const wrapper = document.getElementById('iframeWrapper');
+      wrapper.className = 'iframe-wrapper ' + (mode === 'desktop' ? '' : mode);
+      document.querySelectorAll('.dev-btn').forEach(b => b.classList.remove('active'));
+      if (mode === 'desktop') document.getElementById('btnDesktop').classList.add('active');
+      if (mode === 'tablet') document.getElementById('btnTablet').classList.add('active');
+      if (mode === 'mobile') document.getElementById('btnMobile').classList.add('active');
+    }
+  </script>
+</body>
+</html>

@@ -60,8 +60,20 @@ export const rateLimitBuckets = pgTable('rate_limit_buckets', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+export const modules = pgTable('modules', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique(), // e.g. 'BSF 112'
+  title: text('title').notNull(),        // e.g. 'Basic Structure & Function (BSF 112)'
+  description: text('description').notNull().default(''),
+  displayOrder: integer('display_order').notNull().default(1),
+  status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const subjects = pgTable('subjects', {
   id: serial('id').primaryKey(),
+  moduleId: integer('module_id').references(() => modules.id, { onDelete: 'cascade' }),
   slug: text('slug').notNull().unique(),
   title: text('title').notNull(),
   description: text('description').notNull(),
@@ -227,7 +239,15 @@ export const adminAuditLogs = pgTable('admin_audit_logs', {
 });
 
 // Relations
-export const subjectsRelations = relations(subjects, ({ many }) => ({
+export const modulesRelations = relations(modules, ({ many }) => ({
+  subjects: many(subjects),
+}));
+
+export const subjectsRelations = relations(subjects, ({ one, many }) => ({
+  module: one(modules, {
+    fields: [subjects.moduleId],
+    references: [modules.id],
+  }),
   lectures: many(lectures),
   questionBanks: many(questionBanks),
   questions: many(questions),

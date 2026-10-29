@@ -13,6 +13,7 @@ import {
   X,
   FileText,
   ExternalLink,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
 import { getSampleCsvTemplate } from '../lib/mcq-engine.ts';
@@ -27,7 +28,7 @@ interface AdminConsoleProps {
 type AdminSection =
   | 'overview'
   | 'users'
-  | 'subjects'
+  | 'modules'
   | 'lectures'
   | 'questions'
   | 'import';
@@ -41,8 +42,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Module form state
+  const [editingModule, setEditingModule] = useState<any | null>(null);
+  const [modCode, setModCode] = useState('');
+  const [modTitle, setModTitle] = useState('');
+  const [modDesc, setModDesc] = useState('');
+  const [modOrder, setModOrder] = useState(1);
+  const [modStatus, setModStatus] = useState<'published' | 'draft' | 'archived'>('published');
+  const [confirmDeleteModuleId, setConfirmDeleteModuleId] = useState<number | null>(null);
+
   // Subject form state
   const [editingSubject, setEditingSubject] = useState<any | null>(null);
+  const [subjModuleId, setSubjModuleId] = useState<number | ''>('');
   const [subjTitle, setSubjTitle] = useState('');
   const [subjDesc, setSubjDesc] = useState('');
   const [subjOrder, setSubjOrder] = useState(1);
@@ -89,6 +100,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [confirmDeleteUserUid, setConfirmDeleteUserUid] = useState<
     string | null
   >(null);
+  const [resetUserModal, setResetUserModal] = useState<{
+    uid: string;
+    email: string;
+    name: string;
+  } | null>(null);
+  const [selectedLectureForReset, setSelectedLectureForReset] = useState<number | null>(null);
+  const [isResettingUserLecture, setIsResettingUserLecture] = useState(false);
 
   const [qSubjectId, setQSubjectId] = useState<number>(0);
   const [qLectureId, setQLectureId] = useState<number>(0);
@@ -133,6 +151,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const {
     metrics,
     users = [],
+    modules: modulesList = [],
     subjects = [],
     lectures = [],
     questionBanks = [],
@@ -145,6 +164,58 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const clearAlerts = () => {
     setFeedbackMsg(null);
     setErrorMsg(null);
+  };
+
+  // Module Handlers
+  const startEditModule = (mod?: any) => {
+    clearAlerts();
+    if (mod) {
+      setEditingModule(mod);
+      setModCode(mod.code || '');
+      setModTitle(mod.title || '');
+      setModDesc(mod.description || '');
+      setModOrder(mod.displayOrder || 1);
+      setModStatus(mod.status || 'published');
+    } else {
+      setEditingModule({ id: undefined });
+      setModCode('');
+      setModTitle('');
+      setModDesc('');
+      setModOrder(modulesList.length + 1);
+      setModStatus('published');
+    }
+  };
+
+  const handleSaveModule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearAlerts();
+    try {
+      await api.saveModule({
+        id: editingModule?.id,
+        code: modCode.trim(),
+        title: modTitle.trim(),
+        description: modDesc.trim(),
+        displayOrder: modOrder,
+        status: modStatus,
+      });
+      setEditingModule(null);
+      setFeedbackMsg(`Module "${modCode}: ${modTitle}" saved successfully.`);
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to save module.');
+    }
+  };
+
+  const handleDeleteModule = async (id: number) => {
+    clearAlerts();
+    try {
+      await api.deleteModule(id);
+      setConfirmDeleteModuleId(null);
+      setFeedbackMsg('Module deleted successfully.');
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to delete module.');
+    }
   };
 
   // User Role & Individual User Deletion Handlers
@@ -175,16 +246,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   };
 
   // Subject Handlers
-  const startEditSubject = (subj?: any) => {
+  const startEditSubject = (subj?: any, defaultModuleId?: number) => {
     clearAlerts();
     if (subj) {
       setEditingSubject(subj);
+      setSubjModuleId(subj.moduleId || '');
       setSubjTitle(subj.title);
       setSubjDesc(subj.description);
       setSubjOrder(subj.displayOrder);
       setSubjStatus(subj.status);
     } else {
       setEditingSubject({ id: undefined });
+      setSubjModuleId(defaultModuleId !== undefined ? defaultModuleId : modulesList[0]?.id || '');
       setSubjTitle('');
       setSubjDesc('');
       setSubjOrder(subjects.length + 1);
@@ -198,6 +271,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     try {
       await api.saveSubject({
         id: editingSubject?.id,
+        moduleId: subjModuleId ? Number(subjModuleId) : null,
         title: subjTitle,
         description: subjDesc,
         displayOrder: subjOrder,
@@ -572,7 +646,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             [
               { id: 'overview', label: 'Overview & Logs' },
               { id: 'users', label: `Users & Roles (${users.length})` },
-              { id: 'subjects', label: `Subjects (${subjects.length})` },
+              { id: 'modules', label: `Modules & Subjects (${modulesList.length} / ${subjects.length})` },
               { id: 'lectures', label: `Lectures (${lectures.length})` },
               { id: 'questions', label: `Question Bank (${questions.length})` },
               { id: 'import', label: 'Bulk CSV Import & Export' },
@@ -836,6 +910,20 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                               )}
                               <button
                                 type="button"
+                                onClick={() => {
+                                  setResetUserModal({
+                                    uid: u.uid,
+                                    email: u.email,
+                                    name: u.displayName || u.email,
+                                  });
+                                  setSelectedLectureForReset(lectures[0]?.id || null);
+                                }}
+                                className="font-semibold text-amber-700 hover:underline cursor-pointer"
+                              >
+                                Reset Lecture
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => setConfirmDeleteUserUid(u.uid)}
                                 className="font-semibold text-red-700 hover:underline cursor-pointer"
                               >
@@ -882,50 +970,330 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       )}
 
       {/* ====================================================================
-          SECTION 2: SUBJECT MANAGEMENT
+          SECTION 2: MODULE & SUBJECT MANAGEMENT (ACADEMIC STRUCTURE)
       ==================================================================== */}
-      {section === 'subjects' && (
-        <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-bold text-slate-900">Manage Subjects</h2>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => startEditSubject()}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                New Subject
-              </button>
+      {section === 'modules' && (
+        <div className="space-y-8">
+          {/* Top Half: Academic Modules */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  Academic Modules
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-800 font-semibold font-mono">
+                    {modulesList.length}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Top-level curriculum modules (e.g. BSF 112) containing multi-disciplinary subjects.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => startEditModule()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#08a39d] hover:bg-[#06847f] rounded-lg cursor-pointer shadow-xs transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  New Module
+                </button>
+              </div>
             </div>
-          </div>
 
-          {editingSubject && (
-            <form
-              onSubmit={handleSaveSubject}
-              className="bg-white rounded-xl border border-slate-200 p-6 space-y-4"
-            >
-              <h3 className="text-sm font-bold text-slate-900">
-                {editingSubject.id ? 'Edit Subject' : 'Create New Subject'}
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                <div className="sm:col-span-2">
+            {editingModule && (
+              <form
+                onSubmit={handleSaveModule}
+                className="bg-white rounded-xl border border-teal-200 shadow-xs p-6 space-y-4"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#08a39d]" />
+                    {editingModule.id ? `Edit Module (${modCode})` : 'Create New Academic Module'}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setEditingModule(null)}
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Module Code
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={modCode}
+                      onChange={(e) => setModCode(e.target.value)}
+                      placeholder="e.g. BSF 112"
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 uppercase font-mono font-bold"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Module Title
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={modTitle}
+                      onChange={(e) => setModTitle(e.target.value)}
+                      placeholder="e.g. Basic Structure & Function"
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Order
+                      </label>
+                      <input
+                        type="number"
+                        value={modOrder}
+                        onChange={(e) => setModOrder(Number(e.target.value))}
+                        className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Status
+                      </label>
+                      <select
+                        value={modStatus}
+                        onChange={(e) => setModStatus(e.target.value as any)}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"
+                      >
+                        <option value="published">Published</option>
+                        <option value="draft">Draft</option>
+                        <option value="archived">Archived</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs">
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Subject Title
+                    Description
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={subjTitle}
-                    onChange={(e) => setSubjTitle(e.target.value)}
-                    placeholder="e.g., Neuroanatomy & Clinical Neuroscience"
+                  <textarea
+                    rows={2}
+                    value={modDesc}
+                    onChange={(e) => setModDesc(e.target.value)}
+                    placeholder="Brief description of learning outcomes or curriculum scope..."
                     className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingModule(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[#08a39d] hover:bg-[#06847f] rounded-lg cursor-pointer"
+                  >
+                    Save Module
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Modules Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {modulesList.map((m: any) => {
+                const assignedSubjects = subjects.filter((s: any) => s.moduleId === m.id);
+                const totalQ = assignedSubjects.reduce((acc: number, s: any) => acc + (s.questionCount || 0), 0);
+                const totalL = assignedSubjects.reduce((acc: number, s: any) => acc + (s.lectureCount || 0), 0);
+                return (
+                  <div
+                    key={m.id}
+                    className="bg-white rounded-xl border border-slate-200 hover:border-teal-400 p-5 shadow-xs flex flex-col justify-between transition-all"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold font-mono bg-teal-50 text-teal-800 border border-teal-200">
+                          {m.code}
+                        </div>
+                        <span
+                          className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                            m.status === 'published'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {m.status}
+                        </span>
+                      </div>
+                      <h3 className="font-bold text-slate-900 text-sm mb-1">{m.title}</h3>
+                      <p className="text-xs text-slate-500 mb-3 line-clamp-2">
+                        {m.description || 'No description provided.'}
+                      </p>
+
+                      <div className="flex items-center gap-3 text-xs text-slate-500 font-mono-tabular mb-3">
+                        <span>{assignedSubjects.length} Subjects</span>
+                        <span>·</span>
+                        <span>{totalL} Lectures</span>
+                        <span>·</span>
+                        <span>{totalQ} Questions</span>
+                      </div>
+
+                      <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                        <span className="text-[11px] font-semibold text-slate-600">
+                          Assigned Subjects ({assignedSubjects.length}):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {assignedSubjects.length === 0 ? (
+                            <span className="text-xs text-slate-400 italic">No subjects assigned yet</span>
+                          ) : (
+                            assignedSubjects.map((s: any) => (
+                              <span
+                                key={s.id}
+                                className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-md bg-teal-50/70 text-teal-800 border border-teal-200/60"
+                              >
+                                {s.title}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 mt-4 border-t border-slate-100 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => startEditSubject(undefined, m.id)}
+                        className="text-teal-700 hover:text-teal-900 font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Add Subject
+                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => startEditModule(m)}
+                          className="font-semibold text-slate-700 hover:text-slate-900 cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteModuleId(m.id)}
+                          className="font-semibold text-red-600 hover:text-red-700 cursor-pointer"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    {confirmDeleteModuleId === m.id && (
+                      <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs space-y-2">
+                        <p className="font-semibold text-red-900">
+                          Delete module &ldquo;{m.code}&rdquo;? Assigned subjects will remain unlinked.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteModule(m.id)}
+                            className="px-2.5 py-1 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                          >
+                            Confirm Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteModuleId(null)}
+                            className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  Subjects &amp; Modules Assignment
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold font-mono">
+                    {subjects.length}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Manage individual subject disciplines and link them under academic modules.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => startEditSubject()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  New Subject
+                </button>
+              </div>
+            </div>
+
+            {editingSubject && (
+              <form
+                onSubmit={handleSaveSubject}
+                className="bg-white rounded-xl border border-slate-200 p-6 space-y-4"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {editingSubject.id ? 'Edit Subject' : 'Create New Subject'}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setEditingSubject(null)}
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
-                      Order
+                      Parent Academic Module
+                    </label>
+                    <select
+                      value={subjModuleId}
+                      onChange={(e) => setSubjModuleId(e.target.value ? Number(e.target.value) : '')}
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"
+                    >
+                      <option value="">-- Standalone (No Module) --</option>
+                      {modulesList.map((m: any) => (
+                        <option key={m.id} value={m.id}>
+                          {m.code} - {m.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Subject Title
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={subjTitle}
+                      onChange={(e) => setSubjTitle(e.target.value)}
+                      placeholder="e.g., Physiology or Biochemistry"
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Display Order
                     </label>
                     <input
                       type="number"
@@ -949,119 +1317,133 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     </select>
                   </div>
                 </div>
-              </div>
-              <div className="text-xs">
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Description
-                </label>
-                <textarea
-                  rows={2}
-                  required
-                  value={subjDesc}
-                  onChange={(e) => setSubjDesc(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingSubject(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] rounded-lg cursor-pointer"
-                >
-                  Save Subject
-                </button>
-              </div>
-            </form>
-          )}
-
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            {subjects.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                No subjects exist in the database. Click &ldquo;New Subject&rdquo; above or import via CSV to add your subjects.
-              </div>
-            ) : (
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-                    <th className="py-3 px-4 font-semibold">Order</th>
-                    <th className="py-3 px-4 font-semibold">Subject Title</th>
-                    <th className="py-3 px-4 font-semibold">Content</th>
-                    <th className="py-3 px-4 font-semibold">Status</th>
-                    <th className="py-3 px-4 font-semibold text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {subjects.map((s: any) => (
-                    <React.Fragment key={s.id}>
-                      <tr className="hover:bg-slate-50">
-                        <td className="py-3 px-4 font-mono-tabular">
-                          {s.displayOrder}
-                        </td>
-                        <td className="py-3 px-4">
-                          <p className="font-bold text-slate-900">{s.title}</p>
-                          <p className="text-slate-500">{s.description}</p>
-                        </td>
-                        <td className="py-3 px-4 font-mono-tabular text-slate-600">
-                          {s.lectureCount ?? 0} Lectures · {s.questionCount ?? 0} MCQs
-                        </td>
-                        <td className="py-3 px-4 uppercase font-mono-tabular font-semibold">
-                          {s.status}
-                        </td>
-                        <td className="py-3 px-4 text-right space-x-3 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => startEditSubject(s)}
-                            className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteSubjectId(s.id)}
-                            className="font-semibold text-red-700 hover:underline cursor-pointer"
-                          >
-                            Delete Subject
-                          </button>
-                        </td>
-                      </tr>
-                      {confirmDeleteSubjectId === s.id && (
-                        <tr className="bg-red-50/80">
-                          <td colSpan={5} className="p-3">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                              <span className="font-semibold text-red-900">
-                                Permanently delete subject &ldquo;{s.title}&rdquo; along with its lectures, quizzes, and questions?
-                              </span>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteSubject(s.id)}
-                                  className="px-3 py-1 font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
-                                >
-                                  Confirm Permanent Delete
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteSubjectId(null)}
-                                  className="px-3 py-1 font-semibold text-slate-700 bg-white border border-slate-300 rounded cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
+                <div className="text-xs">
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Description
+                  </label>
+                  <textarea
+                    rows={2}
+                    required
+                    value={subjDesc}
+                    onChange={(e) => setSubjDesc(e.target.value)}
+                    placeholder="Short summary of topics covered in this subject..."
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSubject(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                  >
+                    Save Subject
+                  </button>
+                </div>
+              </form>
             )}
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              {subjects.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  No subjects exist in the database. Click &ldquo;New Subject&rdquo; above or import via CSV to add your subjects.
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
+                      <th className="py-3 px-4 font-semibold">Order</th>
+                      <th className="py-3 px-4 font-semibold">Academic Module</th>
+                      <th className="py-3 px-4 font-semibold">Subject Title</th>
+                      <th className="py-3 px-4 font-semibold">Content</th>
+                      <th className="py-3 px-4 font-semibold">Status</th>
+                      <th className="py-3 px-4 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {subjects.map((s: any) => {
+                      const parentMod = modulesList.find((m: any) => m.id === s.moduleId);
+                      return (
+                        <React.Fragment key={s.id}>
+                          <tr className="hover:bg-slate-50">
+                            <td className="py-3 px-4 font-mono-tabular">
+                              {s.displayOrder}
+                            </td>
+                            <td className="py-3 px-4">
+                              {parentMod ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold font-mono bg-teal-50 text-teal-800 border border-teal-200">
+                                  {parentMod.code}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-xs italic">Standalone</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <p className="font-bold text-slate-900">{s.title}</p>
+                              <p className="text-slate-500 text-[11px]">{s.description}</p>
+                            </td>
+                            <td className="py-3 px-4 font-mono-tabular text-slate-600">
+                              {s.lectureCount ?? 0} Lectures · {s.questionCount ?? 0} MCQs
+                            </td>
+                            <td className="py-3 px-4 uppercase font-mono-tabular font-semibold">
+                              {s.status}
+                            </td>
+                            <td className="py-3 px-4 text-right space-x-3 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => startEditSubject(s)}
+                                className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteSubjectId(s.id)}
+                                className="font-semibold text-red-700 hover:underline cursor-pointer"
+                              >
+                                Delete Subject
+                              </button>
+                            </td>
+                          </tr>
+                          {confirmDeleteSubjectId === s.id && (
+                            <tr className="bg-red-50/80">
+                              <td colSpan={6} className="p-3">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                                  <span className="font-semibold text-red-900">
+                                    Permanently delete subject &ldquo;{s.title}&rdquo; along with its lectures, quizzes, and questions?
+                                  </span>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSubject(s.id)}
+                                      className="px-3 py-1 font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                                    >
+                                      Confirm Permanent Delete
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteSubjectId(null)}
+                                      className="px-3 py-1 font-semibold text-slate-700 bg-white border border-slate-300 rounded cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1105,11 +1487,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     onChange={(e) => setLectSubjectId(Number(e.target.value))}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"
                   >
-                    {subjects.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        {s.title}
-                      </option>
-                    ))}
+                    {subjects.map((s: any) => {
+                      const mod = modulesList.find((m: any) => m.id === s.moduleId);
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {mod ? `[${mod.code}] ` : ''}{s.title}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
                 <div>
@@ -1554,11 +1939,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     }}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"
                   >
-                    {subjects.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        {s.title}
-                      </option>
-                    ))}
+                    {subjects.map((s: any) => {
+                      const mod = modulesList.find((m: any) => m.id === s.moduleId);
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {mod ? `[${mod.code}] ` : ''}{s.title}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -2240,6 +2628,113 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           initialPage={1}
           onClose={() => setPreviewPdfModal(null)}
         />
+      )}
+
+      {/* Admin Reset User Lecture Progress Modal */}
+      {resetUserModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+        >
+          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5 text-amber-600">
+                <div className="p-2 bg-amber-50 rounded-lg">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Reset Lecture Progress
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    User: {resetUserModal.name} ({resetUserModal.email})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setResetUserModal(null);
+                  setSelectedLectureForReset(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold text-slate-700">
+                Select Lecture to Reset:
+              </label>
+              {lectures.length === 0 ? (
+                <p className="text-xs text-slate-500 italic">No lectures available.</p>
+              ) : (
+                <select
+                  value={selectedLectureForReset ?? ''}
+                  onChange={(e) =>
+                    setSelectedLectureForReset(Number(e.target.value) || null)
+                  }
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white"
+                >
+                  <option value="">-- Choose a Lecture --</option>
+                  {lectures.map((l: any) => (
+                    <option key={l.id} value={l.id}>
+                      {l.subjectTitle ? `[${l.subjectTitle}] ` : ''}Lecture {l.lectureNumber}: {l.title} (ID: {l.id})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 space-y-1">
+                <p className="font-semibold">What will this do?</p>
+                <p className="text-amber-800">
+                  This will completely clear this student&rsquo;s submitted answers, score history, and active sessions for this lecture. When the user opens the lecture again, they will start fresh from Question 1.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isResettingUserLecture}
+                onClick={() => {
+                  setResetUserModal(null);
+                  setSelectedLectureForReset(null);
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResettingUserLecture || !selectedLectureForReset}
+                onClick={async () => {
+                  if (!selectedLectureForReset) return;
+                  try {
+                    setIsResettingUserLecture(true);
+                    const res = await api.resetUserLectureProgressAdmin(
+                      resetUserModal.uid,
+                      selectedLectureForReset
+                    );
+                    setFeedbackMsg(res.message);
+                    setResetUserModal(null);
+                    setSelectedLectureForReset(null);
+                    onRefresh();
+                  } catch (err: any) {
+                    setErrorMsg(err.message || 'Failed to reset user lecture progress.');
+                  } finally {
+                    setIsResettingUserLecture(false);
+                  }
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 cursor-pointer"
+              >
+                {isResettingUserLecture ? 'Resetting...' : 'Confirm Reset Progress'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

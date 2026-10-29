@@ -3,6 +3,7 @@ import { eq, and, or, desc, asc, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   users,
+  modules,
   subjects,
   lectures,
   questionBanks,
@@ -2558,6 +2559,12 @@ export async function deleteUserAccount(uid: string) {
 export async function getPublishedCatalog(userUid?: string) {
   try {
     await ensureSeededDatabase();
+    const pubModules = await db
+      .select()
+      .from(modules)
+      .where(eq(modules.status, 'published'))
+      .orderBy(asc(modules.displayOrder), asc(modules.id));
+
     const pubSubjects = await db
       .select()
       .from(subjects)
@@ -2733,7 +2740,21 @@ export async function getPublishedCatalog(userUid?: string) {
       };
     });
 
+    const enrichedModules = pubModules.map((m) => {
+      const modSubjects = enrichedSubjects.filter((s) => s.moduleId === m.id);
+      const totalQ = modSubjects.reduce((acc, s) => acc + s.questionCount, 0);
+      const totalLect = modSubjects.reduce((acc, s) => acc + s.lectureCount, 0);
+      return {
+        ...m,
+        subjects: modSubjects,
+        subjectCount: modSubjects.length,
+        lectureCount: totalLect,
+        questionCount: totalQ,
+      };
+    });
+
     return {
+      modules: enrichedModules,
       subjects: enrichedSubjects,
       lectures: enrichedLectures,
       totalPublishedQuestions: visibleQuestions.length,
@@ -2805,6 +2826,57 @@ export function evaluateServerExamDeadline(params: {
 }
 
 /**
+ * Automatically completes any in-progress 'exam' sessions for the user whose assigned time limit has finished.
+ * Returns any remaining active (non-expired) in-progress 'exam' session(s) for the user.
+ */
+export async function resolveActiveMockExamsForUser(userUid: string) {
+  const activeExams = await db
+    .select()
+    .from(examSessions)
+    .where(
+      and(
+        eq(examSessions.userUid, userUid),
+        eq(examSessions.mode, 'exam'),
+        eq(examSessions.status, 'in_progress')
+      )
+    )
+    .orderBy(desc(examSessions.startedAt));
+
+  const stillRunningExams: typeof activeExams = [];
+  for (const exam of activeExams) {
+    const deadlineStatus = evaluateServerExamDeadline({
+      mode: exam.mode,
+      startedAt: exam.startedAt,
+      timeLimitSeconds: exam.timeLimitSeconds,
+    });
+    if (
+      deadlineStatus.isExpired ||
+      (deadlineStatus.remainingSeconds !== null && deadlineStatus.remainingSeconds <= 0)
+    ) {
+      try {
+        await completeExamSession(userUid, exam.id);
+      } catch (err) {
+        console.warn('Could not auto-complete expired mock exam:', err);
+      }
+    } else {
+      stillRunningExams.push(exam);
+    }
+  }
+
+  // If multiple in-progress mock exams existed from earlier, keep only the newest one active
+  if (stillRunningExams.length > 1) {
+    for (let i = 1; i < stillRunningExams.length; i++) {
+      try {
+        await completeExamSession(userUid, stillRunningExams[i].id);
+      } catch {}
+    }
+    return [stillRunningExams[0]];
+  }
+
+  return stillRunningExams;
+}
+
+/**
  * Starts a new Study, Exam, or Custom Practice session for a specific authenticated student.
  */
 export async function createPracticeOrExamSession(
@@ -2827,8 +2899,31 @@ export async function createPracticeOrExamSession(
   try {
     await ensureSeededDatabase();
 
-    // Ensure ONLY ONE progress per lecture's MCQ is saved and applied automatically
-    if (params.lectureIds && params.lectureIds.length === 1 && !params.onlyMistakes) {
+    // Auto-complete any expired mock exams and enforce single-active-exam lock when starting a new mock exam
+    const runningMockExams = await resolveActiveMockExamsForUser(userUid);
+    if (params.mode === 'exam' && runningMockExams.length > 0) {
+      const activeExam = runningMockExams[0];
+      const deadline = evaluateServerExamDeadline({
+        mode: activeExam.mode,
+        startedAt: activeExam.startedAt,
+        timeLimitSeconds: activeExam.timeLimitSeconds,
+      });
+      const remSecs = deadline.remainingSeconds ?? 0;
+      const mins = Math.floor(remSecs / 60);
+      const secs = remSecs % 60;
+      throw new ClientSafeError(
+        `You already have an active Mock Exam running ("${activeExam.title}" — ${mins}m ${secs}s remaining). You cannot open a new Mock Exam until you submit the active exam or its assigned time finishes.`,
+        409
+      );
+    }
+
+    // Ensure ONLY ONE progress per lecture's MCQ is saved and applied automatically (strictly for normal 'study' mode)
+    if (
+      params.mode === 'study' &&
+      params.lectureIds &&
+      params.lectureIds.length === 1 &&
+      !params.onlyMistakes
+    ) {
       const targetLectureId = params.lectureIds[0];
       const existingSessions = await db
         .select()
@@ -2836,7 +2931,8 @@ export async function createPracticeOrExamSession(
         .where(
           and(
             eq(examSessions.userUid, userUid),
-            eq(examSessions.lectureId, targetLectureId)
+            eq(examSessions.lectureId, targetLectureId),
+            eq(examSessions.mode, 'study')
           )
         )
         .orderBy(desc(examSessions.startedAt));
@@ -3019,7 +3115,10 @@ export async function createPracticeOrExamSession(
         title: defaultTitle,
         mode: params.mode,
         subjectId: firstSubj?.id ?? null,
-        lectureId: params.onlyMistakes ? null : (firstLect?.id ?? null),
+        lectureId:
+          params.mode === 'study' && !params.onlyMistakes
+            ? (firstLect?.id ?? null)
+            : null,
         status: 'in_progress',
         totalQuestions: selection.selectedQuestions.length,
         correctCount: 0,
@@ -3081,7 +3180,7 @@ export async function getExamSessionForStudent(
   userUid: string,
   sessionId: number,
   preloadedSession?: any
-) {
+): Promise<any> {
   try {
     let session = preloadedSession;
     if (!session) {
@@ -3097,6 +3196,21 @@ export async function getExamSessionForStudent(
         );
       }
       session = rows[0];
+
+      // If this is an in-progress Mock Exam whose assigned time has finished, auto-complete it now
+      if (session.mode === 'exam' && session.status === 'in_progress') {
+        const deadlineCheck = evaluateServerExamDeadline({
+          mode: session.mode,
+          startedAt: session.startedAt,
+          timeLimitSeconds: session.timeLimitSeconds,
+        });
+        if (
+          deadlineCheck.isExpired ||
+          (deadlineCheck.remainingSeconds !== null && deadlineCheck.remainingSeconds <= 0)
+        ) {
+          return await completeExamSession(userUid, session.id);
+        }
+      }
     }
 
     const orderItems: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
@@ -3898,6 +4012,7 @@ export async function consolidateUserLectureSessions(userUid: string) {
 export async function getStudentDashboardAnalytics(userUid: string) {
   try {
     await ensureSeededDatabase();
+    await resolveActiveMockExamsForUser(userUid);
     await consolidateUserLectureSessions(userUid);
     const [userSessions, userAttempts, userBookmarks, allSubjects, allLectures, allQuestions] =
       await Promise.all([
@@ -4181,6 +4296,11 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       } catch {
         answeredCount = s.totalQuestions - s.unansweredCount;
       }
+      const deadline = evaluateServerExamDeadline({
+        mode: s.mode,
+        startedAt: s.startedAt,
+        timeLimitSeconds: s.timeLimitSeconds,
+      });
       return {
         id: s.id,
         title: s.title,
@@ -4194,6 +4314,9 @@ export async function getStudentDashboardAnalytics(userUid: string) {
         incorrectCount: s.incorrectCount,
         unansweredCount: s.unansweredCount,
         scorePercentage: s.scorePercentage,
+        timeLimitSeconds: s.timeLimitSeconds,
+        remainingSeconds:
+          s.status === 'in_progress' && s.mode === 'exam' ? deadline.remainingSeconds : null,
         elapsedSeconds: s.elapsedSeconds,
         startedAt: s.startedAt,
         completedAt: s.completedAt,
@@ -4257,6 +4380,7 @@ export async function getAdminDashboardData() {
     await ensureSeededDatabase();
     const [
       allUsers,
+      allModules,
       allSubjects,
       allLectures,
       allBanks,
@@ -4266,6 +4390,10 @@ export async function getAdminDashboardData() {
       recentAuditLogs,
     ] = await Promise.all([
       db.select().from(users).orderBy(desc(users.createdAt)),
+      db
+        .select()
+        .from(modules)
+        .orderBy(asc(modules.displayOrder), asc(modules.id)),
       db
         .select()
         .from(subjects)
@@ -4298,10 +4426,12 @@ export async function getAdminDashboardData() {
 
     const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
     const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
+    const mMap = new Map(allModules.map((m) => [m.id, `${m.code} - ${m.title}`]));
 
     return {
       metrics: {
         totalUsers: allUsers.length,
+        totalModules: allModules.length,
         publishedSubjects: allSubjects.filter((s) => s.status === 'published').length,
         totalSubjects: allSubjects.length,
         publishedLectures: allLectures.filter((l) => l.status === 'published').length,
@@ -4310,8 +4440,19 @@ export async function getAdminDashboardData() {
         totalQuestions: allQuestions.length,
         completedExamsCount: recentSessions.filter((s) => s.status === 'completed').length,
       },
+      modules: allModules.map((m) => {
+        const modSubjects = allSubjects.filter((s) => s.moduleId === m.id);
+        return {
+          ...m,
+          subjects: modSubjects,
+          subjectCount: modSubjects.length,
+          lectureCount: allLectures.filter((l) => modSubjects.some((s) => s.id === l.subjectId)).length,
+          questionCount: allQuestions.filter((q) => modSubjects.some((s) => s.id === q.subjectId)).length,
+        };
+      }),
       subjects: allSubjects.map((s) => ({
         ...s,
+        moduleName: s.moduleId ? mMap.get(s.moduleId) || 'Unassigned Module' : 'Unassigned Module',
         lectureCount: allLectures.filter((l) => l.subjectId === s.id).length,
         questionCount: allQuestions.filter((q) => q.subjectId === s.id).length,
       })),
@@ -4351,10 +4492,114 @@ export async function getAdminDashboardData() {
   }
 }
 
+export async function upsertModuleAdmin(
+  admin: { uid: string; email: string },
+  payload: {
+    id?: number;
+    code: string;
+    title: string;
+    description: string;
+    displayOrder: number;
+    status: ContentStatus;
+  }
+) {
+  try {
+    const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
+    const cleanCode = payload.code.trim();
+    const cleanTitle = payload.title.trim();
+    if (!cleanCode || !cleanTitle) {
+      throw new ClientSafeError('Module code and title are required.', 400);
+    }
+
+    if (payload.id) {
+      const [updated] = await db
+        .update(modules)
+        .set({
+          code: cleanCode,
+          title: cleanTitle,
+          description: payload.description.trim(),
+          displayOrder: Number(payload.displayOrder) || 1,
+          status: payload.status,
+          updatedAt: new Date(),
+        })
+        .where(eq(modules.id, payload.id))
+        .returning();
+
+      await logAdminAction(
+        verifiedAdmin.uid,
+        verifiedAdmin.email,
+        'UPDATE_MODULE',
+        'module',
+        updated.id,
+        `Updated module "${updated.code}: ${updated.title}" (status: ${updated.status})`
+      );
+      invalidateCatalogCache();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(modules)
+      .values({
+        code: cleanCode,
+        title: cleanTitle,
+        description: payload.description.trim(),
+        displayOrder: Number(payload.displayOrder) || 1,
+        status: payload.status || 'published',
+      })
+      .returning();
+
+    await logAdminAction(
+      verifiedAdmin.uid,
+      verifiedAdmin.email,
+      'CREATE_MODULE',
+      'module',
+      created.id,
+      `Created module "${created.code}: ${created.title}"`
+    );
+    invalidateCatalogCache();
+    return created;
+  } catch (error) {
+    if (error instanceof ClientSafeError) throw error;
+    console.error('Error saving module:', error);
+    throw new Error('Failed to save module.', { cause: error });
+  }
+}
+
+export async function deleteModuleAdmin(
+  admin: { uid: string; email: string },
+  moduleId: number
+) {
+  try {
+    const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
+    const [deleted] = await db
+      .delete(modules)
+      .where(eq(modules.id, moduleId))
+      .returning();
+
+    if (deleted) {
+      await logAdminAction(
+        verifiedAdmin.uid,
+        verifiedAdmin.email,
+        'DELETE_MODULE',
+        'module',
+        deleted.id,
+        `Deleted module "${deleted.code}: ${deleted.title}"`
+      );
+    }
+    invalidateCatalogCache();
+    return deleted;
+  } catch (error) {
+    if (error instanceof ClientSafeError) throw error;
+    console.error('Error deleting module:', error);
+    throw new Error('Failed to delete module.', { cause: error });
+  }
+}
+
 export async function upsertSubjectAdmin(
   admin: { uid: string; email: string },
   payload: {
     id?: number;
+    moduleId?: number | null;
     title: string;
     description: string;
     displayOrder: number;
@@ -4373,6 +4618,7 @@ export async function upsertSubjectAdmin(
       const [updated] = await db
         .update(subjects)
         .set({
+          moduleId: payload.moduleId !== undefined ? payload.moduleId : null,
           title: payload.title.trim(),
           description: payload.description.trim(),
           displayOrder: Number(payload.displayOrder) || 1,
@@ -4397,6 +4643,7 @@ export async function upsertSubjectAdmin(
     const [created] = await db
       .insert(subjects)
       .values({
+        moduleId: payload.moduleId ?? null,
         slug: `${slug}-${Date.now().toString(36)}`,
         title: payload.title.trim(),
         description: payload.description.trim(),
@@ -5137,6 +5384,120 @@ export async function deleteUserAdmin(
     if (error instanceof ClientSafeError) throw error;
     console.error('Error deleting user:', error);
     throw new Error('Failed to delete user account.', { cause: error });
+  }
+}
+
+/**
+ * Resets a student's progress and quiz history for a specific lecture.
+ * Deletes all exam/study sessions attached to the lecture and all associated question attempts.
+ */
+export async function resetLectureProgress(
+  targetUserUid: string,
+  lectureId: number,
+  adminActor?: { uid: string; email: string }
+) {
+  try {
+    await ensureSeededDatabase();
+
+    const targetLect = await db
+      .select()
+      .from(lectures)
+      .where(eq(lectures.id, lectureId));
+
+    if (targetLect.length === 0) {
+      throw new ClientSafeError('Lecture not found.', 404);
+    }
+    const lectureTitle = targetLect[0].title;
+
+    // 1. Find all sessions for this user tied specifically to this lecture
+    const userLectSessions = await db
+      .select()
+      .from(examSessions)
+      .where(
+        and(
+          eq(examSessions.userUid, targetUserUid),
+          eq(examSessions.lectureId, lectureId)
+        )
+      );
+
+    const sessionIds = userLectSessions.map((s) => s.id);
+
+    // 2. Find all questions belonging to this lecture
+    const lectureQuestions = await db
+      .select({ id: questions.id })
+      .from(questions)
+      .where(eq(questions.lectureId, lectureId));
+
+    const qIds = lectureQuestions.map((q) => q.id);
+
+    await db.transaction(async (tx) => {
+      // Delete question attempts linked to these sessions or matching questions for this lecture
+      if (sessionIds.length > 0) {
+        await tx
+          .delete(questionAttempts)
+          .where(
+            and(
+              eq(questionAttempts.userUid, targetUserUid),
+              inArray(questionAttempts.sessionId, sessionIds)
+            )
+          );
+      }
+
+      if (qIds.length > 0) {
+        await tx
+          .delete(questionAttempts)
+          .where(
+            and(
+              eq(questionAttempts.userUid, targetUserUid),
+              inArray(questionAttempts.questionId, qIds)
+            )
+          );
+      }
+
+      // Also clean up by direct lectureId column on questionAttempts
+      await tx
+        .delete(questionAttempts)
+        .where(
+          and(
+            eq(questionAttempts.userUid, targetUserUid),
+            eq(questionAttempts.lectureId, lectureId)
+          )
+        );
+
+      // Delete the lecture's exam/study sessions for this user
+      if (sessionIds.length > 0) {
+        await tx
+          .delete(examSessions)
+          .where(
+            and(
+              eq(examSessions.userUid, targetUserUid),
+              inArray(examSessions.id, sessionIds)
+            )
+          );
+      }
+    });
+
+    if (adminActor) {
+      await logAdminAction(
+        adminActor.uid,
+        adminActor.email,
+        'RESET_LECTURE_PROGRESS',
+        'lecture',
+        lectureId,
+        `Reset progress for lecture "${lectureTitle}" (ID: ${lectureId}) for user ${targetUserUid}`
+      );
+    }
+
+    return {
+      success: true,
+      message: `Progress for lecture "${lectureTitle}" has been completely reset.`,
+      lectureId,
+      lectureTitle,
+    };
+  } catch (error: any) {
+    if (error instanceof ClientSafeError) throw error;
+    console.error('Error resetting lecture progress:', error);
+    throw new Error('Failed to reset lecture progress.', { cause: error });
   }
 }
 

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 10: Linear-Style Zinc SaaS — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #09090B;
+      --card: #121215;
+      --card-hover: #18181B;
+      --border: #27272A;
+      --border-subtle: #1C1C1F;
+      --text: #FAFAFA;
+      --text-muted: #A1A1AA;
+      --text-dim: #71717A;
+      --accent: #5E6AD2;
+      --accent-soft: rgba(94, 106, 210, 0.15);
+      --emerald: #10B981;
+      --font: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'Geist Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.5;
+      padding-bottom: 60px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 1040px; margin: 0 auto; padding: 28px 24px; }
+
+    /* Top Linear Bar */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      background: rgba(9, 9, 11, 0.8);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-inner {
+      max-width: 1040px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-linear {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #FFF;
+    }
+    .logo-diamond {
+      width: 18px;
+      height: 18px;
+      background: var(--accent);
+      transform: rotate(45deg);
+      border-radius: 3px;
+    }
+
+    .key-badge {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #18181B;
+      color: var(--text-dim);
+    }
+
+    /* Linear Section Card */
+    .linear-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+      transition: border-color 0.15s ease;
+    }
+    .linear-box:hover { border-color: #3F3F46; }
+
+    .tag-mono {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+      display: inline-block;
+    }
+
+    /* Metric Grid */
+    .zinc-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .zinc-stat {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+    }
+    .zinc-label { font-size: 12px; color: var(--text-dim); font-weight: 500; }
+    .zinc-val { font-family: var(--font-mono); font-size: 22px; font-weight: 600; color: #FFF; margin-top: 4px; }
+
+    /* Button */
+    .btn-zinc {
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #18181B;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-zinc:hover { background: #27272A; border-color: #3F3F46; }
+    .btn-zinc.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #FFF;
+    }
+
+    /* MCQ */
+    .q-zinc-stem {
+      font-size: 15px;
+      color: #E4E4E7;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .opt-zinc {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #18181B;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .opt-zinc:hover {
+      border-color: #52525B;
+      background: #202024;
+    }
+    .opt-zinc.correct {
+      border-color: #059669;
+      background: rgba(16, 185, 129, 0.1);
+      color: #A7F3D0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand-linear">
+        <div class="logo-diamond"></div>
+        <span>MedAtlas <span style="color: var(--text-dim);">// Workspace</span></span>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span class="key-badge">⌘K Search</span>
+        <button class="btn-zinc primary">New Exam Block</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="zinc-grid">
+      <div class="zinc-stat">
+        <div class="zinc-label">Progress</div>
+        <div class="zinc-val">428 / 650</div>
+      </div>
+      <div class="zinc-stat">
+        <div class="zinc-label">Accuracy</div>
+        <div class="zinc-val" style="color: var(--accent);">84.2%</div>
+      </div>
+      <div class="zinc-stat">
+        <div class="zinc-label">Streak</div>
+        <div class="zinc-val">9 Days</div>
+      </div>
+      <div class="zinc-stat">
+        <div class="zinc-label">Active Module</div>
+        <div class="zinc-val" style="font-size: 16px;">BSF 112</div>
+      </div>
+    </div>
+
+    <!-- Curriculum -->
+    <div class="linear-box">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px;">
+        <div>
+          <span class="tag-mono">Curriculum Syllabus</span>
+          <h2 style="font-size: 16px; font-weight: 600;">Module BSF 112 · Medical Physiology</h2>
+        </div>
+        <button class="btn-zinc">Study All (185)</button>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #18181B; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="key-badge">L1</span>
+          <span style="font-size: 14px; font-weight: 500;">Functional Organization of the Body</span>
+          <span style="font-size: 12px; color: var(--text-dim);">· 35 MCQs (91%)</span>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn-zinc">Review</button>
+          <button class="btn-zinc">Slide Deck</button>
+          <button class="btn-zinc" style="color: #EF4444; border-color: transparent;">Reset</button>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #18181B; border: 1px solid var(--border); border-radius: 6px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="key-badge">L2</span>
+          <span style="font-size: 14px; font-weight: 500;">Cellular Transport &amp; Membrane Potentials</span>
+          <span style="font-size: 12px; color: var(--text-dim);">· 42 MCQs (78%)</span>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn-zinc primary">Continue</button>
+          <button class="btn-zinc">Slide Deck</button>
+          <button class="btn-zinc" style="color: #EF4444; border-color: transparent;">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Question Solver -->
+    <div class="linear-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <span class="tag-mono">Question 14 of 35 // ID: 20491</span>
+        <button class="btn-zinc">📄 Slide 12: Osmolarity</button>
+      </div>
+
+      <div class="q-zinc-stem">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </div>
+
+      <div class="opt-zinc">
+        <span>Increased ECF volume, decreased ICF osmolarity</span>
+        <span class="key-badge">1</span>
+      </div>
+
+      <div class="opt-zinc correct">
+        <span>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</span>
+        <span class="key-badge" style="background: var(--emerald); color: #000; border-color: var(--emerald);">2</span>
+      </div>
+
+      <div class="opt-zinc">
+        <span>Decreased ECF osmolarity, increased ICF volume</span>
+        <span class="key-badge">3</span>
+      </div>
+
+      <div class="opt-zinc">
+        <span>Iso-osmotic contraction with no shift in ICF volume</span>
+        <span class="key-badge">4</span>
+      </div>
+
+      <div style="margin-top: 18px; padding: 14px 16px; background: #18181B; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; color: #D4D4D8; line-height: 1.6;">
+        <span style="font-family: var(--font-mono); color: var(--emerald); font-weight: 600;">[RATIONALE]</span><br>
+        Sweat excretion is hypotonic. Loss of free water elevates ECF osmolarity, pulling water from the intracellular compartment (ICF). Result: ICF volume decreases and osmolarity rises in both compartments.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

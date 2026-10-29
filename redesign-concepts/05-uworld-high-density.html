@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 5: Academic USMLE / UWorld Density — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&family=Consolas&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --top-blue: #1C3D5A;
+      --sub-blue: #2B5780;
+      --bg: #EDF2F7;
+      --border: #CBD5E0;
+      --highlight: #FFFFCC;
+      --correct: #C6F6D5;
+      --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: #1A202C;
+      font-family: var(--font);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* UWorld Style Titlebar */
+    .test-topbar {
+      background: var(--top-blue);
+      color: #FFF;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+    .test-title { font-weight: 700; font-size: 14px; }
+    .timer-badge {
+      background: #0D233A;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-family: Consolas, monospace;
+      font-weight: 700;
+      color: #63B3ED;
+      font-size: 14px;
+    }
+
+    /* Secondary Controls */
+    .controls-bar {
+      background: #E2E8F0;
+      border-bottom: 1px solid var(--border);
+      padding: 6px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    .ctrl-btn {
+      background: #FFF;
+      border: 1px solid #A0AEC0;
+      padding: 4px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .ctrl-btn:hover { background: #EDF2F7; }
+
+    /* Split Main Workspace */
+    .split-main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px 1fr 340px;
+      overflow: hidden;
+    }
+
+    /* Left: Question Navigator Grid */
+    .nav-pane {
+      background: #FFF;
+      border-right: 1px solid var(--border);
+      padding: 12px;
+      overflow-y: auto;
+    }
+    .nav-header { font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase; margin-bottom: 8px; }
+    .q-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .q-box {
+      border: 1px solid #CBD5E0;
+      border-radius: 3px;
+      padding: 6px 0;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #F7FAFC;
+    }
+    .q-box.active { background: #3182CE; color: #FFF; border-color: #2B6CB0; }
+    .q-box.answered { background: #E2E8F0; color: #2D3748; }
+
+    /* Center: Question Stem & Options */
+    .content-pane {
+      background: #FFF;
+      padding: 24px 32px;
+      overflow-y: auto;
+    }
+    .q-number-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #4A5568;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #E2E8F0;
+    }
+    .q-stem {
+      font-size: 14.5px;
+      line-height: 1.6;
+      color: #2D3748;
+      margin-bottom: 24px;
+    }
+    .options-table { width: 100%; border-collapse: collapse; }
+    .option-row {
+      border-top: 1px solid #E2E8F0;
+      cursor: pointer;
+    }
+    .option-row:hover { background: #F7FAFC; }
+    .option-row.correct-row { background: #F0FFF4; }
+    .option-cell-letter {
+      width: 40px;
+      padding: 12px 8px;
+      font-weight: 700;
+      text-align: center;
+      vertical-align: top;
+      color: #4A5568;
+    }
+    .option-cell-text {
+      padding: 12px 12px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Right: Slide Deck Reference Dock */
+    .reference-pane {
+      background: #F7FAFC;
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .ref-header {
+      padding: 10px 14px;
+      background: #EDF2F7;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ref-body {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .slide-thumb {
+      background: #FFF;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .slide-num { font-size: 11px; font-weight: 700; color: #3182CE; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <!-- UWorld Header -->
+  <div class="test-topbar">
+    <div class="test-title">MedAtlas Test Mode · Block 1 (BSF 112 Comprehensive)</div>
+    <div style="display: flex; gap: 14px; align-items: center;">
+      <span>Question 14 of 35</span>
+      <div class="timer-badge">⏱ 00:41:22</div>
+    </div>
+  </div>
+
+  <!-- Secondary Buttons Bar -->
+  <div class="controls-bar">
+    <div style="display: flex; gap: 6px;">
+      <button class="ctrl-btn">Previous</button>
+      <button class="ctrl-btn">Next</button>
+      <button class="ctrl-btn">🚩 Flag for Review</button>
+      <button class="ctrl-btn">Notes</button>
+    </div>
+    <div style="display: flex; gap: 6px;">
+      <button class="ctrl-btn" style="background: #2B6CB0; color: #FFF; border-color: #2B6CB0;">End Block / Submit</button>
+    </div>
+  </div>
+
+  <!-- 3-Column Split -->
+  <div class="split-main">
+    <!-- Left Navigation -->
+    <div class="nav-pane">
+      <div class="nav-header">Question Grid</div>
+      <div class="q-grid">
+        <div class="q-box answered">1</div>
+        <div class="q-box answered">2</div>
+        <div class="q-box answered">3</div>
+        <div class="q-box answered">4</div>
+        <div class="q-box answered">5</div>
+        <div class="q-box answered">6</div>
+        <div class="q-box answered">7</div>
+        <div class="q-box answered">8</div>
+        <div class="q-box answered">9</div>
+        <div class="q-box answered">10</div>
+        <div class="q-box answered">11</div>
+        <div class="q-box answered">12</div>
+        <div class="q-box answered">13</div>
+        <div class="q-box active">14</div>
+        <div class="q-box">15</div>
+        <div class="q-box">16</div>
+        <div class="q-box">17</div>
+        <div class="q-box">18</div>
+        <div class="q-box">19</div>
+        <div class="q-box">20</div>
+      </div>
+
+      <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px; color: #718096;">
+        <div>■ Solved: 13</div>
+        <div style="color: #3182CE; font-weight: 700;">■ Current: 14</div>
+        <div>□ Remaining: 21</div>
+      </div>
+    </div>
+
+    <!-- Center Question Area -->
+    <div class="content-pane">
+      <div class="q-number-title">
+        ITEM ID: 20491 · LECTURE 1 (ORGANIZATION OF BODY) · DIFFICULTY: MEDIUM
+      </div>
+
+      <p class="q-stem">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </p>
+
+      <table class="options-table">
+        <tr class="option-row">
+          <td class="option-cell-letter">(A)</td>
+          <td class="option-cell-text">Increased ECF volume, decreased ICF osmolarity</td>
+        </tr>
+        <tr class="option-row correct-row">
+          <td class="option-cell-letter" style="color: #22543D; font-weight: 800;">(B)</td>
+          <td class="option-cell-text" style="color: #22543D; font-weight: 600;">
+            Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)
+          </td>
+        </tr>
+        <tr class="option-row">
+          <td class="option-cell-letter">(C)</td>
+          <td class="option-cell-text">Decreased ECF osmolarity, increased ICF volume</td>
+        </tr>
+        <tr class="option-row">
+          <td class="option-cell-letter">(D)</td>
+          <td class="option-cell-text">Iso-osmotic contraction with no shift in ICF volume</td>
+        </tr>
+      </table>
+
+      <div style="margin-top: 24px; padding: 16px; background: #EDF2F7; border-left: 4px solid #3182CE; font-size: 13px; line-height: 1.6;">
+        <strong style="color: #2B6CB0;">Educational Objective:</strong><br>
+        Understand fluid volume contraction states. Sweat loss causes water to leave the ECF faster than salt, concentrating the ECF. Osmosis then pulls water from the ICF into the ECF, shrinking ICF volume.
+      </div>
+    </div>
+
+    <!-- Right Slide Reference Dock -->
+    <div class="reference-pane">
+      <div class="ref-header">
+        <span>Curriculum Reference</span>
+        <button class="ctrl-btn" style="padding: 2px 6px;">Pop-out</button>
+      </div>
+      <div class="ref-body">
+        <div class="slide-thumb">
+          <div class="slide-num">Slide 12 · Fluid Compartments Breakdown</div>
+          <div style="font-size: 12px; color: #4A5568;">
+            Total Body Water: 60% BW<br>
+            • ICF: 2/3 of TBW (40% BW)<br>
+            • ECF: 1/3 of TBW (20% BW)<br>
+            • Interstitial: 3/4 of ECF<br>
+            • Plasma: 1/4 of ECF
+          </div>
+        </div>
+
+        <div class="slide-thumb">
+          <div class="slide-num">Slide 14 · Darrow-Yannet Diagram</div>
+          <div style="font-size: 12px; color: #4A5568;">
+            Volume contraction types:<br>
+            1. Iso-osmotic (Diarrhea)<br>
+            2. Hyper-osmotic (Sweating / Dehydration)<br>
+            3. Hypo-osmotic (Adrenal insufficiency)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

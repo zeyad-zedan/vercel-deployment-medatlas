@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BookOpen,
   Bookmark,
@@ -548,12 +548,14 @@ export const SubjectsAndLecturesView: React.FC<{
   initialSelectedSubjectId?: number | 'all' | null;
   onSelectSubjectId?: (id: number | 'all') => void;
   onStartSession: (params: any) => void;
+  onRefresh?: () => void;
 }> = ({
   catalog,
   dashboardData,
   initialSelectedSubjectId,
   onSelectSubjectId,
   onStartSession,
+  onRefresh,
 }) => {
   const subjects = catalog?.subjects || [];
   const [internalSelectedId, setInternalSelectedId] = useState<number | 'all'>(
@@ -561,6 +563,9 @@ export const SubjectsAndLecturesView: React.FC<{
   );
   const [expandedNotesLectureId, setExpandedNotesLectureId] = useState<number | null>(null);
   const [activePdf, setActivePdf] = useState<{ url: string; title: string; initialPage?: number } | null>(null);
+  const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
 
   // Sync with prop if it changes
   React.useEffect(() => {
@@ -637,6 +642,19 @@ export const SubjectsAndLecturesView: React.FC<{
           ))}
         </div>
       </div>
+
+      {resetSuccessMessage && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between">
+          <span>{resetSuccessMessage}</span>
+          <button
+            type="button"
+            onClick={() => setResetSuccessMessage(null)}
+            className="text-emerald-700 hover:text-emerald-900 cursor-pointer ml-3 font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {visibleSubjects.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-600">
@@ -873,6 +891,23 @@ export const SubjectsAndLecturesView: React.FC<{
                               </button>
                             )}
 
+                            {attemptedQuestions > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setResetConfirmLecture({
+                                    id: lect.id,
+                                    title: lect.title,
+                                  })
+                                }
+                                title="Reset all answers and restart this lecture quiz from Question 1"
+                                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 hover:border-rose-200 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Reset Progress</span>
+                              </button>
+                            )}
+
                             {lect.educationalNotes && (
                               <button
                                 type="button"
@@ -915,6 +950,74 @@ export const SubjectsAndLecturesView: React.FC<{
           initialPage={activePdf.initialPage || 1}
           onClose={() => setActivePdf(null)}
         />
+      )}
+
+      {/* Confirmation Modal to Reset Lecture Progress */}
+      {resetConfirmLecture && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-600">
+              <div className="p-2 bg-amber-50 rounded-full">
+                <RotateCcw className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Reset Lecture Progress?</h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to restart all progress for{' '}
+              <span className="font-semibold text-slate-900">&ldquo;{resetConfirmLecture.title}&rdquo;</span>?
+              All submitted answers, quiz scores, and attempts for this lecture will be completely erased so you can solve it fresh from Question 1.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={() => setResetConfirmLecture(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={async () => {
+                  try {
+                    setIsResetting(true);
+                    await api.resetLectureProgress(resetConfirmLecture.id);
+                    // Clear local draft/index caches
+                    try {
+                      const keysToRemove: string[] = [];
+                      for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (
+                          key &&
+                          (key.startsWith('medatlas_session_curr_idx_') ||
+                            key.startsWith('medatlas_session_draft_answers_') ||
+                            key === 'medatlas_active_session_id')
+                        ) {
+                          keysToRemove.push(key);
+                        }
+                      }
+                      keysToRemove.forEach((k) => localStorage.removeItem(k));
+                    } catch {}
+                    setResetSuccessMessage(
+                      `Progress for "${resetConfirmLecture.title}" has been reset. You can now start fresh!`
+                    );
+                    setTimeout(() => setResetSuccessMessage(null), 4000);
+                    setResetConfirmLecture(null);
+                    onRefresh?.();
+                  } catch (err: any) {
+                    alert(err.message || 'Failed to reset lecture progress.');
+                  } finally {
+                    setIsResetting(false);
+                  }
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
+              >
+                {isResetting ? 'Resetting...' : 'Yes, Reset & Restart'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1217,118 +1320,541 @@ export const MockExamsView: React.FC<{
   dashboardData: any;
   onStartSession: (params: any) => void;
   onOpenSession: (sessionId: number) => void;
-}> = ({ catalog, dashboardData, onStartSession, onOpenSession }) => {
+  onRefresh?: () => void;
+}> = ({ catalog, dashboardData, onStartSession, onOpenSession, onRefresh }) => {
+  const modulesList = catalog?.modules || [];
   const subjects = catalog?.subjects || [];
+  const allLectures = catalog?.lectures || [];
+
+  // Active in-progress mock exams
   const inProgressExams = (dashboardData?.history || []).filter(
-    (s: any) => s.status === 'in_progress'
+    (s: any) => s.status === 'in_progress' && s.mode === 'exam'
   );
+  const activeExam = inProgressExams[0] || null;
+
+  const computeExamRemaining = (exam: any): number => {
+    if (!exam) return 0;
+    const limitSecs = exam.timeLimitSeconds || 45 * 60;
+    const startedMs = new Date(exam.startedAt).getTime();
+    if (Number.isFinite(startedMs)) {
+      const elapsed = Math.floor((Date.now() - startedMs) / 1000);
+      return Math.max(0, limitSecs - elapsed);
+    }
+    return typeof exam.remainingSeconds === 'number' ? Math.max(0, exam.remainingSeconds) : 0;
+  };
+
+  const [activeRemainingSecs, setActiveRemainingSecs] = useState<number>(() =>
+    computeExamRemaining(activeExam)
+  );
+
+  useEffect(() => {
+    if (!activeExam) {
+      setActiveRemainingSecs(0);
+      return;
+    }
+    const updateTimer = () => {
+      const rem = computeExamRemaining(activeExam);
+      setActiveRemainingSecs(rem);
+      if (rem <= 0) {
+        api
+          .completeSession(activeExam.id)
+          .then(() => {
+            onRefresh?.();
+          })
+          .catch(() => {});
+      }
+    };
+    updateTimer();
+    const timer = setInterval(updateTimer, 1000);
+    return () => clearInterval(timer);
+  }, [activeExam?.id, activeExam?.startedAt, activeExam?.timeLimitSeconds]);
+
+  const hasActiveRunningExam = Boolean(activeExam && activeRemainingSecs > 0);
+  const formatCountdown = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // 1. Module Selection (Defaults to first module, e.g. BSF 112)
+  const [selectedModuleId, setSelectedModuleId] = useState<number | 'all'>(() => {
+    return modulesList[0]?.id || 'all';
+  });
+
+  // Filter available subjects based on selected module
+  const availableSubjects =
+    selectedModuleId === 'all'
+      ? subjects
+      : subjects.filter((s: any) => s.moduleId === selectedModuleId);
+
+  // 2. Multi-Subject Selection ("allow any number of subjects")
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>(() => {
+    return availableSubjects.map((s: any) => s.id);
+  });
+
+  // Keep selected subjects in sync when module changes
+  useEffect(() => {
+    if (availableSubjects.length > 0) {
+      setSelectedSubjectIds(availableSubjects.map((s: any) => s.id));
+    } else {
+      setSelectedSubjectIds([]);
+    }
+  }, [selectedModuleId]);
+
+  // 3. Lecture Selection ("make an option for all the lectures in the subject")
+  const relevantLectures = allLectures.filter((l: any) =>
+    selectedSubjectIds.includes(l.subjectId)
+  );
+
+  const [selectedLectureIds, setSelectedLectureIds] = useState<number[]>([]);
+
+  // Automatically default all lectures selected when subjects change
+  useEffect(() => {
+    setSelectedLectureIds(relevantLectures.map((l: any) => l.id));
+  }, [selectedSubjectIds.join(',')]);
+
+  // 4. Exam Parameters
+  const [questionCount, setQuestionCount] = useState<number>(30);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState<number>(45);
+
+  const toggleSubject = (subjId: number) => {
+    setSelectedSubjectIds((prev) => {
+      if (prev.includes(subjId)) {
+        if (prev.length === 1) return prev; // Keep at least one
+        return prev.filter((id) => id !== subjId);
+      }
+      return [...prev, subjId];
+    });
+  };
+
+  const toggleLecture = (lectId: number) => {
+    setSelectedLectureIds((prev) => {
+      if (prev.includes(lectId)) {
+        return prev.filter((id) => id !== lectId);
+      }
+      return [...prev, lectId];
+    });
+  };
+
+  // Select all / Deselect all lectures for a specific subject
+  const toggleAllLecturesForSubject = (subjId: number) => {
+    const subjectLectures = allLectures.filter((l: any) => l.subjectId === subjId);
+    const subjectLectIds = subjectLectures.map((l: any) => l.id);
+    const allSelected = subjectLectIds.every((id: number) => selectedLectureIds.includes(id));
+
+    if (allSelected) {
+      // Remove all lectures of this subject
+      setSelectedLectureIds((prev) => prev.filter((id) => !subjectLectIds.includes(id)));
+    } else {
+      // Add all lectures of this subject
+      setSelectedLectureIds((prev) => Array.from(new Set([...prev, ...subjectLectIds])));
+    }
+  };
+
+  const totalAvailableInSelection = relevantLectures
+    .filter((l: any) => selectedLectureIds.includes(l.id))
+    .reduce((sum: number, l: any) => sum + (l.questionCount || 0), 0);
+
+  const selectedModuleObj = modulesList.find((m: any) => m.id === selectedModuleId);
+  const selectedSubjectTitles = availableSubjects
+    .filter((s: any) => selectedSubjectIds.includes(s.id))
+    .map((s: any) => s.title);
+
+  const handleLaunchMockExam = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (hasActiveRunningExam) return;
+    const count = Math.min(questionCount, Math.max(1, totalAvailableInSelection || 10));
+    const title =
+      selectedModuleObj
+        ? `${selectedModuleObj.code} Mock Exam (${selectedSubjectTitles.join(' & ')})`
+        : `Medical Mock Exam (${selectedSubjectTitles.join(' & ')})`;
+
+    onStartSession({
+      mode: 'exam',
+      title,
+      subjectIds: selectedSubjectIds.length > 0 ? selectedSubjectIds : undefined,
+      lectureIds: selectedLectureIds.length > 0 ? selectedLectureIds : undefined,
+      requestedCount: count,
+      shuffleQuestions: true,
+      shuffleOptions: true,
+      timeLimitMinutes,
+    });
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Timed Mock Examination Center
-          </h1>
-          <p className="text-sm text-slate-600 mt-0.5">
-            Answers and explanations are withheld on the server during active exams and revealed upon final submission.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            onStartSession({
-              mode: 'exam',
-              title: 'Comprehensive Multi-Subject Medical Mock Exam',
-              requestedCount: 10,
-              shuffleQuestions: true,
-              shuffleOptions: true,
-              timeLimitMinutes: 20,
-            })
-          }
-          className="px-4 py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          Start 10-MCQ Comprehensive Mock Exam (20 Min)
-        </button>
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">
+          Timed Mock Examination Center
+        </h1>
+        <p className="text-sm text-slate-600 mt-0.5">
+          Authentic medical examination simulation with real university timing, question navigation grid, and comprehensive post-exam evaluation.
+        </p>
       </div>
 
-      {/* Interrupted / In-Progress Sessions */}
-      {inProgressExams.length > 0 && (
-        <div className="bg-amber-50/70 rounded-xl border border-amber-200 p-5 space-y-3">
-          <h2 className="text-sm font-bold text-amber-950">
-            Interrupted or In-Progress Sessions ({inProgressExams.length})
-          </h2>
-          <p className="text-xs text-amber-900">
-            Your progress is automatically saved on the server. You can resume where you left off at any time:
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {inProgressExams.map((sess: any) => (
-              <div
-                key={sess.id}
-                className="bg-white rounded-lg border border-amber-200 p-3.5 flex items-center justify-between gap-3 text-xs"
-              >
-                <div>
-                  <p className="font-semibold text-slate-900">{sess.title}</p>
-                  <p className="text-slate-500 font-mono-tabular">
-                    {sess.totalQuestions} MCQs · Mode: {sess.mode.toUpperCase()}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onOpenSession(sess.id)}
-                  className="px-3 py-1.5 font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-md cursor-pointer"
-                >
-                  Resume Session
-                </button>
+      {/* Active Running Mock Exam Lock & Resume Banner */}
+      {hasActiveRunningExam && activeExam && (
+        <div className="bg-amber-50 rounded-2xl border-2 border-amber-300 p-5 sm:p-6 space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-amber-200/80 text-amber-950 text-[11px] font-bold uppercase tracking-wider">
+                <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+                <span>Mock Exam Currently Running</span>
               </div>
-            ))}
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 pt-1">
+                {activeExam.title}
+              </h2>
+              <p className="text-xs text-amber-900 leading-relaxed">
+                You cannot open a new Mock Exam until you submit the active exam or its assigned time finishes.
+              </p>
+            </div>
+
+            <div className="bg-white border border-amber-300 rounded-xl px-4 py-3 text-center shrink-0 shadow-2xs">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Time Remaining
+              </div>
+              <div className="text-2xl font-bold font-mono-tabular text-[#d9534f] mt-0.5">
+                {formatCountdown(activeRemainingSecs)}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="font-mono-tabular text-slate-700">
+              <span>
+                Answered: <b>{activeExam.answeredCount || 0}</b> / <b>{activeExam.totalQuestions}</b> Questions
+              </span>
+              <span className="mx-2 text-slate-300">|</span>
+              <span>
+                Assigned Time: <b>{Math.floor((activeExam.timeLimitSeconds || 2700) / 60)} min</b>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenSession(activeExam.id)}
+              className="px-5 py-2.5 font-bold text-white bg-[#08a39d] hover:bg-[#078f8a] rounded-lg cursor-pointer transition-colors shadow-xs flex items-center justify-center gap-2"
+            >
+              <span>Return to Active Mock Exam</span>
+              <span>&rarr;</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* Subject-Specific Mock Exam Blocks */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {subjects.map((s: any) => (
-          <div
-            key={s.id}
-            className="bg-white rounded-xl border border-slate-200 p-6 flex flex-col justify-between space-y-4"
-          >
-            <div className="space-y-2">
-              <div className="text-xs text-slate-500 font-mono-tabular">
-                Subject Examination Block · {s.questionCount} Available MCQs
-              </div>
-              <h2 className="text-lg font-bold text-slate-900">
-                {s.title} — Mock Examination
-              </h2>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Timed examination drawing from all published lectures in {s.title}. Includes shuffled options and post-submission performance breakdown.
-              </p>
-            </div>
+      {/* Interactive Mock Exam Configurator */}
+      <form
+        onSubmit={handleLaunchMockExam}
+        className={`bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 shadow-xs space-y-7 transition-opacity ${
+          hasActiveRunningExam ? 'opacity-60' : ''
+        }`}
+      >
+        {/* Step 1: Module Selector */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">1</span>
+              <span>Select Academic Module</span>
+            </label>
+            <span className="text-[11px] text-slate-500 font-mono-tabular">
+              {modulesList.length} Integrated Modules Available
+            </span>
+          </div>
 
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-xs font-mono-tabular text-slate-500">
-                Time Limit: {Math.max(10, s.questionCount * 2)} Minutes
-              </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {modulesList.map((m: any) => {
+              const isSelected = selectedModuleId === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setSelectedModuleId(m.id)}
+                  className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                    isSelected
+                      ? 'border-[#08a39d] bg-sky-50/60 ring-2 ring-[#08a39d]/20 shadow-xs'
+                      : 'border-slate-200 hover:border-slate-300 bg-white'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#08a39d]/15 text-[#08a39d]">
+                      {m.code}
+                    </span>
+                    <h3 className="font-bold text-slate-900 text-sm">{m.title}</h3>
+                    <p className="text-xs text-slate-500 line-clamp-2">{m.description}</p>
+                  </div>
+                  <div className="pt-3 mt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-mono-tabular text-slate-600">
+                    <span>{m.subjects?.length || 0} Subjects</span>
+                    <span>{m.questionCount || 0} MCQs</span>
+                  </div>
+                </button>
+              );
+            })}
+
+            <button
+              type="button"
+              onClick={() => setSelectedModuleId('all')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                selectedModuleId === 'all'
+                  ? 'border-[#08a39d] bg-sky-50/60 ring-2 ring-[#08a39d]/20 shadow-xs'
+                  : 'border-slate-200 hover:border-slate-300 bg-white'
+              }`}
+            >
+              <div className="space-y-1">
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700">
+                  All Modules
+                </span>
+                <h3 className="font-bold text-slate-900 text-sm">Comprehensive Cross-Module</h3>
+                <p className="text-xs text-slate-500">Include all available subjects and modules in the curriculum.</p>
+              </div>
+              <div className="pt-3 mt-2 border-t border-slate-100 text-[11px] font-mono-tabular text-slate-600">
+                <span>{subjects.length} Total Subjects</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Step 2: Subject Selector ("allow any number of subjects") */}
+        <div className="space-y-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">2</span>
+              <span>Choose Subjects (Select Any Number of Subjects)</span>
+            </label>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  onStartSession({
-                    mode: 'exam',
-                    subjectIds: [s.id],
-                    title: `${s.title} — Timed Mock Exam`,
-                    shuffleQuestions: true,
-                    shuffleOptions: true,
-                    timeLimitMinutes: Math.max(10, s.questionCount * 2),
-                  })
-                }
-                className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors cursor-pointer"
+                onClick={() => setSelectedSubjectIds(availableSubjects.map((s: any) => s.id))}
+                className="text-[11px] font-bold text-[#08a39d] hover:underline cursor-pointer"
               >
-                Begin Timed Exam
+                Select All
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                type="button"
+                onClick={() => setSelectedSubjectIds(availableSubjects.slice(0, 1).map((s: any) => s.id))}
+                className="text-[11px] font-semibold text-slate-500 hover:underline cursor-pointer"
+              >
+                Reset
               </button>
             </div>
           </div>
-        ))}
-      </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {availableSubjects.map((s: any) => {
+              const isSelected = selectedSubjectIds.includes(s.id);
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => toggleSubject(s.id)}
+                  className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                    isSelected
+                      ? 'border-[#08a39d] bg-[#08a39d]/10 text-slate-900 font-bold shadow-2xs'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className={`w-4 h-4 rounded-xs border flex items-center justify-center shrink-0 ${
+                        isSelected
+                          ? 'bg-[#08a39d] border-[#08a39d] text-white'
+                          : 'border-slate-400 bg-white'
+                      }`}
+                    >
+                      {isSelected && <span className="text-[10px] font-bold">✓</span>}
+                    </div>
+                    <span className="text-xs truncate">{s.title}</span>
+                  </div>
+                  <span className="text-[11px] font-mono-tabular text-slate-500 shrink-0">
+                    {s.questionCount || 0} MCQs
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 3: Lecture Selector ("make an option for all the lectures in the subject") */}
+        <div className="space-y-4 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">3</span>
+              <span>Select Lectures for Selected Subjects</span>
+            </label>
+            <span className="text-xs font-mono-tabular text-slate-600 font-bold">
+              {totalAvailableInSelection} Questions Selected in Pool
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            {availableSubjects
+              .filter((s: any) => selectedSubjectIds.includes(s.id))
+              .map((subj: any) => {
+                const subjectLectures = allLectures.filter((l: any) => l.subjectId === subj.id);
+                const subjLectIds = subjectLectures.map((l: any) => l.id);
+                const allSelected = subjLectIds.length > 0 && subjLectIds.every((id: number) => selectedLectureIds.includes(id));
+
+                return (
+                  <div
+                    key={subj.id}
+                    className="bg-slate-50/70 border border-slate-200 rounded-xl p-4 space-y-3"
+                  >
+                    {/* Subject Header with "Select All Lectures in this Subject" */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/80">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-xs sm:text-sm">
+                          {subj.title}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-mono-tabular">
+                          {subjectLectures.length} Lectures Attached
+                        </p>
+                      </div>
+
+                      {/* Prominent One-Click "Option for all the lectures in the subject" */}
+                      <button
+                        type="button"
+                        onClick={() => toggleAllLecturesForSubject(subj.id)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          allSelected
+                            ? 'bg-[#08a39d] text-white shadow-xs hover:bg-[#078f8a]'
+                            : 'bg-white text-[#08a39d] border border-[#08a39d] hover:bg-sky-50'
+                        }`}
+                      >
+                        <span>✓</span>
+                        <span>
+                          {allSelected
+                            ? 'All Lectures Included (Click to Unselect)'
+                            : 'Include All Lectures in this Subject'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Lecture Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {subjectLectures.map((lect: any) => {
+                        const isChecked = selectedLectureIds.includes(lect.id);
+                        return (
+                          <div
+                            key={lect.id}
+                            onClick={() => toggleLecture(lect.id)}
+                            className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              isChecked
+                                ? 'bg-white border-[#08a39d] shadow-2xs font-semibold text-slate-900'
+                                : 'bg-white/60 border-slate-200 hover:border-slate-300 text-slate-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleLecture(lect.id)}
+                                className="accent-[#08a39d] cursor-pointer"
+                              />
+                              <span className="truncate">{lect.title}</span>
+                            </div>
+                            <span className="text-[10px] font-mono-tabular text-slate-500 shrink-0">
+                              {lect.questionCount || 0} Qs
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+
+        {/* Step 4: Exam Length & Time Settings */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-3 border-t border-slate-100">
+          <div>
+            <label className="block text-xs font-bold text-slate-900 mb-2 uppercase tracking-wider">
+              Number of Questions
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {[10, 20, 30, 40, 50].map((num) => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => setQuestionCount(num)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
+                    questionCount === num
+                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  {num} MCQs
+                </button>
+              ))}
+              {totalAvailableInSelection > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setQuestionCount(totalAvailableInSelection)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
+                    questionCount === totalAvailableInSelection
+                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  All ({totalAvailableInSelection})
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-900 mb-2 uppercase tracking-wider">
+              Time Limit (Minutes)
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {[15, 30, 45, 60, 90].map((min) => (
+                <button
+                  key={min}
+                  type="button"
+                  onClick={() => setTimeLimitMinutes(min)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
+                    timeLimitMinutes === min
+                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  {min} Min
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Launch Button */}
+        <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="text-xs text-slate-600 font-mono-tabular">
+            {hasActiveRunningExam ? (
+              <span className="text-amber-800 font-semibold">
+                Locked while active Mock Exam is running ({formatCountdown(activeRemainingSecs)} remaining)
+              </span>
+            ) : (
+              <>
+                Configured Simulation: <b>{Math.min(questionCount, totalAvailableInSelection || questionCount)} Questions</b> · <b>{timeLimitMinutes} Minutes</b>
+              </>
+            )}
+          </div>
+          <button
+            type="submit"
+            disabled={
+              hasActiveRunningExam ||
+              (totalAvailableInSelection === 0 && availableSubjects.length > 0)
+            }
+            className="px-8 py-3 bg-[#08a39d] hover:bg-[#078f8a] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+          >
+            {hasActiveRunningExam ? (
+              <span>Locked Until Active Exam Submitted or Time Finishes</span>
+            ) : (
+              <>
+                <span>Start Official University Simulation</span>
+                <span>&rarr;</span>
+              </>
+            )}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

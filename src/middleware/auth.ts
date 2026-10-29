@@ -14,7 +14,7 @@ if (!process.env.AUTH_SESSION_SECRET || process.env.AUTH_SESSION_SECRET.trim().l
 }
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
-export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10; // 10 years (permanent session until explicit sign-out)
 export const RECOVERY_TOKEN_TTL_MS = 1000 * 60 * 15; // 15 minutes
 
 export const MIN_PASSWORD_LENGTH = 8;

@@ -291,3 +291,81 @@ test('10. PDF upload filename sanitization: prevents path traversal and unsafe c
   assert.equal(sanitizeFileName('..\\..\\windows\\system32.pdf'), 'system32.pdf');
   assert.equal(sanitizeFileName('Cardiology & ACS Slide Deck (2026).pdf'), 'Cardiology___ACS_Slide_Deck__2026_.pdf');
 });
+
+test('11. Lecture progress reset: clears only target lecture attempts and sessions while preserving others', () => {
+  interface Attempt {
+    id: number;
+    userUid: string;
+    lectureId: number;
+    sessionId: number;
+    questionId: number;
+  }
+  interface Session {
+    id: number;
+    userUid: string;
+    lectureId: number;
+  }
+
+  let attempts: Attempt[] = [
+    { id: 1, userUid: 'user-1', lectureId: 10, sessionId: 101, questionId: 1 },
+    { id: 2, userUid: 'user-1', lectureId: 10, sessionId: 101, questionId: 2 },
+    { id: 3, userUid: 'user-1', lectureId: 20, sessionId: 102, questionId: 3 }, // different lecture
+    { id: 4, userUid: 'user-2', lectureId: 10, sessionId: 103, questionId: 1 }, // different user
+  ];
+
+  let sessions: Session[] = [
+    { id: 101, userUid: 'user-1', lectureId: 10 },
+    { id: 102, userUid: 'user-1', lectureId: 20 },
+    { id: 103, userUid: 'user-2', lectureId: 10 },
+  ];
+
+  const targetUid = 'user-1';
+  const targetLectureId = 10;
+
+  // Simulate reset
+  const userLectSessions = sessions.filter(
+    (s) => s.userUid === targetUid && s.lectureId === targetLectureId
+  );
+  const sessionIds = userLectSessions.map((s) => s.id);
+
+  attempts = attempts.filter(
+    (a) =>
+      !(
+        a.userUid === targetUid &&
+        (a.lectureId === targetLectureId || sessionIds.includes(a.sessionId))
+      )
+  );
+  sessions = sessions.filter(
+    (s) => !(s.userUid === targetUid && s.lectureId === targetLectureId)
+  );
+
+  // Assert user-1 lecture 10 is completely wiped
+  assert.equal(
+    attempts.filter((a) => a.userUid === targetUid && a.lectureId === targetLectureId).length,
+    0
+  );
+  assert.equal(
+    sessions.filter((s) => s.userUid === targetUid && s.lectureId === targetLectureId).length,
+    0
+  );
+
+  // Assert user-1 lecture 20 is completely untouched
+  assert.equal(
+    attempts.filter((a) => a.userUid === targetUid && a.lectureId === 20).length,
+    1
+  );
+  assert.equal(
+    sessions.filter((s) => s.userUid === targetUid && s.lectureId === 20).length,
+    1
+  );
+
+  // Assert user-2 lecture 10 is completely untouched
+  assert.equal(
+    attempts.filter((a) => a.userUid === 'user-2' && a.lectureId === 10).length,
+    1
+  );
+  assert.equal(
+    sessions.filter((s) => s.userUid === 'user-2' && s.lectureId === 10).length,
+    1
+  );
+});

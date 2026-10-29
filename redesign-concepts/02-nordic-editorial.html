@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 2: Nordic Editorial & Warm Paper — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FBF9F5;
+      --card-bg: #FFFFFF;
+      --border: #E8E4DC;
+      --border-dark: #D4CEBF;
+      --sage: #2C6E49;
+      --sage-soft: #E8F1EC;
+      --terracotta: #C94A29;
+      --charcoal: #202020;
+      --muted: #6B675E;
+      --font-serif: 'Newsreader', Georgia, serif;
+      --font-sans: 'Instrument Sans', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--charcoal);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      padding-bottom: 60px;
+    }
+    .container { max-width: 1040px; margin: 0 auto; padding: 32px 24px; }
+    header {
+      background: #F5F1E8;
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+    }
+    .header-inner {
+      max-width: 1040px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-title {
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--charcoal);
+    }
+    .brand-sub { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); }
+    .nav-links { display: flex; gap: 20px; font-size: 14px; font-weight: 500; }
+    .nav-links a { color: var(--muted); text-decoration: none; transition: color 0.15s; }
+    .nav-links a.active, .nav-links a:hover { color: var(--charcoal); font-weight: 600; }
+
+    .hero-editorial {
+      margin: 36px 0 28px 0;
+      border-bottom: 2px solid var(--charcoal);
+      padding-bottom: 20px;
+    }
+    .hero-editorial h1 {
+      font-family: var(--font-serif);
+      font-size: 38px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .hero-editorial p {
+      color: var(--muted);
+      font-size: 16px;
+      margin-top: 8px;
+      max-width: 650px;
+    }
+
+    /* Stats Grid */
+    .paper-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .p-stat {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 20px;
+      border-radius: 4px;
+    }
+    .p-stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .p-stat .val { font-family: var(--font-serif); font-size: 28px; font-weight: 700; margin-top: 4px; }
+
+    /* Module Box */
+    .module-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 28px;
+      margin-bottom: 32px;
+    }
+    .module-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 14px;
+      margin-bottom: 20px;
+    }
+    .module-header h2 {
+      font-family: var(--font-serif);
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .lecture-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .lecture-row:last-child { border-bottom: none; }
+    .lect-name { font-weight: 600; font-size: 15px; }
+    .lect-stats { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+    .btn-paper {
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 4px;
+      border: 1px solid var(--charcoal);
+      background: transparent;
+      color: var(--charcoal);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-paper:hover {
+      background: var(--charcoal);
+      color: #fff;
+    }
+    .btn-paper.primary {
+      background: var(--sage);
+      border-color: var(--sage);
+      color: #fff;
+    }
+    .btn-paper.primary:hover {
+      background: #23583A;
+    }
+
+    /* MCQ Card */
+    .mcq-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 32px;
+    }
+    .mcq-meta {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--sage);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .mcq-question {
+      font-family: var(--font-serif);
+      font-size: 20px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+      color: #111;
+    }
+    .mcq-option {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      padding: 14px 18px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      background: #FFFEFD;
+      transition: all 0.15s;
+    }
+    .mcq-option:hover {
+      border-color: var(--charcoal);
+    }
+    .mcq-option.correct {
+      border-color: var(--sage);
+      background: var(--sage-soft);
+      color: #1A432D;
+    }
+    .mcq-letter {
+      font-family: var(--font-serif);
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .editorial-explanation {
+      margin-top: 24px;
+      padding: 20px;
+      background: #F4EFE6;
+      border-left: 3px solid var(--sage);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div>
+        <div class="brand-title">MedAtlas Gazette</div>
+        <div class="brand-sub">Curriculum &amp; Examination Journal</div>
+      </div>
+      <div class="nav-links">
+        <a href="#" class="active">Read &amp; Solve</a>
+        <a href="#">Curriculum Modules</a>
+        <a href="#">Simulation Hall</a>
+        <a href="#">My Mistake Ledger</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="hero-editorial">
+      <h1>Volume I: Clinical Physiology &amp; Metabolism</h1>
+      <p>Designed for focused reading, zero blue-light fatigue, and academic retention through calm typography and natural paper textures.</p>
+    </div>
+
+    <div class="paper-stats">
+      <div class="p-stat">
+        <div class="label">Questions Solved</div>
+        <div class="val">428 / 650</div>
+      </div>
+      <div class="p-stat">
+        <div class="label">Accuracy Ratio</div>
+        <div class="val" style="color: var(--sage);">84.2%</div>
+      </div>
+      <div class="p-stat">
+        <div class="label">Dedicated Streak</div>
+        <div class="val">9 Days</div>
+      </div>
+      <div class="p-stat">
+        <div class="label">Assigned Module</div>
+        <div class="val" style="font-size: 20px;">BSF 112</div>
+      </div>
+    </div>
+
+    <!-- Curriculum -->
+    <div class="module-box">
+      <div class="module-header">
+        <div>
+          <h2>Lectures in Module BSF 112</h2>
+          <p style="font-size: 13px; color: var(--muted);">Human Body Fundamentals &amp; Homeostatic Control</p>
+        </div>
+        <button class="btn-paper primary">Study All 5 Lectures</button>
+      </div>
+
+      <div class="lecture-row">
+        <div>
+          <div class="lect-name">Lecture 1 · Cellular Organization of the Human Body</div>
+          <div class="lect-stats">35 Questions · 35 Completed · 91% Accuracy</div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-paper">Review (35)</button>
+          <button class="btn-paper">Open Slide Deck</button>
+          <button class="btn-paper" style="color: var(--terracotta); border-color: var(--border);">Reset</button>
+        </div>
+      </div>
+
+      <div class="lecture-row">
+        <div>
+          <div class="lect-name">Lecture 2 · Membrane Potentials &amp; Ion Conductance</div>
+          <div class="lect-stats">42 Questions · 18 Completed · 78% Accuracy</div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-paper primary">Continue (24 Left)</button>
+          <button class="btn-paper">Open Slide Deck</button>
+          <button class="btn-paper" style="color: var(--terracotta); border-color: var(--border);">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCQ -->
+    <div class="mcq-container">
+      <div class="mcq-meta">Item 14 of 35 · Physiological Hemodynamics</div>
+      <div class="mcq-question">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </div>
+
+      <div class="mcq-option" onclick="this.style.background='#FCEBE6'">
+        <span class="mcq-letter">A.</span>
+        <span>Increased ECF volume, decreased ICF osmolarity</span>
+      </div>
+
+      <div class="mcq-option correct">
+        <span class="mcq-letter">B.</span>
+        <span>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</span>
+      </div>
+
+      <div class="mcq-option" onclick="this.style.background='#FCEBE6'">
+        <span class="mcq-letter">C.</span>
+        <span>Decreased ECF osmolarity, increased ICF volume</span>
+      </div>
+
+      <div class="mcq-option" onclick="this.style.background='#FCEBE6'">
+        <span class="mcq-letter">D.</span>
+        <span>Iso-osmotic contraction with no shift in ICF volume</span>
+      </div>
+
+      <div class="editorial-explanation">
+        <strong style="color: var(--sage);">Clinical Rationale:</strong><br>
+        Sweat excretion is characteristically hypotonic relative to systemic plasma. Continued perspiration absent adequate free water intake produces a hyperosmotic contraction of the extracellular compartment. Fluid is consequently mobilized from intracellular stores into the extracellular space along the osmotic gradient, shrinking ICF volume.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

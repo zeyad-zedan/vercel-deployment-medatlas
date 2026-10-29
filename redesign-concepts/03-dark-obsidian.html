@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 3: Dark Mode Stealth Pro — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0B0F19;
+      --card-bg: #111827;
+      --card-sub: #162032;
+      --border: #1F2937;
+      --border-glow: #38BDF8;
+      --cyan: #38BDF8;
+      --cyan-glow: rgba(56, 189, 248, 0.15);
+      --emerald: #34D399;
+      --emerald-glow: rgba(52, 211, 153, 0.15);
+      --rose: #FB7185;
+      --rose-glow: rgba(251, 113, 133, 0.15);
+      --text: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --font: 'Space Grotesk', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.5;
+      padding-bottom: 60px;
+    }
+    .container { max-width: 1080px; margin: 0 auto; padding: 24px; }
+    header {
+      background: rgba(17, 24, 39, 0.8);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 12px var(--cyan);
+    }
+    .badge-status {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.1);
+      color: var(--cyan);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .tag-concept {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      display: inline-block;
+      margin-bottom: 6px;
+    }
+    h1 { font-size: 28px; font-weight: 700; color: #FFF; }
+    p.sub { color: var(--text-muted); font-size: 14px; margin-top: 4px; margin-bottom: 24px; }
+
+    /* Dark Metric Cards */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .m-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .m-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      background: transparent;
+    }
+    .m-card.active::before { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+    .m-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .m-val { font-size: 26px; font-weight: 700; font-family: var(--font-mono); margin-top: 6px; color: #FFF; }
+    .m-pill { font-size: 11px; font-family: var(--font-mono); color: var(--emerald); margin-top: 4px; }
+
+    /* Dark Module Box */
+    .dark-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .dark-box-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .lect-dark {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      background: var(--card-sub);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .lect-dark:hover {
+      border-color: #374151;
+    }
+    .btn-dark {
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .btn-dark:hover {
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+    .btn-dark.cyan {
+      background: var(--cyan);
+      border-color: var(--cyan);
+      color: #0B0F19;
+      font-weight: 700;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
+    }
+    .btn-dark.danger {
+      border-color: transparent;
+      color: #6B7280;
+    }
+    .btn-dark.danger:hover {
+      color: var(--rose);
+      background: var(--rose-glow);
+    }
+
+    /* MCQ Player */
+    .mcq-dark {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px;
+    }
+    .q-stem {
+      font-size: 16px;
+      font-weight: 500;
+      color: #E5E7EB;
+      line-height: 1.6;
+      margin: 18px 0;
+    }
+    .opt-dark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: var(--card-sub);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .opt-dark:hover {
+      border-color: var(--cyan);
+      background: rgba(56, 189, 248, 0.05);
+    }
+    .opt-dark.correct {
+      border-color: var(--emerald);
+      background: var(--emerald-glow);
+      box-shadow: 0 0 16px rgba(52, 211, 153, 0.15);
+      color: #6EE7B7;
+    }
+    .opt-dark-letter {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: #1F2937;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .opt-dark.correct .opt-dark-letter {
+      background: var(--emerald);
+      color: #064E3B;
+    }
+    .explanation-dark {
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgba(52, 211, 153, 0.08);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+      color: #A7F3D0;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-dot"></div>
+        <span>MedAtlas <span style="color: var(--cyan);">Stealth</span></span>
+      </div>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <span class="badge-status">STUDY SESSION ACTIVE</span>
+        <button class="btn-dark">End Session</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <span class="tag-concept">Concept 03 · Obsidian Night Stealth</span>
+    <h1>OLED Low-Light Medical Studio</h1>
+    <p class="sub">Engineered for overnight on-call shifts, zero blue-light flash, and high-focus contrast.</p>
+
+    <div class="metric-grid">
+      <div class="m-card active">
+        <div class="m-label">QUESTIONS MASTERED</div>
+        <div class="m-val">428 <span style="font-size: 16px; color: var(--text-muted);">/ 650</span></div>
+        <div class="m-pill">⚡ 66% Completion Rate</div>
+      </div>
+      <div class="m-card">
+        <div class="m-label">ACCURACY RATING</div>
+        <div class="m-val" style="color: var(--cyan);">84.2%</div>
+        <div class="m-pill">Target USMLE: 75%</div>
+      </div>
+      <div class="m-card">
+        <div class="m-label">CONSECUTIVE STREAK</div>
+        <div class="m-val" style="color: #FBBF24;">🔥 9 DAYS</div>
+        <div class="m-pill" style="color: var(--text-muted);">Top 5% of Class</div>
+      </div>
+      <div class="m-card">
+        <div class="m-label">ACTIVE EXAM TARGET</div>
+        <div class="m-val" style="font-size: 18px;">BSF 112</div>
+        <div class="m-pill" style="color: var(--text-muted);">Physiology &amp; Biochem</div>
+      </div>
+    </div>
+
+    <!-- Module List -->
+    <div class="dark-box">
+      <div class="dark-box-head">
+        <div>
+          <h2 style="font-size: 18px; font-weight: 700;">Module BSF 112 · Physiology Lectures</h2>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">5 Modules · 185 MCQs Online</p>
+        </div>
+        <button class="btn-dark cyan">Study All (185)</button>
+      </div>
+
+      <div class="lect-dark">
+        <div>
+          <span style="font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 700; margin-right: 8px;">LEC 01</span>
+          <span style="font-weight: 600;">Functional Organization of the Human Body</span>
+          <div style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 4px;">
+            35 / 35 Solved · 91% Accuracy · Mastered
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-dark">Review</button>
+          <button class="btn-dark">PDF Deck</button>
+          <button class="btn-dark danger" title="Reset lecture progress">Reset</button>
+        </div>
+      </div>
+
+      <div class="lect-dark">
+        <div>
+          <span style="font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 700; margin-right: 8px;">LEC 02</span>
+          <span style="font-weight: 600;">Cellular Transport &amp; Membrane Potentials</span>
+          <div style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 4px;">
+            18 / 42 Solved · 78% Accuracy · In Progress
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-dark cyan">Continue</button>
+          <button class="btn-dark">PDF Deck</button>
+          <button class="btn-dark danger" title="Reset lecture progress">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCQ -->
+    <div class="mcq-dark">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 700;">
+          QUESTION #14 · OSMOREGULATION
+        </span>
+        <button class="btn-dark" style="border-color: var(--cyan); color: var(--cyan);">
+          Slide 12 · Fluid Spaces
+        </button>
+      </div>
+
+      <p class="q-stem">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </p>
+
+      <div class="opt-dark" onclick="this.classList.toggle('selected')">
+        <div class="opt-dark-letter">A</div>
+        <div>Increased ECF volume, decreased ICF osmolarity</div>
+      </div>
+
+      <div class="opt-dark correct">
+        <div class="opt-dark-letter">B</div>
+        <div>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</div>
+      </div>
+
+      <div class="opt-dark" onclick="this.classList.toggle('selected')">
+        <div class="opt-dark-letter">C</div>
+        <div>Decreased ECF osmolarity, increased ICF volume</div>
+      </div>
+
+      <div class="opt-dark" onclick="this.classList.toggle('selected')">
+        <div class="opt-dark-letter">D</div>
+        <div>Iso-osmotic contraction with no shift in ICF volume</div>
+      </div>
+
+      <div class="explanation-dark">
+        <strong style="color: var(--emerald);">✓ EXPLANATION:</strong><br>
+        Sweat is hypotonic relative to plasma. Excessive unreplaced sweat loss causes hyperosmotic volume contraction: water flows from intracellular to extracellular compartment, contracting ICF volume and elevating osmolarity in both spaces.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 7: Neo-Brutalist Medical — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #F4F0EA;
+      --card: #FFFFFF;
+      --border: #000000;
+      --yellow: #FFE600;
+      --teal: #00F0FF;
+      --pink: #FF66C4;
+      --green: #2BEE79;
+      --font: 'Public Sans', sans-serif;
+      --font-mono: 'Space Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: #000;
+      font-family: var(--font);
+      padding-bottom: 60px;
+    }
+    .container { max-width: 1040px; margin: 0 auto; padding: 24px; }
+
+    header {
+      background: var(--yellow);
+      border-bottom: 3px solid var(--border);
+      padding: 16px 28px;
+    }
+    .header-inner {
+      max-width: 1040px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-neo {
+      font-weight: 900;
+      font-size: 22px;
+      text-transform: uppercase;
+      letter-spacing: -1px;
+    }
+
+    /* Hard Shadow Boxes */
+    .brutal-box {
+      background: var(--card);
+      border: 3px solid var(--border);
+      border-radius: 0px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 6px 6px 0px #000;
+    }
+    .brutal-btn {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 10px 18px;
+      border: 2px solid #000;
+      background: #FFF;
+      box-shadow: 3px 3px 0px #000;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .brutal-btn:hover {
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0px #000;
+    }
+    .brutal-btn:active {
+      transform: translate(2px, 2px);
+      box-shadow: 1px 1px 0px #000;
+    }
+    .brutal-btn.yellow { background: var(--yellow); }
+    .brutal-btn.teal { background: var(--teal); }
+    .brutal-btn.green { background: var(--green); }
+
+    /* Stats Grid */
+    .neo-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .neo-stat-card {
+      background: #FFF;
+      border: 3px solid #000;
+      padding: 18px;
+      box-shadow: 4px 4px 0px #000;
+    }
+    .neo-stat-label { font-size: 11px; font-weight: 800; text-transform: uppercase; }
+    .neo-stat-val { font-family: var(--font-mono); font-size: 26px; font-weight: 700; margin-top: 6px; }
+
+    /* Option Item */
+    .neo-option {
+      background: #FFF;
+      border: 2px solid #000;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 3px 3px 0px #000;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .neo-option:hover {
+      background: var(--yellow);
+    }
+    .neo-option.correct {
+      background: var(--green);
+      box-shadow: 4px 4px 0px #000;
+    }
+    .neo-letter {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 700;
+      background: #000;
+      color: #FFF;
+      padding: 4px 10px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand-neo">⚡ MEDATLAS // CORE SYSTEM</div>
+      <div style="display: flex; gap: 8px;">
+        <button class="brutal-btn green">MOCK EXAM</button>
+        <button class="brutal-btn">STUDENT DASH</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="neo-stats">
+      <div class="neo-stat-card" style="background: var(--teal);">
+        <div class="neo-stat-label">MCQs Completed</div>
+        <div class="neo-stat-val">428 / 650</div>
+      </div>
+      <div class="neo-stat-card" style="background: var(--yellow);">
+        <div class="neo-stat-label">Accuracy Score</div>
+        <div class="neo-stat-val">84.2%</div>
+      </div>
+      <div class="neo-stat-card" style="background: var(--pink);">
+        <div class="neo-stat-label">Active Streak</div>
+        <div class="neo-stat-val">🔥 9 DAYS</div>
+      </div>
+      <div class="neo-stat-card">
+        <div class="neo-stat-label">Target Module</div>
+        <div class="neo-stat-val" style="font-size: 20px;">BSF 112</div>
+      </div>
+    </div>
+
+    <!-- Active Question -->
+    <div class="brutal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #000; padding-bottom: 12px; margin-bottom: 18px;">
+        <span style="font-family: var(--font-mono); font-size: 13px; font-weight: 700;">
+          [QUESTION 14/35] // LECTURE 01
+        </span>
+        <button class="brutal-btn yellow" style="font-size: 11px;">
+          OPEN SLIDE 12 ↗
+        </button>
+      </div>
+
+      <div style="font-size: 16px; font-weight: 800; line-height: 1.5; margin-bottom: 22px;">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </div>
+
+      <div class="neo-option">
+        <div class="neo-letter">A</div>
+        <div>Increased ECF volume, decreased ICF osmolarity</div>
+      </div>
+
+      <div class="neo-option correct">
+        <div class="neo-letter">B</div>
+        <div>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</div>
+      </div>
+
+      <div class="neo-option">
+        <div class="neo-letter">C</div>
+        <div>Decreased ECF osmolarity, increased ICF volume</div>
+      </div>
+
+      <div class="neo-option">
+        <div class="neo-letter">D</div>
+        <div>Iso-osmotic contraction with no shift in ICF volume</div>
+      </div>
+
+      <div style="margin-top: 24px; padding: 18px; border: 2px solid #000; background: #FFF; box-shadow: 4px 4px 0px #000;">
+        <strong style="font-family: var(--font-mono); text-transform: uppercase;">[VERIFIED CLINICAL REASONING]</strong><br>
+        <span style="font-size: 13.5px; margin-top: 4px; display: block;">
+          Sweat is hypotonic fluid loss. Loss of water from ECF draws water out of ICF by osmotic gradient. Result: ICF volume contracts while both compartments' osmolarities rise.
+        </span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

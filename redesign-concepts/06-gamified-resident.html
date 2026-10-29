@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 6: Gamified Resident & Streaks — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #F7F9FD;
+      --card: #FFFFFF;
+      --border: #E5E9F2;
+      --green: #22C55E;
+      --green-dark: #16A34A;
+      --green-soft: #DCFCE7;
+      --blue: #3B82F6;
+      --blue-dark: #2563EB;
+      --orange: #F97316;
+      --yellow: #FACC15;
+      --text: #1E293B;
+      --font: 'Nunito', sans-serif;
+      --font-fun: 'Fredoka', cursive;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      padding-bottom: 60px;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+
+    /* Gamified Header */
+    header {
+      background: #FFFFFF;
+      border-bottom: 2px solid var(--border);
+      padding: 14px 28px;
+    }
+    .header-inner {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-gamified {
+      font-family: var(--font-fun);
+      font-size: 24px;
+      color: var(--blue-dark);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .gamified-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #FFF;
+      border: 2px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    /* XP Progress Bar */
+    .xp-section {
+      background: #FFF;
+      border: 2px solid var(--border);
+      border-radius: 20px;
+      padding: 20px 24px;
+      margin: 24px 0;
+      box-shadow: 0 4px 0 #E2E8F0;
+    }
+    .bar-outer {
+      background: #E2E8F0;
+      height: 16px;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .bar-inner {
+      height: 100%;
+      background: linear-gradient(90deg, #22C55E, #10B981);
+      border-radius: 999px;
+      width: 66%;
+    }
+
+    /* Chunky Gamified Buttons */
+    .chunky-btn {
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 800;
+      padding: 10px 18px;
+      border-radius: 14px;
+      border: 2px solid #E2E8F0;
+      border-bottom-width: 4px;
+      background: #FFF;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.1s ease;
+    }
+    .chunky-btn:active {
+      transform: translateY(2px);
+      border-bottom-width: 2px;
+    }
+    .chunky-btn.green {
+      background: var(--green);
+      border-color: var(--green-dark);
+      color: #FFF;
+    }
+    .chunky-btn.blue {
+      background: var(--blue);
+      border-color: var(--blue-dark);
+      color: #FFF;
+    }
+
+    /* Chunky Option Cards */
+    .option-chunky {
+      background: #FFF;
+      border: 2px solid #E2E8F0;
+      border-bottom-width: 4px;
+      border-radius: 16px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .option-chunky:hover {
+      border-color: var(--blue);
+    }
+    .option-chunky:active {
+      transform: translateY(2px);
+      border-bottom-width: 2px;
+    }
+    .option-chunky.correct {
+      background: var(--green-soft);
+      border-color: var(--green);
+      color: #14532D;
+    }
+    .badge-letter {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: #F1F5F9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+    }
+    .option-chunky.correct .badge-letter {
+      background: var(--green);
+      color: #FFF;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand-gamified">
+        <span>💊 MedAtlas Quest</span>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <div class="gamified-pill" style="color: var(--orange); border-color: #FED7AA;">
+          🔥 9-Day Streak
+        </div>
+        <div class="gamified-pill" style="color: #9333EA; border-color: #E9D5FF;">
+          ⚡ 1,420 XP
+        </div>
+        <div class="gamified-pill" style="color: var(--blue); border-color: #BFDBFE;">
+          🏆 Rank #3
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="xp-section">
+      <div style="display: flex; justify-content: space-between; align-items: baseline;">
+        <span style="font-weight: 900; font-size: 16px;">Daily Physiology Goal</span>
+        <span style="font-weight: 800; font-size: 13px; color: var(--green-dark);">14 / 20 Questions Completed</span>
+      </div>
+      <div class="bar-outer">
+        <div class="bar-inner"></div>
+      </div>
+    </div>
+
+    <!-- Question Card -->
+    <div style="background: #FFF; border: 2px solid var(--border); border-bottom-width: 5px; border-radius: 24px; padding: 28px; box-shadow: 0 4px 0 #E2E8F0;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <span style="background: #FEF3C7; color: #B45309; padding: 4px 12px; border-radius: 999px; font-weight: 800; font-size: 12px;">
+          ⭐️ LEVEL 1 · QUESTION 14
+        </span>
+        <button class="chunky-btn" style="padding: 6px 12px; font-size: 12px;">
+          📄 View Lecture Slide
+        </button>
+      </div>
+
+      <div style="font-size: 17px; font-weight: 800; line-height: 1.5; margin-bottom: 24px;">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </div>
+
+      <div class="option-chunky">
+        <div class="badge-letter">A</div>
+        <div>Increased ECF volume, decreased ICF osmolarity</div>
+      </div>
+
+      <div class="option-chunky correct">
+        <div class="badge-letter">B</div>
+        <div>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</div>
+      </div>
+
+      <div class="option-chunky">
+        <div class="badge-letter">C</div>
+        <div>Decreased ECF osmolarity, increased ICF volume</div>
+      </div>
+
+      <div class="option-chunky">
+        <div class="badge-letter">D</div>
+        <div>Iso-osmotic contraction with no shift in ICF volume</div>
+      </div>
+
+      <div style="margin-top: 20px; padding: 18px; border-radius: 16px; background: #DCFCE7; border: 2px solid #86EFAC; color: #14532D; font-weight: 700; font-size: 14px;">
+        🎉 Awesome Job! +15 XP Earned<br>
+        <span style="font-weight: 600; font-size: 13px;">Sweat loss is hypotonic, drawing water from inside cells (ICF) out into the ECF. ICF shrinks while both osmolarities rise.</span>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+        <button class="chunky-btn green" style="padding: 12px 24px; font-size: 15px;">Next Question →</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

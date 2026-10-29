@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 4: Bento Grid & Frosted Glass — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #F0F4F8;
+      --glass-bg: rgba(255, 255, 255, 0.7);
+      --glass-border: rgba(255, 255, 255, 0.8);
+      --primary: #6366F1;
+      --primary-soft: #EEF2FF;
+      --accent: #8B5CF6;
+      --text: #1E1B4B;
+      --text-muted: #64748B;
+      --emerald: #10B981;
+      --font: 'DM Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: linear-gradient(135deg, #EEF2F6 0%, #E0E7FF 50%, #F5F3FF 100%);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      padding-bottom: 60px;
+    }
+    .container { max-width: 1120px; margin: 0 auto; padding: 32px 24px; }
+    
+    /* Top Frosted Bar */
+    .top-nav {
+      background: rgba(255, 255, 255, 0.65);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+    }
+    .brand-pills {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 18px;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366F1, #8B5CF6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+
+    /* Bento Grid Layout */
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .bento-card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(99, 102, 241, 0.04);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .bento-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(99, 102, 241, 0.08);
+    }
+    .col-8 { grid-column: span 8; }
+    .col-4 { grid-column: span 4; }
+    .col-6 { grid-column: span 6; }
+    .col-12 { grid-column: span 12; }
+
+    @media (max-width: 860px) {
+      .col-8, .col-4, .col-6 { grid-column: span 12; }
+    }
+
+    .bento-tag {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--primary);
+      background: #EEF2FF;
+      padding: 3px 8px;
+      border-radius: 6px;
+      display: inline-block;
+      margin-bottom: 8px;
+    }
+    .big-num { font-size: 32px; font-weight: 800; font-family: var(--font-mono); color: var(--text); }
+
+    /* Bento Action Buttons */
+    .pill-btn {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      background: #FFFFFF;
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .pill-btn:hover {
+      background: var(--primary-soft);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .pill-btn.primary {
+      background: linear-gradient(135deg, #6366F1, #8B5CF6);
+      border: none;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+    }
+
+    /* MCQ Bento Item */
+    .opt-bento {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      background: rgba(255,255,255,0.85);
+      border: 1px solid rgba(99, 102, 241, 0.15);
+      border-radius: 12px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .opt-bento:hover {
+      border-color: var(--primary);
+      background: #FFF;
+    }
+    .opt-bento.correct {
+      border-color: #10B981;
+      background: #ECFDF5;
+      color: #065F46;
+    }
+    .bento-badge {
+      width: 26px; height: 26px; border-radius: 8px; background: #EEF2FF;
+      color: var(--primary); display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px;
+    }
+    .opt-bento.correct .bento-badge {
+      background: #10B981; color: #FFF;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top-nav">
+      <div class="brand-pills">
+        <div class="brand-logo">⌘</div>
+        <span>MedAtlas <span style="font-weight: 400; opacity: 0.7;">Bento</span></span>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="pill-btn primary">Start Mock Exam</button>
+        <button class="pill-btn">My Statistics</button>
+      </div>
+    </div>
+
+    <div class="bento-grid">
+      <!-- Welcome Hero Bento -->
+      <div class="bento-card col-8">
+        <span class="bento-tag">Concept 04 · Bento Grid &amp; Frosted Glass</span>
+        <h1 style="font-size: 26px; font-weight: 800; margin-top: 4px;">Welcome back, Dr. Zeyad</h1>
+        <p style="color: var(--text-muted); font-size: 14px; margin-top: 6px; line-height: 1.5;">
+          You have mastered 66% of Module BSF 112. Today’s recommended focus is Lecture 2 (Membrane Potentials).
+        </p>
+        <div style="margin-top: 18px; display: flex; gap: 10px;">
+          <button class="pill-btn primary">Resume Lecture 2</button>
+          <button class="pill-btn">Browse Modules</button>
+        </div>
+      </div>
+
+      <!-- Quick Stats Bento -->
+      <div class="bento-card col-4">
+        <span class="bento-tag">Accuracy</span>
+        <div class="big-num" style="color: #6366F1;">84.2%</div>
+        <p style="font-size: 12px; color: var(--emerald); font-weight: 600; margin-top: 4px;">▲ +4.1% over last 50 questions</p>
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.06); font-size: 12px; color: var(--text-muted);">
+          🔥 9-Day Streak · 428 Questions Solved
+        </div>
+      </div>
+
+      <!-- Active Module Bento -->
+      <div class="bento-card col-12">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <span class="bento-tag">Curriculum Deck</span>
+            <h2 style="font-size: 18px; font-weight: 700;">Module BSF 112: Physiology &amp; Biochemistry</h2>
+          </div>
+          <button class="pill-btn">Reset All Attempts</button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div style="padding: 16px; background: rgba(255,255,255,0.6); border-radius: 14px; border: 1px solid rgba(255,255,255,0.8);">
+            <div style="font-weight: 700; font-size: 14px;">L1 · Organization of the Body</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">35 Questions · 91% Accuracy</div>
+            <div style="margin-top: 12px; display: flex; gap: 6px;">
+              <button class="pill-btn" style="padding: 4px 12px; font-size: 11px;">Study</button>
+              <button class="pill-btn" style="padding: 4px 12px; font-size: 11px;">Slide PDF</button>
+            </div>
+          </div>
+
+          <div style="padding: 16px; background: rgba(255,255,255,0.6); border-radius: 14px; border: 1px solid rgba(255,255,255,0.8);">
+            <div style="font-weight: 700; font-size: 14px;">L2 · Membrane Potentials</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">42 Questions · 78% Accuracy (In progress)</div>
+            <div style="margin-top: 12px; display: flex; gap: 6px;">
+              <button class="pill-btn primary" style="padding: 4px 12px; font-size: 11px;">Continue</button>
+              <button class="pill-btn" style="padding: 4px 12px; font-size: 11px;">Slide PDF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MCQ Bento Card -->
+      <div class="bento-card col-12">
+        <span class="bento-tag">Interactive Question Widget</span>
+        <div style="font-size: 15px; font-weight: 600; margin: 12px 0 16px 0;">
+          A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+        </div>
+
+        <div class="opt-bento">
+          <div class="bento-badge">A</div>
+          <div>Increased ECF volume, decreased ICF osmolarity</div>
+        </div>
+        <div class="opt-bento correct">
+          <div class="bento-badge">B</div>
+          <div>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</div>
+        </div>
+        <div class="opt-bento">
+          <div class="bento-badge">C</div>
+          <div>Decreased ECF osmolarity, increased ICF volume</div>
+        </div>
+        <div class="opt-bento">
+          <div class="bento-badge">D</div>
+          <div>Iso-osmotic contraction with no shift in ICF volume</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

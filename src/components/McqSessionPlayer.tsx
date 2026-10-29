@@ -26,6 +26,7 @@ import {
 import { api } from '../lib/api.ts';
 import { OPTION_KEYS, OptionKey, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
 import { PdfViewerModal, PdfSlideViewer } from './PdfViewerModal.tsx';
+import { UniversityExamPlayer } from './UniversityExamPlayer.tsx';
 
 interface McqSessionPlayerProps {
   initialSession: any;
@@ -43,6 +44,18 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
   onQuestionAnswered,
 }) => {
   const [session, setSession] = useState<any>(initialSession);
+
+  if (session?.mode === 'exam') {
+    return (
+      <UniversityExamPlayer
+        session={session}
+        onExit={onExit}
+        onSessionCompleted={onSessionCompleted}
+        onQuestionAnswered={onQuestionAnswered}
+        api={api}
+      />
+    );
+  }
 
   // Resume question index: continuing from next unsolved question or last active question
   const [currentIndex, setCurrentIndex] = useState<number>(() => {

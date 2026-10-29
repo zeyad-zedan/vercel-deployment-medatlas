@@ -43,6 +43,8 @@ import {
   getStudentBookmarksAndReview,
   getStudentDashboardAnalytics,
   getAdminDashboardData,
+  upsertModuleAdmin,
+  deleteModuleAdmin,
   upsertSubjectAdmin,
   upsertLectureAdmin,
   upsertQuestionAdmin,
@@ -53,6 +55,7 @@ import {
   deleteExamSessionAdmin,
   updateUserRoleAdmin,
   deleteUserAdmin,
+  resetLectureProgress,
   previewCsvImportAdmin,
   executeCsvImportAdmin,
   exportQuestionBankCsvAdmin,
@@ -570,7 +573,14 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
         allowCreate: req.user!.authType === 'firebase',
       }
     );
-    return res.json({ user: sanitizeUserForClient(user) });
+    const token = createServerSessionToken({
+      uid: user.uid,
+      email: user.email,
+      name: user.displayName,
+      tokenVersion: user.tokenVersion,
+      emailVerified: Boolean(user.emailVerified),
+    });
+    return res.json({ token, user: sanitizeUserForClient(user) });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load profile.', 500);
   }
@@ -714,6 +724,19 @@ app.post('/api/sessions/:id/complete', requireAuth, async (req: AuthRequest, res
   }
 });
 
+app.post('/api/lectures/:id/reset', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const lectureId = Number(req.params.id);
+    if (!Number.isInteger(lectureId) || lectureId <= 0) {
+      return res.status(400).json({ error: 'Invalid lecture ID.' });
+    }
+    const result = await resetLectureProgress(req.user!.uid, lectureId);
+    return res.json(result);
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to reset lecture progress.', 400);
+  }
+});
+
 app.get('/api/dashboard', requireAuth, async (req: AuthRequest, res) => {
   try {
     const analytics = await getStudentDashboardAnalytics(req.user!.uid);
@@ -761,9 +784,48 @@ app.get('/api/admin/overview', requireAuth, requireAdmin, async (_req: AuthReque
   }
 });
 
+app.post('/api/admin/modules', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const { id, code, title, description, displayOrder, status } = req.body || {};
+    if (!code || !title) {
+      return res.status(400).json({ error: 'Module code and title are required.' });
+    }
+    const saved = await upsertModuleAdmin(
+      { uid: req.user!.uid, email: req.user!.email },
+      {
+        id: id ? Number(id) : undefined,
+        code: String(code),
+        title: String(title),
+        description: String(description || ''),
+        displayOrder: Number(displayOrder) || 1,
+        status: status || 'published',
+      }
+    );
+    return res.json({ module: saved });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to save module.', 400);
+  }
+});
+
+app.delete('/api/admin/modules/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const moduleId = Number(req.params.id);
+    if (!moduleId || isNaN(moduleId)) {
+      return res.status(400).json({ error: 'Valid moduleId parameter is required.' });
+    }
+    const deleted = await deleteModuleAdmin(
+      { uid: req.user!.uid, email: req.user!.email },
+      moduleId
+    );
+    return res.json({ success: true, deleted });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to delete module.', 400);
+  }
+});
+
 app.post('/api/admin/subjects', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const { id, title, description, displayOrder, status } = req.body || {};
+    const { id, moduleId, title, description, displayOrder, status } = req.body || {};
     if (!title || !description) {
       return res.status(400).json({ error: 'Subject title and description are required.' });
     }
@@ -771,6 +833,7 @@ app.post('/api/admin/subjects', requireAuth, requireAdmin, async (req: AuthReque
       { uid: req.user!.uid, email: req.user!.email },
       {
         id: id ? Number(id) : undefined,
+        moduleId: moduleId ? Number(moduleId) : null,
         title: String(title),
         description: String(description),
         displayOrder: Number(displayOrder) || 1,
@@ -1128,6 +1191,29 @@ app.delete(
       return res.json(result);
     } catch (error) {
       return sendErrorResponse(res, error, 'Failed to delete user.', 400);
+    }
+  }
+);
+
+app.post(
+  '/api/admin/users/:uid/lectures/:lectureId/reset',
+  requireAuth,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const targetUid = String(req.params.uid);
+      const lectureId = Number(req.params.lectureId);
+      if (!Number.isInteger(lectureId) || lectureId <= 0) {
+        return res.status(400).json({ error: 'Invalid lecture ID.' });
+      }
+      const result = await resetLectureProgress(
+        targetUid,
+        lectureId,
+        { uid: req.user!.uid, email: req.user!.email }
+      );
+      return res.json(result);
+    } catch (error) {
+      return sendErrorResponse(res, error, 'Failed to reset user lecture progress.', 400);
     }
   }
 );

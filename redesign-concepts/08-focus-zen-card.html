@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design 8: Zen Focus Mode — MedAtlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FAFAF9;
+      --card: #FFFFFF;
+      --border: #E7E5E4;
+      --primary: #2563EB;
+      --text: #1C1917;
+      --muted: #78716C;
+      --font: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    /* Minimal Floating Island */
+    .zen-container {
+      width: 100%;
+      max-width: 760px;
+    }
+
+    /* Zen Progress */
+    .zen-progress-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+    }
+    .zen-bar-bg {
+      background: #E7E5E4;
+      height: 4px;
+      border-radius: 99px;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    .zen-bar-fill {
+      width: 40%;
+      height: 100%;
+      background: var(--text);
+      border-radius: 99px;
+    }
+
+    /* Main Focus Card */
+    .zen-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 36px 40px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.03);
+    }
+
+    .zen-question {
+      font-size: 17px;
+      font-weight: 500;
+      line-height: 1.6;
+      color: var(--text);
+      margin-bottom: 28px;
+    }
+
+    .zen-opt {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      background: #FFF;
+    }
+    .zen-opt:hover {
+      border-color: #A8A29E;
+      background: #F5F5F4;
+    }
+    .zen-opt.correct {
+      border-color: #10B981;
+      background: #ECFDF5;
+      color: #065F46;
+      font-weight: 600;
+    }
+    .key-hint {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #F5F5F4;
+    }
+
+    /* Footer Navigation */
+    .zen-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 24px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .zen-btn {
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: #FFF;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .zen-btn.dark {
+      background: var(--text);
+      color: #FFF;
+      border-color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <div class="zen-container">
+    <div class="zen-progress-wrap">
+      <span>BSF 112 · Question 14 of 35</span>
+      <span>Press [A] [B] [C] [D] to select</span>
+    </div>
+    <div class="zen-bar-bg">
+      <div class="zen-bar-fill"></div>
+    </div>
+
+    <div class="zen-card" style="margin-top: 16px;">
+      <div class="zen-question">
+        A 28-year-old medical student is participating in a marathon on a hot day. After running 20 km without hydration, which of the following changes in extracellular fluid (ECF) and intracellular fluid (ICF) osmolarity and volume will be observed?
+      </div>
+
+      <div class="zen-opt">
+        <span>Increased ECF volume, decreased ICF osmolarity</span>
+        <span class="key-hint">A</span>
+      </div>
+
+      <div class="zen-opt correct">
+        <span>Increased ECF osmolarity, decreased ICF volume (Hyperosmotic dehydration)</span>
+        <span class="key-hint" style="background: #10B981; color: #fff; border-color: #10B981;">B</span>
+      </div>
+
+      <div class="zen-opt">
+        <span>Decreased ECF osmolarity, increased ICF volume</span>
+        <span class="key-hint">C</span>
+      </div>
+
+      <div class="zen-opt">
+        <span>Iso-osmotic contraction with no shift in ICF volume</span>
+        <span class="key-hint">D</span>
+      </div>
+
+      <div style="margin-top: 24px; padding: 18px; background: #F5F5F4; border-radius: 8px; font-size: 13px; line-height: 1.6; color: #44403C;">
+        <strong>Rationale:</strong> Hypotonic sweat loss pulls water from ICF to ECF via osmosis. Result: Intracellular volume contracts while both osmolarities rise.
+      </div>
+    </div>
+
+    <div class="zen-footer">
+      <button class="zen-btn">← Previous</button>
+      <button class="zen-btn" style="border: none; color: #2563EB;">📄 Open Lecture Slide 12</button>
+      <button class="zen-btn dark">Next Question →</button>
+    </div>
+  </div>
+</body>
+</html>

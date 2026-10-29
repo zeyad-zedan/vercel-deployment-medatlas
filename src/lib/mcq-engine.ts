@@ -859,7 +859,41 @@ export function selectPracticeQuestions<
 
   let orderedPool = eligible;
   if (criteria.shuffleQuestions) {
-    orderedPool = shuffleArray(eligible, criteria.seed);
+    const byLecture = new Map<number, T[]>();
+    for (const q of eligible) {
+      const list = byLecture.get(q.lectureId) || [];
+      list.push(q);
+      byLecture.set(q.lectureId, list);
+    }
+
+    if (byLecture.size <= 1) {
+      orderedPool = shuffleArray(eligible, criteria.seed);
+    } else {
+      const lectureBuckets = shuffleArray(
+        Array.from(byLecture.entries()),
+        criteria.seed
+      ).map(([lectId, items], idx) =>
+        shuffleArray(
+          items,
+          criteria.seed !== undefined ? criteria.seed + idx * 31 + lectId : undefined
+        )
+      );
+
+      const interleaved: T[] = [];
+      let round = 0;
+      let addedInRound = true;
+      while (addedInRound) {
+        addedInRound = false;
+        for (const bucket of lectureBuckets) {
+          if (round < bucket.length) {
+            interleaved.push(bucket[round]);
+            addedInRound = true;
+          }
+        }
+        round++;
+      }
+      orderedPool = interleaved;
+    }
   }
 
   if (criteria.recentlyAnsweredIds && criteria.recentlyAnsweredIds.size > 0) {
@@ -868,7 +902,13 @@ export function selectPracticeQuestions<
     orderedPool = [...fresh, ...recent];
   }
 
-  const selectedQuestions = orderedPool.slice(0, Math.min(requestedCount, totalAvailable));
+  let selectedQuestions = orderedPool.slice(0, Math.min(requestedCount, totalAvailable));
+  if (criteria.shuffleQuestions && selectedQuestions.length > 1) {
+    selectedQuestions = shuffleArray(
+      selectedQuestions,
+      criteria.seed !== undefined ? criteria.seed + 997 : undefined
+    );
+  }
   let shortfallNotice: string | null = null;
 
   if (totalAvailable === 0) {

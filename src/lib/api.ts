@@ -1,14 +1,36 @@
 import {
   signInWithPopup,
   signOut,
-  onAuthStateChanged,
+  browserPopupRedirectResolver,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from './firebase.ts';
 
 const STORAGE_TOKEN_KEY = 'medatlas_session_token';
+const STORAGE_USER_KEY = 'medatlas_cached_user_profile';
 
 let inMemoryAuthToken: string | null =
   typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_TOKEN_KEY) : null;
+
+export function setCachedUserProfile(user: UserProfile | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (user) {
+      window.localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
+    } else {
+      window.localStorage.removeItem(STORAGE_USER_KEY);
+    }
+  } catch {}
+}
+
+export function getCachedUserProfile(): UserProfile | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_USER_KEY);
+    return raw ? (JSON.parse(raw) as UserProfile) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function setAuthToken(token: string | null) {
   inMemoryAuthToken = token;
@@ -17,6 +39,7 @@ export function setAuthToken(token: string | null) {
       window.localStorage.setItem(STORAGE_TOKEN_KEY, token);
     } else {
       window.localStorage.removeItem(STORAGE_TOKEN_KEY);
+      window.localStorage.removeItem(STORAGE_USER_KEY);
     }
   }
 }
@@ -28,52 +51,45 @@ export function getAuthToken(): string | null {
 export function subscribeToAuthChanges(
   onUserResolved: (user: UserProfile | null) => void
 ): () => void {
-  const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+  let cancelled = false;
+
+  (async () => {
     try {
-      if (firebaseUser) {
-        const idToken = await firebaseUser.getIdToken();
-        setAuthToken(idToken);
+      const existingToken = getAuthToken();
+      if (existingToken) {
         const data = await api.getCurrentUser();
-        onUserResolved(data.user);
-      } else if (getAuthToken()) {
-        const data = await api.getCurrentUser();
-        onUserResolved(data.user);
+        if (data.token) {
+          setAuthToken(data.token);
+        }
+        setCachedUserProfile(data.user);
+        if (!cancelled) onUserResolved(data.user);
       } else {
-        onUserResolved(null);
+        if (!cancelled) onUserResolved(null);
       }
     } catch (err: any) {
-      // Only clear token if server explicitly confirms it is invalid/expired (HTTP 401).
-      // If it is a transient network timeout or connection hiccup, retain the token!
       if (err?.status === 401 || err?.message?.includes('401')) {
         setAuthToken(null);
+        if (!cancelled) onUserResolved(null);
       } else {
         console.warn('Transient network delay during session verification:', err);
+        if (!cancelled) onUserResolved(getCachedUserProfile());
       }
-      onUserResolved(null);
     }
-  });
-  return unsubscribe;
+  })();
+
+  return () => {
+    cancelled = true;
+  };
 }
 
 async function apiRequest<T>(
   path: string,
-  options: RequestInit = {},
-  isRetry = false
+  options: RequestInit = {}
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> | undefined),
   };
-
-  // If user signed in via Firebase, ensure token is fresh using Firebase's long-lived refresh token
-  if (auth.currentUser) {
-    try {
-      const freshToken = await auth.currentUser.getIdToken(false);
-      setAuthToken(freshToken);
-    } catch {
-      // fallback to stored inMemoryAuthToken
-    }
-  }
 
   if (inMemoryAuthToken) {
     headers['Authorization'] = `Bearer ${inMemoryAuthToken}`;
@@ -85,16 +101,7 @@ async function apiRequest<T>(
   });
 
   if (!res.ok) {
-    // If 401 Unauthorized and user is signed in with Firebase, force refresh token once and retry
-    if (res.status === 401 && !isRetry && auth.currentUser) {
-      try {
-        const forcedToken = await auth.currentUser.getIdToken(true);
-        setAuthToken(forcedToken);
-        return await apiRequest<T>(path, options, true);
-      } catch {
-        setAuthToken(null);
-      }
-    } else if (res.status === 401) {
+    if (res.status === 401) {
       setAuthToken(null);
     }
 
@@ -148,6 +155,7 @@ export const api = {
       }
     );
     setAuthToken(data.token);
+    setCachedUserProfile(data.user);
     return data.user;
   },
 
@@ -160,14 +168,33 @@ export const api = {
       }
     );
     setAuthToken(data.token);
+    setCachedUserProfile(data.user);
     return data.user;
   },
 
   loginWithGooglePopup: async () => {
-    const result = await signInWithPopup(auth, googleAuthProvider);
-    const idToken = await result.user.getIdToken();
+    // Ensure any previous in-memory Firebase state is cleared before popup
+    await signOut(auth).catch(() => {});
+    const result = await signInWithPopup(
+      auth,
+      googleAuthProvider,
+      browserPopupRedirectResolver
+    );
+    // Extract the freshly issued ID token directly from the signInWithIdp response
+    // WITHOUT calling getIdToken(true), which would hit securetoken.googleapis.com
+    const idToken: string =
+      (result as any)?._tokenResponse?.idToken ||
+      (result.user as any)?.stsTokenManager?.accessToken ||
+      (await result.user.getIdToken(false));
     setAuthToken(idToken);
-    const data = await apiRequest<{ user: UserProfile }>('/api/auth/me');
+    const data = await apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me');
+    if (data.token) {
+      setAuthToken(data.token);
+    }
+    setCachedUserProfile(data.user);
+    // Immediately clear in-memory Firebase client user so Firebase never attempts
+    // a background refresh against securetoken.googleapis.com after 1 hour
+    await signOut(auth).catch(() => {});
     return data.user;
   },
 
@@ -254,7 +281,8 @@ export const api = {
     }
   },
 
-  getCurrentUser: () => apiRequest<{ user: UserProfile }>('/api/auth/me'),
+  getCurrentUser: () =>
+    apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me'),
 
   updateProfile: (displayName: string, preferences?: Record<string, unknown>) =>
     apiRequest<{ user: UserProfile }>('/api/auth/profile', {
@@ -345,8 +373,29 @@ export const api = {
       body: JSON.stringify({ questionId, note }),
     }),
 
+  resetLectureProgress: (lectureId: number) =>
+    apiRequest<{
+      success: boolean;
+      message: string;
+      lectureId: number;
+      lectureTitle: string;
+    }>(`/api/lectures/${lectureId}/reset`, {
+      method: 'POST',
+    }),
+
   // Administrator Operations
   getAdminOverview: () => apiRequest<any>('/api/admin/overview'),
+
+  saveModule: (payload: any) =>
+    apiRequest<{ module: any }>('/api/admin/modules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteModule: (moduleId: number) =>
+    apiRequest<{ success: boolean }>(`/api/admin/modules/${moduleId}`, {
+      method: 'DELETE',
+    }),
 
   saveSubject: (payload: any) =>
     apiRequest<{ subject: any }>('/api/admin/subjects', {
@@ -420,6 +469,19 @@ export const api = {
       `/api/admin/users/${encodeURIComponent(targetUid)}`,
       {
         method: 'DELETE',
+      }
+    ),
+
+  resetUserLectureProgressAdmin: (targetUid: string, lectureId: number) =>
+    apiRequest<{
+      success: boolean;
+      message: string;
+      lectureId: number;
+      lectureTitle: string;
+    }>(
+      `/api/admin/users/${encodeURIComponent(targetUid)}/lectures/${lectureId}/reset`,
+      {
+        method: 'POST',
       }
     ),
 

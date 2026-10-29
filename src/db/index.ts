@@ -55,3 +55,4 @@ export const createPool = () => {
 export const pool = createPool();
 
 export const db = drizzle(pool, { schema });
+export * from './schema.ts';

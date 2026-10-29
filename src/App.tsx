@@ -559,6 +559,7 @@ export default function App() {
                   initialSelectedSubjectId={selectedSubjectId}
                   onSelectSubjectId={setSelectedSubjectId}
                   onStartSession={handleStartSession}
+                  onRefresh={loadStudentWorkspaceData}
                 />
               )}
 
@@ -575,6 +576,7 @@ export default function App() {
                   dashboardData={dashboardData}
                   onStartSession={handleStartSession}
                   onOpenSession={handleOpenExistingSession}
+                  onRefresh={loadStudentWorkspaceData}
                 />
               )}
 
