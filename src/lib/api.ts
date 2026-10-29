@@ -173,8 +173,6 @@ export const api = {
   },
 
   loginWithGooglePopup: async () => {
-    // Ensure any previous in-memory Firebase state is cleared before popup
-    await signOut(auth).catch(() => {});
     const result = await signInWithPopup(
       auth,
       googleAuthProvider,

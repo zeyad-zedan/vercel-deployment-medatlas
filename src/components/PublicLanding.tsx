@@ -148,7 +148,11 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
       setAuthModalOpen(false);
       onAuthenticated(user, 'dashboard');
     } catch (err: any) {
-      if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
+      if (err?.code === 'auth/popup-blocked' || err?.message?.includes('auth/popup-blocked')) {
+        setAuthError(
+          'Your browser blocked the sign-in popup. Please allow popups for this site in your browser address bar (look for the popup icon at top right), or sign in with Email & Password below.'
+        );
+      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
         setAuthError(
           'Google Sign-in domain is not authorized yet in Firebase Console. Please register or sign in with Email & Password below!'
         );
