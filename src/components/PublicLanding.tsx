@@ -198,15 +198,10 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
         msg.includes('auth/popup-blocked') ||
         code === 'auth/cancelled-popup-request'
       ) {
-        // Popup was blocked by browser policy -> automatically fall back to standard redirect!
-        setAuthNotice('Popup blocked by browser. Redirecting you to Google Sign-In...');
-        try {
-          await api.loginWithGoogleRedirect();
-          return; // Browser is navigating to accounts.google.com
-        } catch (redirectErr: any) {
-          setAuthNotice(null);
-          setAuthError(formatGoogleAuthError(redirectErr));
-        }
+        setAuthNotice(null);
+        setAuthError(
+          'Your browser blocked the sign-in popup. Please click the popup icon in your browser address bar (top right) and select "Always allow popups from this site", then click "Continue with Google Sign-In" again.'
+        );
       } else {
         setAuthError(formatGoogleAuthError(err));
       }
