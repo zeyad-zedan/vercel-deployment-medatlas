@@ -379,19 +379,6 @@ export function subscribeToAuthChanges(
         }
       }
 
-      // 4. If a Google redirect was explicitly initiated by the user, but the browser returned
-      // with no Firebase credential (e.g. due to cross-domain third-party storage partitioning),
-      // surface a clear diagnostic error rather than silently rendering an unauthenticated homepage.
-      if (wasRedirectExpected && !hasResolvedAuthenticatedUser && !cancelled) {
-        const blockedErr: any = new Error(
-          'Google sign-in returned to MedAtlas, but your browser blocked cross-domain redirect storage. Please click "Continue with Google" to sign in via popup, or sign in with Email & Password below.'
-        );
-        blockedErr.code = 'auth/redirect-session-blocked';
-        onRedirectError?.(blockedErr);
-        onUserResolved(null);
-        return;
-      }
-
       if (!cancelled && !hasResolvedAuthenticatedUser) {
         onUserResolved(null);
       }
@@ -541,14 +528,13 @@ export const api = {
         return await exchangeFirebaseCredentialForSession(result);
       }
 
-      // If redirect was in progress or Firebase user is present, wait for authStateReady and exchange
-      if (isRedirectExpected || auth.currentUser) {
-        if (typeof auth.authStateReady === 'function') {
-          await auth.authStateReady();
-        }
-        if (auth.currentUser) {
-          return await exchangeFirebaseUserForSession(auth.currentUser);
-        }
+      // Wait for Firebase authStateReady and check auth.currentUser directly without
+      // requiring redirect storage markers to be present.
+      if (typeof auth.authStateReady === 'function') {
+        await auth.authStateReady();
+      }
+      if (auth.currentUser) {
+        return await exchangeFirebaseUserForSession(auth.currentUser);
       }
 
       return null;
