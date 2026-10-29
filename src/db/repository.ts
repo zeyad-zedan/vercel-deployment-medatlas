@@ -4765,6 +4765,54 @@ export async function upsertLectureAdmin(
 }
 
 /**
+ * Attaches or updates a PDF document URL directly on a lecture (e.g. after lectures are generated or imported).
+ */
+export async function attachPdfToLectureAdmin(
+  admin: { uid: string; email: string },
+  lectureId: number,
+  pdfUrl: string | null
+) {
+  try {
+    const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
+    const cleanPdfUrl =
+      pdfUrl && typeof pdfUrl === 'string' && pdfUrl.trim()
+        ? pdfUrl.trim()
+        : null;
+
+    const [updated] = await db
+      .update(lectures)
+      .set({
+        pdfUrl: cleanPdfUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(lectures.id, lectureId))
+      .returning();
+
+    if (!updated) {
+      throw new ClientSafeError(`Lecture with ID ${lectureId} not found.`, 404);
+    }
+
+    await logAdminAction(
+      verifiedAdmin.uid,
+      verifiedAdmin.email,
+      'ATTACH_LECTURE_PDF',
+      'lecture',
+      updated.id,
+      cleanPdfUrl
+        ? `Attached PDF "${cleanPdfUrl}" to lecture "${updated.title}" (ID: ${updated.id})`
+        : `Removed PDF from lecture "${updated.title}" (ID: ${updated.id})`
+    );
+
+    invalidateCatalogCache();
+    return updated;
+  } catch (error) {
+    if (error instanceof ClientSafeError) throw error;
+    console.error('Error attaching PDF to lecture:', error);
+    throw new Error('Failed to attach PDF to lecture.', { cause: error });
+  }
+}
+
+/**
  * Saves an uploaded PDF file and its binary base64 data to the PostgreSQL database `lecture_files` table.
  */
 export async function saveUploadedPdfFileAdmin(
@@ -5610,7 +5658,7 @@ export async function executeCsvImportAdmin(
     const skippedCount = report.duplicateCount;
     const failedCount = report.invalidCount;
 
-    const batchRecord = await db.transaction(async (tx) => {
+    const resultData = await db.transaction(async (tx) => {
       const allSubjects = await tx.select().from(subjects);
       const allLectures = await tx.select().from(lectures);
 
@@ -5620,6 +5668,9 @@ export async function executeCsvImportAdmin(
       const lectureByKey = new Map(
         allLectures.map((l) => [`${l.subjectId}:${l.title.toLowerCase().trim()}`, l])
       );
+
+      const affectedLectureIds = new Set<number>();
+      const newlyCreatedLectureIds = new Set<number>();
 
       let importedCount = 0;
 
@@ -5664,10 +5715,13 @@ export async function executeCsvImportAdmin(
               .returning();
             lect = newLect;
             lectureByKey.set(lectKey, lect);
+            newlyCreatedLectureIds.add(newLect.id);
           }
           destSubjectId = subj.id;
           destLectureId = lect.id;
         }
+
+        affectedLectureIds.add(destLectureId);
 
         await tx.insert(questions).values({
           subjectId: destSubjectId,
@@ -5711,7 +5765,44 @@ export async function executeCsvImportAdmin(
         })
         .returning();
 
-      return insertedBatch;
+      let affectedLectures: Array<{
+        id: number;
+        subjectId: number;
+        title: string;
+        description: string;
+        lectureNumber: number;
+        pdfUrl: string | null;
+        status: string;
+        subjectTitle?: string | null;
+        isNew: boolean;
+      }> = [];
+
+      if (affectedLectureIds.size > 0) {
+        const rows = await tx
+          .select({
+            id: lectures.id,
+            subjectId: lectures.subjectId,
+            title: lectures.title,
+            description: lectures.description,
+            lectureNumber: lectures.lectureNumber,
+            pdfUrl: lectures.pdfUrl,
+            status: lectures.status,
+            subjectTitle: subjects.title,
+          })
+          .from(lectures)
+          .leftJoin(subjects, eq(lectures.subjectId, subjects.id))
+          .where(inArray(lectures.id, Array.from(affectedLectureIds)));
+
+        affectedLectures = rows.map((r) => ({
+          ...r,
+          isNew: newlyCreatedLectureIds.has(r.id),
+        }));
+      }
+
+      return {
+        batch: insertedBatch,
+        affectedLectures,
+      };
     });
 
     await logAdminAction(
@@ -5719,15 +5810,16 @@ export async function executeCsvImportAdmin(
       verifiedAdmin.email,
       'BULK_CSV_IMPORT',
       'import_batch',
-      batchRecord.id,
-      `Imported ${batchRecord.importedCount} questions from "${fileName}" (${skippedCount} duplicates skipped, ${failedCount} invalid rows rejected)`
+      resultData.batch.id,
+      `Imported ${resultData.batch.importedCount} questions from "${fileName}" (${skippedCount} duplicates skipped, ${failedCount} invalid rows rejected)`
     );
 
     invalidateCatalogCache();
 
     return {
-      batch: batchRecord,
+      batch: resultData.batch,
       report,
+      affectedLectures: resultData.affectedLectures,
     };
   } catch (error: any) {
     if (error instanceof ClientSafeError) throw error;

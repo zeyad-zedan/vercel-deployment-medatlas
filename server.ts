@@ -61,6 +61,7 @@ import {
   exportQuestionBankCsvAdmin,
   saveUploadedPdfFileAdmin,
   getUploadedPdfByUrl,
+  attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
@@ -945,6 +946,19 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     }
 
+    // If lectureId is provided, automatically attach this uploaded PDF to the lecture
+    let attachedLecture = null;
+    if (req.body.lectureId) {
+      const targetLecId = Number(req.body.lectureId);
+      if (!isNaN(targetLecId) && targetLecId > 0) {
+        attachedLecture = await attachPdfToLectureAdmin(
+          { uid: req.user!.uid, email: req.user!.email },
+          targetLecId,
+          relativeUrl
+        );
+      }
+    }
+
     return res.json({
       success: true,
       url: relativeUrl,
@@ -952,10 +966,130 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       fileName: uniqueFileName,
       fileSize: buffer.length,
       id: savedRecord.id,
-      message: 'Lecture PDF uploaded and saved to Supabase Storage and database successfully.',
+      lecture: attachedLecture,
+      message: attachedLecture
+        ? `Lecture PDF uploaded and attached to "${attachedLecture.title}" successfully.`
+        : 'Lecture PDF uploaded and saved to Supabase Storage and database successfully.',
     });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to upload PDF.', 500);
+  }
+});
+
+app.post('/api/admin/lectures/:id/attach-pdf', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lectureId = Number(req.params.id);
+    if (isNaN(lectureId) || lectureId <= 0) {
+      return res.status(400).json({ error: 'Valid lecture ID is required.' });
+    }
+
+    let pdfUrlToAttach: string | null = null;
+    let uploadDetails: any = null;
+
+    if (req.body.fileData) {
+      const { fileName, fileData, mimeType } = req.body;
+      if (!fileName || typeof fileName !== 'string' || typeof fileData !== 'string') {
+        return res.status(400).json({ error: 'Valid fileName and fileData (base64) are required.' });
+      }
+
+      const base64Clean = fileData.replace(/^data:[^;]+;base64,/, '').trim();
+      if (!base64Clean) {
+        return res.status(400).json({ error: 'Uploaded file is empty.' });
+      }
+
+      const buffer = Buffer.from(base64Clean, 'base64');
+      if (buffer.length === 0) {
+        return res.status(400).json({ error: 'Uploaded file is empty.' });
+      }
+
+      const isPdf =
+        buffer.length >= 4 &&
+        buffer[0] === 0x25 &&
+        buffer[1] === 0x50 &&
+        buffer[2] === 0x44 &&
+        buffer[3] === 0x46;
+
+      if (!isPdf) {
+        return res.status(400).json({
+          error: 'Invalid file format. Only valid PDF files are permitted for lecture documents.',
+        });
+      }
+
+      const MAX_PDF_BYTES = 50 * 1024 * 1024;
+      if (buffer.length > MAX_PDF_BYTES) {
+        return res.status(400).json({
+          error: `File size exceeds the 50MB limit (size: ${(buffer.length / (1024 * 1024)).toFixed(1)}MB).`,
+        });
+      }
+
+      const rawBaseName = path.basename(fileName).replace(/\.pdf$/i, '');
+      const safeBase = rawBaseName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'lecture';
+      const uniqueFileName = `${Date.now()}-${safeBase}.pdf`;
+      const relativeUrl = `/lectures/${uniqueFileName}`;
+
+      const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
+      if (!fs.existsSync(lecturesDir)) {
+        fs.mkdirSync(lecturesDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(lecturesDir, uniqueFileName), buffer);
+
+      await saveUploadedPdfFileAdmin(
+        { uid: req.user!.uid, email: req.user!.email },
+        {
+          fileName: uniqueFileName,
+          mimeType: mimeType || 'application/pdf',
+          fileSize: buffer.length,
+          dataBase64: base64Clean,
+          url: relativeUrl,
+        }
+      );
+
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+        try {
+          const { createClient } = await import('@supabase/supabase-js');
+          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+          await supabase.storage
+            .from('lecture-pdfs')
+            .upload(uniqueFileName, buffer, {
+              contentType: mimeType || 'application/pdf',
+              upsert: true,
+            });
+        } catch (err) {
+          console.warn('Supabase storage upload notice:', err);
+        }
+      }
+
+      pdfUrlToAttach = relativeUrl;
+      uploadDetails = {
+        fileName: uniqueFileName,
+        fileSize: buffer.length,
+      };
+    } else if (req.body.pdfUrl !== undefined) {
+      pdfUrlToAttach =
+        req.body.pdfUrl && String(req.body.pdfUrl).trim()
+          ? String(req.body.pdfUrl).trim()
+          : null;
+    } else {
+      return res.status(400).json({ error: 'Either fileData or pdfUrl must be provided.' });
+    }
+
+    const updated = await attachPdfToLectureAdmin(
+      { uid: req.user!.uid, email: req.user!.email },
+      lectureId,
+      pdfUrlToAttach
+    );
+
+    return res.json({
+      success: true,
+      lecture: updated,
+      url: pdfUrlToAttach,
+      uploadDetails,
+      message: pdfUrlToAttach
+        ? `PDF successfully attached to lecture "${updated.title}".`
+        : `PDF successfully removed from lecture "${updated.title}".`,
+    });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to attach PDF to lecture.', 400);
   }
 });
 

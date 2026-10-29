@@ -844,8 +844,9 @@ export const api = {
     ),
 
   uploadPdf: async (
-    file: File
-  ): Promise<{ success: boolean; url: string; fileName: string; fileSize: number; id: number }> => {
+    file: File,
+    lectureId?: number
+  ): Promise<{ success: boolean; url: string; fileName: string; fileSize: number; id: number; lecture?: any }> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = async () => {
@@ -857,12 +858,14 @@ export const api = {
             fileName: string;
             fileSize: number;
             id: number;
+            lecture?: any;
           }>('/api/admin/upload-pdf', {
             method: 'POST',
             body: JSON.stringify({
               fileName: file.name,
               fileData,
               mimeType: file.type || 'application/pdf',
+              lectureId,
             }),
           });
           resolve(result);
@@ -872,6 +875,47 @@ export const api = {
       };
       reader.onerror = () => reject(new Error('Failed to read PDF file for upload.'));
       reader.readAsDataURL(file);
+    });
+  },
+
+  attachPdfToLecture: async (
+    lectureId: number,
+    fileOrUrl: File | string
+  ): Promise<{ success: boolean; url: string | null; lecture: any; message: string }> => {
+    if (typeof fileOrUrl === 'string') {
+      return apiRequest<{ success: boolean; url: string | null; lecture: any; message: string }>(
+        `/api/admin/lectures/${lectureId}/attach-pdf`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ pdfUrl: fileOrUrl }),
+        }
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const fileData = reader.result as string;
+          const result = await apiRequest<{
+            success: boolean;
+            url: string | null;
+            lecture: any;
+            message: string;
+          }>(`/api/admin/lectures/${lectureId}/attach-pdf`, {
+            method: 'POST',
+            body: JSON.stringify({
+              fileName: fileOrUrl.name,
+              fileData,
+              mimeType: fileOrUrl.type || 'application/pdf',
+            }),
+          });
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read PDF file for upload.'));
+      reader.readAsDataURL(fileOrUrl);
     });
   },
 

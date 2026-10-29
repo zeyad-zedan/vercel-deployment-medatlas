@@ -573,7 +573,12 @@ export default function App() {
                   initialSelectedSubjectId={selectedSubjectId}
                   onSelectSubjectId={setSelectedSubjectId}
                   onStartSession={handleStartSession}
-                  onRefresh={loadStudentWorkspaceData}
+                  onRefresh={() => {
+                    loadStudentWorkspaceData();
+                    loadCatalog();
+                    if (user?.role === 'admin') loadAdminData();
+                  }}
+                  isAdmin={user?.role === 'admin'}
                 />
               )}
 

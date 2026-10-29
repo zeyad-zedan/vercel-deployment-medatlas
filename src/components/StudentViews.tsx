@@ -22,9 +22,11 @@ import {
   ExternalLink,
   HelpCircle,
   AlertCircle,
+  Upload,
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
+import { UploadPdfModal } from './UploadPdfModal.tsx';
 
 // ============================================================================
 // 1. STUDENT DASHBOARD & ANALYTICS VIEW
@@ -549,6 +551,7 @@ export const SubjectsAndLecturesView: React.FC<{
   onSelectSubjectId?: (id: number | 'all') => void;
   onStartSession: (params: any) => void;
   onRefresh?: () => void;
+  isAdmin?: boolean;
 }> = ({
   catalog,
   dashboardData,
@@ -556,6 +559,7 @@ export const SubjectsAndLecturesView: React.FC<{
   onSelectSubjectId,
   onStartSession,
   onRefresh,
+  isAdmin = false,
 }) => {
   const subjects = catalog?.subjects || [];
   const [internalSelectedId, setInternalSelectedId] = useState<number | 'all'>(
@@ -566,6 +570,13 @@ export const SubjectsAndLecturesView: React.FC<{
   const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  const [uploadModalLecture, setUploadModalLecture] = useState<{
+    id: number;
+    title: string;
+    subjectTitle?: string;
+    lectureNumber?: number;
+    pdfUrl?: string | null;
+  } | null>(null);
 
   // Sync with prop if it changes
   React.useEffect(() => {
@@ -865,19 +876,57 @@ export const SubjectsAndLecturesView: React.FC<{
                             </button>
 
                             {pdfUrl ? (
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActivePdf({
+                                      url: pdfUrl,
+                                      title: lect.title,
+                                      initialPage: 1,
+                                    })
+                                  }
+                                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-[#0284C7]" />
+                                  <span>Open Lecture PDF</span>
+                                </button>
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setUploadModalLecture({
+                                        id: lect.id,
+                                        title: lect.title,
+                                        subjectTitle: subject.title,
+                                        lectureNumber: lect.lectureNumber,
+                                        pdfUrl: lect.pdfUrl,
+                                      });
+                                    }}
+                                    className="p-2 text-slate-400 hover:text-[#0284C7] hover:bg-sky-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                                    title="Administrator: Replace lecture PDF"
+                                  >
+                                    <Upload className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ) : isAdmin ? (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setActivePdf({
-                                    url: pdfUrl,
+                                onClick={() => {
+                                  setUploadModalLecture({
+                                    id: lect.id,
                                     title: lect.title,
-                                    initialPage: 1,
-                                  })
-                                }
-                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                                    subjectTitle: subject.title,
+                                    lectureNumber: lect.lectureNumber,
+                                    pdfUrl: null,
+                                  });
+                                }}
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
+                                title="Administrator: Upload PDF slide deck to this lecture"
                               >
-                                <FileText className="w-3.5 h-3.5 text-[#0284C7]" />
-                                <span>Open Lecture PDF</span>
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>Upload PDF</span>
                               </button>
                             ) : (
                               <button
@@ -1018,6 +1067,19 @@ export const SubjectsAndLecturesView: React.FC<{
             </div>
           </div>
         </div>
+      )}
+
+      {/* Admin Quick Upload PDF Modal */}
+      {uploadModalLecture && (
+        <UploadPdfModal
+          isOpen={Boolean(uploadModalLecture)}
+          onClose={() => setUploadModalLecture(null)}
+          targetLecture={uploadModalLecture}
+          onSuccess={() => {
+            setUploadModalLecture(null);
+            onRefresh?.();
+          }}
+        />
       )}
     </div>
   );

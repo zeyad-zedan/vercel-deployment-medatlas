@@ -14,10 +14,12 @@ import {
   FileText,
   ExternalLink,
   RotateCcw,
+  ArrowRight,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
 import { getSampleCsvTemplate } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
+import { UploadPdfModal } from './UploadPdfModal.tsx';
 
 interface AdminConsoleProps {
   adminData: any;
@@ -75,6 +77,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [uploadedPdfSuccess, setUploadedPdfSuccess] = useState<string | null>(null);
   const [previewPdfModal, setPreviewPdfModal] = useState<{ url: string; title: string } | null>(null);
+  const [showUploadPdfModal, setShowUploadPdfModal] = useState(false);
+  const [uploadPdfTargetLecture, setUploadPdfTargetLecture] = useState<{
+    id: number;
+    title: string;
+    subjectTitle?: string;
+    lectureNumber?: number;
+    pdfUrl?: string | null;
+  } | null>(null);
 
   // Question form & filter state
   const [qSearch, setQSearch] = useState('');
@@ -603,8 +613,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       const targetId = importTargetLectureId !== 'auto' ? Number(importTargetLectureId) : undefined;
       const res = await api.executeCsvImport(csvFileName, csvContent, targetId);
       setCsvImportResult(res);
+      const affectedCount = res.affectedLectures?.length || 1;
       setFeedbackMsg(
-        `Bulk import completed: ${res.batch.importedCount} question(s) successfully added to lecture.`
+        `Bulk import completed: ${res.batch.importedCount} question(s) successfully added across ${affectedCount} lecture(s). You can now upload or attach PDF slide decks below.`
       );
       onRefresh();
     } catch (err: any) {
@@ -1454,17 +1465,34 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {section === 'lectures' && (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-bold text-slate-900">
-              Manage Lectures &amp; Quizzes
-            </h2>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                Manage Lectures &amp; Quizzes
+              </h2>
+              <p className="text-xs text-slate-500">
+                Create lectures, organize modules, and upload or replace lecture PDF slide decks.
+              </p>
+            </div>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  clearAlerts();
+                  setUploadPdfTargetLecture(null);
+                  setShowUploadPdfModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors shadow-xs"
+              >
+                <Upload className="w-4 h-4 text-[#0284C7]" />
+                <span>Upload PDF to Lecture</span>
+              </button>
               <button
                 type="button"
                 onClick={() => startEditLecture()}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                New Lecture
+                <span>New Lecture</span>
               </button>
             </div>
           </div>
@@ -1675,6 +1703,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     <th className="py-3 px-4 font-semibold">Subject</th>
                     <th className="py-3 px-4 font-semibold">#</th>
                     <th className="py-3 px-4 font-semibold">Lecture Title</th>
+                    <th className="py-3 px-4 font-semibold">PDF Document</th>
                     <th className="py-3 px-4 font-semibold">Questions</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
                     <th className="py-3 px-4 font-semibold text-right">Actions</th>
@@ -1691,21 +1720,49 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                           {l.lectureNumber}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold text-slate-900">{l.title}</p>
-                            {l.pdfUrl && (
+                          <p className="font-bold text-slate-900">{l.title}</p>
+                          <p className="text-slate-500">{l.description}</p>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {l.pdfUrl ? (
+                            <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
                                 onClick={() => setPreviewPdfModal({ url: l.pdfUrl, title: l.title })}
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-[#0284C7] hover:bg-sky-100 transition-colors cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-sky-50 text-[#0284C7] hover:bg-sky-100 transition-colors cursor-pointer"
                                 title="View attached lecture PDF"
                               >
-                                <FileText className="w-3 h-3" />
-                                <span>PDF</span>
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>View PDF</span>
                               </button>
-                            )}
-                          </div>
-                          <p className="text-slate-500">{l.description}</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  clearAlerts();
+                                  setUploadPdfTargetLecture(l);
+                                  setShowUploadPdfModal(true);
+                                }}
+                                className="text-[11px] font-medium text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+                                title="Upload a new or replacement PDF file"
+                              >
+                                Change
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                clearAlerts();
+                                setUploadPdfTargetLecture(l);
+                                setShowUploadPdfModal(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 transition-colors cursor-pointer"
+                              title="Upload PDF slide deck to this lecture"
+                            >
+                              <Upload className="w-3 h-3" />
+                              <span>Upload PDF</span>
+                            </button>
+                          )}
                         </td>
                         <td className="py-3 px-4 font-mono-tabular text-slate-600">
                           {l.questionCount ?? 0} MCQs
@@ -1714,6 +1771,17 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                           {l.status}
                         </td>
                         <td className="py-3 px-4 text-right space-x-3 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearAlerts();
+                              setUploadPdfTargetLecture(l);
+                              setShowUploadPdfModal(true);
+                            }}
+                            className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                          >
+                            {l.pdfUrl ? 'Update PDF' : 'Upload PDF'}
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
@@ -1728,7 +1796,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                           <button
                             type="button"
                             onClick={() => startEditLecture(l)}
-                            className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                            className="font-semibold text-slate-700 hover:text-slate-900 hover:underline cursor-pointer"
                           >
                             Edit
                           </button>
@@ -1737,7 +1805,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                             onClick={() => setConfirmDeleteLectureId(l.id)}
                             className="font-semibold text-red-700 hover:underline cursor-pointer"
                           >
-                            Delete Lecture &amp; Quiz
+                            Delete
                           </button>
                         </td>
                       </tr>
@@ -2557,6 +2625,143 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Post-Import Generated Lectures & PDF Setup */}
+            {csvImportResult && (
+              <div className="pt-6 border-t border-slate-200 space-y-4">
+                <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <h3 className="text-sm font-bold text-emerald-950">
+                      Import Complete: {csvImportResult.batch?.importedCount || 0} Questions Added!
+                    </h3>
+                  </div>
+                  <p className="text-xs text-emerald-800 leading-relaxed">
+                    All valid multiple choice questions have been parsed and committed to the database.
+                    Below are the lectures that were generated or updated by this import. You can upload PDF slide decks directly to each lecture right here.
+                  </p>
+                </div>
+
+                {/* Generated Lectures List */}
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Generated &amp; Updated Lectures ({csvImportResult.affectedLectures?.length || (importTargetLectureId !== 'auto' ? 1 : 0)})
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      Upload PDFs to make slide decks instantly viewable by students
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3">
+                    {(() => {
+                      const affected =
+                        csvImportResult.affectedLectures && csvImportResult.affectedLectures.length > 0
+                          ? csvImportResult.affectedLectures
+                          : lectures.filter((l: any) => l.id === importTargetLectureId);
+
+                      if (affected.length === 0) {
+                        return (
+                          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 text-center">
+                            No specific lecture breakdown available. View all lectures in the Lectures tab.
+                          </div>
+                        );
+                      }
+
+                      return affected.map((affLect: any) => {
+                        const currentLect = lectures.find((l: any) => l.id === affLect.id) || affLect;
+                        const hasPdf = Boolean(currentLect.pdfUrl);
+
+                        return (
+                          <div
+                            key={affLect.id}
+                            className="p-4 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+                          >
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-teal-50 text-teal-800 border border-teal-200">
+                                  {currentLect.subjectTitle || 'Medical Module'}
+                                </span>
+                                {affLect.isNew && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    ★ Newly Generated
+                                  </span>
+                                )}
+                              </div>
+                              <h5 className="font-bold text-sm text-slate-900 truncate">
+                                Lecture {currentLect.lectureNumber || 1}: {currentLect.title}
+                              </h5>
+                              <p className="text-xs text-slate-500">
+                                {currentLect.questionCount ?? currentLect.questionsCount ?? 'Includes new'} MCQs attached ·{' '}
+                                {hasPdf ? (
+                                  <span className="text-emerald-700 font-medium">✓ PDF attached ({currentLect.pdfUrl})</span>
+                                ) : (
+                                  <span className="text-amber-700 font-medium">⚠ No PDF slide deck attached yet</span>
+                                )}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              {hasPdf && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewPdfModal({ url: currentLect.pdfUrl, title: currentLect.title })}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Preview PDF</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  clearAlerts();
+                                  setUploadPdfTargetLecture(currentLect);
+                                  setShowUploadPdfModal(true);
+                                }}
+                                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer shadow-xs ${
+                                  hasPdf
+                                    ? 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                                    : 'text-white bg-[#0284C7] hover:bg-[#0369A1]'
+                                }`}
+                              >
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>{hasPdf ? 'Replace PDF' : 'Upload PDF for this Lecture'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCsvImportResult(null);
+                      setCsvPreviewReport(null);
+                      setCsvContent('');
+                    }}
+                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    ← Import Another CSV File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSection('lectures');
+                      clearAlerts();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+                  >
+                    <span>View All Lectures &amp; Quizzes</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2627,6 +2832,25 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           lectureTitle={previewPdfModal.title}
           initialPage={1}
           onClose={() => setPreviewPdfModal(null)}
+        />
+      )}
+
+      {/* Admin Quick Upload PDF to Lecture Modal */}
+      {showUploadPdfModal && (
+        <UploadPdfModal
+          isOpen={showUploadPdfModal}
+          onClose={() => {
+            setShowUploadPdfModal(false);
+            setUploadPdfTargetLecture(null);
+          }}
+          targetLecture={uploadPdfTargetLecture}
+          availableLectures={lectures}
+          onSuccess={(updatedLect) => {
+            onRefresh();
+            setFeedbackMsg(
+              `PDF successfully attached to lecture "${updatedLect.title}".`
+            );
+          }}
         />
       )}
 

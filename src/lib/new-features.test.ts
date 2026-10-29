@@ -369,3 +369,101 @@ test('11. Lecture progress reset: clears only target lecture attempts and sessio
     1
   );
 });
+
+// ============================================================================
+// 12. Post-Generation Lecture PDF Attachment
+// ============================================================================
+test('12. Post-Generation PDF Attachment: updates lecture pdfUrl and preserves lecture metadata', () => {
+  interface MockLecture {
+    id: number;
+    title: string;
+    subjectId: number;
+    lectureNumber: number;
+    pdfUrl: string | null;
+  }
+
+  const mockLectures: MockLecture[] = [
+    {
+      id: 501,
+      title: 'Generated Lecture 1: Cardiac Electrophysiology',
+      subjectId: 1,
+      lectureNumber: 1,
+      pdfUrl: null, // Initially generated without PDF
+    },
+    {
+      id: 502,
+      title: 'Generated Lecture 2: Valvular Pathology',
+      subjectId: 1,
+      lectureNumber: 2,
+      pdfUrl: '/lectures/existing-valves.pdf',
+    },
+  ];
+
+  function simulateAttachPdf(lectureId: number, pdfUrl: string | null): MockLecture {
+    const lect = mockLectures.find((l) => l.id === lectureId);
+    if (!lect) throw new Error(`Lecture ${lectureId} not found`);
+    const cleanUrl = pdfUrl && pdfUrl.trim() ? pdfUrl.trim() : null;
+    lect.pdfUrl = cleanUrl;
+    return { ...lect };
+  }
+
+  // 1. Attach PDF to newly generated lecture without PDF
+  const updated1 = simulateAttachPdf(501, '/lectures/1793200000000-cardiac_electrophysiology.pdf');
+  assert.equal(updated1.pdfUrl, '/lectures/1793200000000-cardiac_electrophysiology.pdf');
+  assert.equal(updated1.title, 'Generated Lecture 1: Cardiac Electrophysiology');
+
+  // 2. Replace existing PDF on generated lecture
+  const updated2 = simulateAttachPdf(502, '/lectures/1793200000001-valvular_pathology_v2.pdf');
+  assert.equal(updated2.pdfUrl, '/lectures/1793200000001-valvular_pathology_v2.pdf');
+
+  // 3. Remove/detach PDF
+  const updated3 = simulateAttachPdf(502, null);
+  assert.equal(updated3.pdfUrl, null);
+
+  // 4. Non-existent lecture throws error
+  assert.throws(() => simulateAttachPdf(99999, '/lectures/test.pdf'), /not found/);
+});
+
+test('13. CSV Bulk Import Affected Lecture Tracking: identifies generated and updated lectures for immediate PDF upload', () => {
+  const existingLectures = [
+    { id: 1, subjectId: 10, title: 'Existing Lecture A', pdfUrl: '/lectures/a.pdf' },
+  ];
+
+  const parsedCsvRows = [
+    { subject: 'Cardiology', lecture: 'Existing Lecture A', questionText: 'Q1' },
+    { subject: 'Cardiology', lecture: 'Newly Generated Lecture B', questionText: 'Q2' },
+    { subject: 'Cardiology', lecture: 'Newly Generated Lecture B', questionText: 'Q3' },
+  ];
+
+  const affectedLectureIds = new Set<number>();
+  const newlyCreatedLectureIds = new Set<number>();
+
+  let nextId = 2;
+  const lectureMap = new Map<string, any>(existingLectures.map((l) => [l.title.toLowerCase(), l]));
+
+  for (const row of parsedCsvRows) {
+    const key = row.lecture.toLowerCase();
+    let lect = lectureMap.get(key);
+    if (!lect) {
+      lect = { id: nextId++, subjectId: 10, title: row.lecture, pdfUrl: null };
+      lectureMap.set(key, lect);
+      newlyCreatedLectureIds.add(lect.id);
+    }
+    affectedLectureIds.add(lect.id);
+  }
+
+  // Verify affected lectures
+  assert.equal(affectedLectureIds.size, 2);
+  assert.equal(affectedLectureIds.has(1), true); // existing
+  assert.equal(affectedLectureIds.has(2), true); // newly generated
+
+  // Verify new lectures identified
+  assert.equal(newlyCreatedLectureIds.size, 1);
+  assert.equal(newlyCreatedLectureIds.has(2), true);
+  assert.equal(newlyCreatedLectureIds.has(1), false);
+
+  // Newly generated lecture B is eligible for immediate PDF upload
+  const generatedLect = lectureMap.get('newly generated lecture b');
+  assert.equal(generatedLect.pdfUrl, null);
+});
+
