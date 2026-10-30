@@ -65,6 +65,7 @@ import {
 } from './src/db/repository.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
+import { isR2Configured, getR2PublicUrl, uploadToR2 } from './src/lib/r2-storage.ts';
 
 // Validate AUTH_SESSION_SECRET at module load / startup (fails fast if missing or weak)
 validateAuthConfiguration();
@@ -91,10 +92,17 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 // Serve public static assets (including lecture PDFs)
 app.use(express.static(path.resolve(process.cwd(), 'public')));
 
-// Fallback dynamic resolver for uploaded lecture PDFs: serves from disk or restores from PostgreSQL database
+// Fallback dynamic resolver for uploaded lecture PDFs: serves from disk, redirects to Cloudflare R2, or restores from PostgreSQL database
 app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const safeFilename = path.basename(req.params.filename);
+
+    // 1. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
+    const r2DirectUrl = getR2PublicUrl(safeFilename);
+    if (r2DirectUrl) {
+      return res.redirect(302, r2DirectUrl);
+    }
+
     const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
     const filePath = path.resolve(lecturesDir, safeFilename);
 
@@ -923,7 +931,23 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     );
 
-    // 3. Upload directly to Supabase Storage bucket 'lecture-pdfs' so it appears in the Supabase Dashboard
+    // 3. Upload to Cloudflare R2 (zero egress fees) if configured
+    let r2StorageUrl: string | null = null;
+    if (isR2Configured()) {
+      try {
+        const r2Result = await uploadToR2({
+          fileName: uniqueFileName,
+          data: buffer,
+          contentType: mimeType || 'application/pdf',
+        });
+        r2StorageUrl = r2Result.publicUrl;
+        console.log('✅ Uploaded lecture PDF to Cloudflare R2 (zero egress fees):', uniqueFileName);
+      } catch (r2Err: any) {
+        console.warn('[R2_STORAGE_NOTICE] Cloudflare R2 upload notice:', r2Err?.message || r2Err);
+      }
+    }
+
+    // 4. Upload directly to Supabase Storage bucket 'lecture-pdfs' as secondary backup
     let supabaseStorageUrl: string | null = null;
     if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
       try {
@@ -946,6 +970,9 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     }
 
+    // Determine the optimal public PDF URL: Cloudflare R2 direct URL > relative URL
+    const effectivePdfUrl = r2StorageUrl || relativeUrl;
+
     // If lectureId is provided, automatically attach this uploaded PDF to the lecture
     let attachedLecture = null;
     if (req.body.lectureId) {
@@ -954,14 +981,15 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
         attachedLecture = await attachPdfToLectureAdmin(
           { uid: req.user!.uid, email: req.user!.email },
           targetLecId,
-          relativeUrl
+          effectivePdfUrl
         );
       }
     }
 
     return res.json({
       success: true,
-      url: relativeUrl,
+      url: effectivePdfUrl,
+      r2StorageUrl,
       supabaseStorageUrl,
       fileName: uniqueFileName,
       fileSize: buffer.length,
@@ -969,7 +997,7 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       lecture: attachedLecture,
       message: attachedLecture
         ? `Lecture PDF uploaded and attached to "${attachedLecture.title}" successfully.`
-        : 'Lecture PDF uploaded and saved to Supabase Storage and database successfully.',
+        : 'Lecture PDF uploaded and saved successfully.',
     });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to upload PDF.', 500);
