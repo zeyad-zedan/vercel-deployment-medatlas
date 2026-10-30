@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
 import { warmUpFirebaseAuth } from '../lib/firebase.ts';
-import { BrandLogo } from './BrandLogo.tsx';
 
 interface PublicLandingProps {
   catalog: {
@@ -233,9 +232,14 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]">
       {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 lg:px-12 py-3.5 bg-white/95 backdrop-blur border-b border-slate-200">
-        {/* Zone 1: Brand Title Wordmark with Arabic "الأطلس" */}
-        <BrandLogo href="/" size="md" />
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 lg:px-12 py-4 bg-white/95 backdrop-blur border-b border-slate-200">
+        {/* Zone 1: Brand Title Wordmark (single element) */}
+        <a
+          href="#top"
+          className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+        >
+          MedAtlas MCQ
+        </a>
 
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}
         <nav
@@ -644,10 +648,8 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
       {/* Footer with About, Contact, Privacy Policy, and Terms of Use */}
       <footer className="bg-white border-t border-slate-200 px-6 lg:px-12 py-8">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <div className="flex items-center gap-3">
-            <BrandLogo href="/" size="sm" showSubtitle={false} />
-            <span className="text-slate-300">|</span>
-            <span className="font-medium text-slate-600">منصة الأطلس الطبية · Medical Education &amp; Examination Platform</span>
+          <div>
+            <span className="font-semibold text-slate-800">MedAtlas MCQ</span> · Lecture-Based Medical Education Platform
           </div>
           <div className="flex flex-wrap items-center gap-6">
             <button

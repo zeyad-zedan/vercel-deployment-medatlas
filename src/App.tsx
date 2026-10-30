@@ -33,7 +33,6 @@ import {
   ProfileSettingsView,
 } from './components/StudentViews.tsx';
 import { AdminConsole } from './components/AdminConsole.tsx';
-import { BrandLogo } from './components/BrandLogo.tsx';
 
 const VALID_TABS = [
   'dashboard',
@@ -312,23 +311,6 @@ export default function App() {
     updateBrowserUrl('dashboard', null, true);
   };
 
-  const handleHomeNavigation = (e?: React.MouseEvent) => {
-    if (e) e.preventDefault();
-    try {
-      localStorage.removeItem('medatlas_active_session_id');
-    } catch {}
-    if (activeSession) {
-      if (window.confirm('Leave current session and return to dashboard?')) {
-        setActiveSession(null);
-        setActiveTab('dashboard');
-        updateBrowserUrl('dashboard', null, true);
-      }
-    } else {
-      setActiveTab('dashboard');
-      updateBrowserUrl('dashboard', null, true);
-    }
-  };
-
   const handleStartSession = async (params: any) => {
     setGlobalError(null);
     try {
@@ -402,8 +384,10 @@ export default function App() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
-          <BrandLogo href="/" onClick={handleHomeNavigation} size="md" />
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
+            MedAtlas MCQ
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -488,8 +472,8 @@ export default function App() {
         }`}
       >
         {/* Top Workspace Header */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 sm:gap-8">
-          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4 sm:gap-8">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             {/* Side Panel Toggle Button */}
             <button
               type="button"
@@ -504,13 +488,6 @@ export default function App() {
                 <PanelLeftOpen className="w-5 h-5 text-slate-700" />
               )}
             </button>
-
-            {!sidebarOpen && (
-              <div className="hidden sm:flex items-center pr-3 border-r border-slate-200">
-                <BrandLogo href="/" onClick={handleHomeNavigation} size="sm" showSubtitle={false} />
-              </div>
-            )}
-
             <span className="text-sm font-semibold text-slate-700 truncate">
               {activeSession
                 ? `Active Session / ${activeSession.title}`
