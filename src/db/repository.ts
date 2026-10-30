@@ -4913,6 +4913,12 @@ export async function saveUploadedPdfFileAdmin(
       })
       .returning();
 
+    pdfTelegramMetaCache.set(saved.url, {
+      telegramFileId: saved.telegramFileId || null,
+      mimeType: saved.mimeType || 'application/pdf',
+      fileSize: saved.fileSize || 0,
+    });
+
     await logAdminAction(
       verifiedAdmin.uid,
       verifiedAdmin.email,
@@ -4930,6 +4936,45 @@ export async function saveUploadedPdfFileAdmin(
   }
 }
 
+const pdfTelegramMetaCache = new Map<
+  string,
+  { telegramFileId: string | null; mimeType: string; fileSize: number }
+>();
+
+/**
+ * Lightweight metadata lookup for Plan B Telegram streaming.
+ * Excludes data_base64 so zero large binary payload is transferred from Supabase PostgreSQL.
+ */
+export async function getPdfTelegramMetadataByUrl(url: string) {
+  const cached = pdfTelegramMetaCache.get(url);
+  if (cached && cached.telegramFileId) {
+    return cached;
+  }
+  try {
+    const rows = await db
+      .select({
+        telegramFileId: lectureFiles.telegramFileId,
+        mimeType: lectureFiles.mimeType,
+        fileSize: lectureFiles.fileSize,
+      })
+      .from(lectureFiles)
+      .where(eq(lectureFiles.url, url))
+      .limit(1);
+    const record = rows[0] || null;
+    if (record) {
+      pdfTelegramMetaCache.set(url, {
+        telegramFileId: record.telegramFileId || null,
+        mimeType: record.mimeType || 'application/pdf',
+        fileSize: record.fileSize || 0,
+      });
+    }
+    return record;
+  } catch (error) {
+    console.error('Error fetching PDF Telegram metadata from database:', error);
+    return null;
+  }
+}
+
 /**
  * Retrieves a stored lecture PDF by its URL from the PostgreSQL database.
  */
@@ -4940,7 +4985,15 @@ export async function getUploadedPdfByUrl(url: string) {
       .from(lectureFiles)
       .where(eq(lectureFiles.url, url))
       .limit(1);
-    return rows[0] || null;
+    const row = rows[0] || null;
+    if (row) {
+      pdfTelegramMetaCache.set(url, {
+        telegramFileId: row.telegramFileId || null,
+        mimeType: row.mimeType || 'application/pdf',
+        fileSize: row.fileSize || 0,
+      });
+    }
+    return row;
   } catch (error) {
     console.error('Error fetching uploaded PDF from database:', error);
     return null;
@@ -4956,6 +5009,12 @@ export async function updateLectureFileTelegramId(url: string, telegramFileId: s
       .update(lectureFiles)
       .set({ telegramFileId })
       .where(eq(lectureFiles.url, url));
+    const existing = pdfTelegramMetaCache.get(url);
+    pdfTelegramMetaCache.set(url, {
+      telegramFileId,
+      mimeType: existing?.mimeType || 'application/pdf',
+      fileSize: existing?.fileSize || 0,
+    });
     return true;
   } catch (error) {
     console.error('Error updating telegram_file_id in database:', error);

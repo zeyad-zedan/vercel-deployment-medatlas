@@ -61,6 +61,7 @@ import {
   exportQuestionBankCsvAdmin,
   saveUploadedPdfFileAdmin,
   getUploadedPdfByUrl,
+  getPdfTelegramMetadataByUrl,
   attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
@@ -101,10 +102,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Serve public static assets (including lecture PDFs)
-app.use(express.static(path.resolve(process.cwd(), 'public')));
-
-// Dynamic resolver for uploaded lecture PDFs:
+// Dynamic resolver for uploaded lecture PDFs (must precede express.static so egress tracking and Plan B switch are always active):
 // - If Plan B is active (monthly egress >= 85%), streams directly from Telegram CDN (0 Supabase egress)
 // - If Cloudflare R2 is configured, redirects directly to R2 CDN
 // - Otherwise serves from local cache / database and tracks monthly PDF egress
@@ -115,10 +113,10 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
 
     // 1. If Plan B (Telegram CDN fallback) is active (e.g. egress >= 85%), stream directly from Telegram with ZERO Supabase egress
     if (isPlanBActive()) {
-      const fileRecord = await getUploadedPdfByUrl(relativeUrl);
-      if (fileRecord?.telegramFileId) {
+      const fileMeta = await getPdfTelegramMetadataByUrl(relativeUrl);
+      if (fileMeta?.telegramFileId) {
         try {
-          const tgStream = await fetchTelegramPdfBuffer(fileRecord.telegramFileId);
+          const tgStream = await fetchTelegramPdfBuffer(fileMeta.telegramFileId);
           res.setHeader('Content-Type', tgStream.contentType || 'application/pdf');
           res.setHeader('Content-Length', tgStream.contentLength);
           res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -149,6 +147,7 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
       const stats = fs.statSync(filePath);
       recordPdfEgress(stats.size);
       res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('X-MedAtlas-Source', 'local-cache');
       return res.sendFile(filePath);
     }
 
@@ -170,6 +169,7 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
       res.setHeader('Content-Length', buf.length);
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('X-MedAtlas-Source', 'supabase-db');
       return res.send(buf);
     }
     return next();
@@ -177,6 +177,9 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
     return next(err);
   }
 });
+
+// Serve public static assets (excluding /lectures/:filename handled above)
+app.use(express.static(path.resolve(process.cwd(), 'public')));
 
 // Tight default JSON body parser (64kb) for all API and auth endpoints;
 // 5mb parser is scoped exclusively to authenticated admin CSV import endpoints;

@@ -63,7 +63,7 @@ export async function uploadPdfToTelegram(
   );
   formData.append(
     'document',
-    new Blob([buffer], { type: 'application/pdf' }),
+    new Blob([new Uint8Array(buffer)], { type: 'application/pdf' }),
     fileName
   );
 
