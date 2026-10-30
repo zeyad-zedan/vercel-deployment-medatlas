@@ -66,6 +66,7 @@ import {
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
 import { isR2Configured, getR2PublicUrl, uploadToR2 } from './src/lib/r2-storage.ts';
+import { uploadPdfToFirebaseStorage, isFirebaseStorageConfigured } from './src/lib/firebase-storage.ts';
 
 // Validate AUTH_SESSION_SECRET at module load / startup (fails fast if missing or weak)
 validateAuthConfiguration();
@@ -931,7 +932,19 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     );
 
-    // 3. Upload to Cloudflare R2 (zero egress fees) if configured
+    // 3. Upload to Firebase Storage (Google Cloud CDN, no credit card required, 30GB/mo free egress)
+    let firebaseStorageUrl: string | null = null;
+    if (isFirebaseStorageConfigured()) {
+      try {
+        const fbResult = await uploadPdfToFirebaseStorage(uniqueFileName, buffer, mimeType || 'application/pdf');
+        firebaseStorageUrl = fbResult.url;
+        console.log('✅ Uploaded lecture PDF to Firebase Storage (no card required):', uniqueFileName);
+      } catch (fbErr: any) {
+        console.warn('[FIREBASE_STORAGE_NOTICE] Firebase Storage upload notice:', fbErr?.message || fbErr);
+      }
+    }
+
+    // 4. Upload to Cloudflare R2 (zero egress fees) if configured
     let r2StorageUrl: string | null = null;
     if (isR2Configured()) {
       try {
@@ -947,7 +960,7 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     }
 
-    // 4. Upload directly to Supabase Storage bucket 'lecture-pdfs' as secondary backup
+    // 5. Upload directly to Supabase Storage bucket 'lecture-pdfs' as fallback
     let supabaseStorageUrl: string | null = null;
     if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
       try {
@@ -970,8 +983,8 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
       }
     }
 
-    // Determine the optimal public PDF URL: Cloudflare R2 direct URL > relative URL
-    const effectivePdfUrl = r2StorageUrl || relativeUrl;
+    // Determine the optimal public PDF URL: Firebase Storage > Cloudflare R2 > relative URL
+    const effectivePdfUrl = firebaseStorageUrl || r2StorageUrl || relativeUrl;
 
     // If lectureId is provided, automatically attach this uploaded PDF to the lecture
     let attachedLecture = null;
@@ -989,6 +1002,7 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
     return res.json({
       success: true,
       url: effectivePdfUrl,
+      firebaseStorageUrl,
       r2StorageUrl,
       supabaseStorageUrl,
       fileName: uniqueFileName,
