@@ -851,10 +851,19 @@ export const requireAuth = async (
         ? tokenIssuedSec * 1000
         : null;
 
-    const state = await lookupUserSessionState(decodedToken.uid, decodedToken.email, {
-      authType: 'firebase',
-      tokenIssuedMs,
-    });
+    let state: UserSessionStateRecord;
+    try {
+      state = await lookupUserSessionState(decodedToken.uid, decodedToken.email, {
+        authType: 'firebase',
+        tokenIssuedMs,
+      });
+    } catch (dbErr: any) {
+      console.error('[AUTH_DB_LOOKUP_ERROR] Database query failed during Firebase session lookup:', {
+        message: dbErr?.message,
+        code: dbErr?.code,
+      });
+      return res.status(500).json({ error: 'Authentication verification service error.' });
+    }
 
     if (state.isDeleted) {
       return res.status(401).json({
@@ -905,6 +914,12 @@ export const requireAuth = async (
     return next();
   } catch (err: any) {
     const code = String(err?.code || err?.errorInfo?.code || '');
+    console.warn('[AUTH_FIREBASE_VERIFICATION_REJECTED]', {
+      code,
+      message: err?.message,
+      name: err?.name,
+      isTransient: Boolean(err?.isTransientProviderError),
+    });
     if (code === 'auth/id-token-revoked') {
       return res.status(401).json({
         error: 'Unauthorized: Session has been revoked. Please sign in again.',

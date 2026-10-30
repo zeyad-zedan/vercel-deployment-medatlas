@@ -13,4 +13,10 @@ backups/
 *.dump
 *.sql.gz
 *.enc
+tools/
+start-pdf-tool.bat
+start-remote-tunnel.bat
+*.bat
+public/lectures/*.pdf
+
 
