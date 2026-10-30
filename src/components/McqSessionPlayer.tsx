@@ -62,6 +62,10 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
     const qs = initialSession?.questions || [];
     if (!qs.length || initialSession?.status === 'completed') return 0;
 
+    const firstUnsolvedIdx = qs.findIndex(
+      (q: any) => !q.submitted && !q.selectedDisplayed
+    );
+
     // 1. Check if user had a saved question index in localStorage for this specific session
     if (typeof window !== 'undefined' && initialSession?.id) {
       try {
@@ -69,6 +73,10 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         if (savedIdxStr !== null) {
           const parsed = parseInt(savedIdxStr, 10);
           if (!isNaN(parsed) && parsed >= 0 && parsed < qs.length) {
+            // If the saved question was already submitted, but there are unsubmitted questions, resume at first unsolved
+            if (qs[parsed]?.submitted && firstUnsolvedIdx !== -1) {
+              return firstUnsolvedIdx;
+            }
             return parsed;
           }
         }
@@ -76,10 +84,6 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
     }
 
     // 2. Otherwise find the first question that is unsolved (no answer selected/submitted)
-    // E.g., if 10 MCQs are solved (indices 0..9), findIndex returns 10, which continues from Q.11!
-    const firstUnsolvedIdx = qs.findIndex(
-      (q: any) => !q.submitted && !q.selectedDisplayed
-    );
     if (firstUnsolvedIdx !== -1) {
       return firstUnsolvedIdx;
     }
@@ -904,13 +908,40 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 Score: {session.scorePercentage}% ({session.correctCount} of {session.totalQuestions} Correct)
               </h2>
             </div>
-            <button
-              type="button"
-              onClick={handleSafeExit}
-              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl transition-colors cursor-pointer"
-            >
-              Back to Workspace
-            </button>
+            <div className="flex items-center gap-2">
+              {session.lectureId && !isExamMode && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (window.confirm('Restart this lecture quiz fresh from Question 1?')) {
+                      try {
+                        await api.resetLectureProgress(session.lectureId);
+                        const res = await api.startSession({
+                          mode: 'study',
+                          lectureIds: [session.lectureId],
+                          title: session.title,
+                        });
+                        setSession(res.session);
+                        setCurrentIndex(0);
+                        setLocalSelections({});
+                      } catch (err: any) {
+                        setErrorMsg(err?.message || 'Could not restart quiz.');
+                      }
+                    }
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl transition-colors cursor-pointer"
+                >
+                  Restart Quiz
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleSafeExit}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl transition-colors cursor-pointer"
+              >
+                Back to Workspace
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono-tabular text-center">

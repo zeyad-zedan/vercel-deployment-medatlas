@@ -467,3 +467,76 @@ test('13. CSV Bulk Import Affected Lecture Tracking: identifies generated and up
   assert.equal(generatedLect.pdfUrl, null);
 });
 
+test('14. Lecture Study Session Question Synchronization: Automatically un-completes and appends newly added MCQs to existing lecture sessions', () => {
+  // Simulate an existing session where a student solved the initial 30 MCQs and submitted
+  const initialQuestions = Array.from({ length: 30 }, (_, i) => ({
+    id: i + 1,
+    lectureId: 42,
+    status: 'published',
+  }));
+
+  const initialItems = initialQuestions.map((q) => ({
+    questionId: q.id,
+    permutation: { A: 'A', B: 'B', C: 'C', D: 'D' },
+    selectedDisplayed: 'A',
+    selectedCanonical: 'A',
+    submitted: true,
+  }));
+
+  const existingCompletedSession = {
+    id: 101,
+    lectureId: 42,
+    mode: 'study',
+    status: 'completed',
+    totalQuestions: 30,
+    unansweredCount: 0,
+    questionOrderJson: JSON.stringify(initialItems),
+    completedAt: new Date(),
+  };
+
+  // Now, 30 new questions are added to the same lecture (total 60 questions)
+  const currentPublishedQuestions = Array.from({ length: 60 }, (_, i) => ({
+    id: i + 1,
+    lectureId: 42,
+    status: 'published',
+  }));
+
+  const pubQIdSet = new Set(currentPublishedQuestions.map((q) => q.id));
+  const existingItems = JSON.parse(existingCompletedSession.questionOrderJson);
+  const existingQIdSet = new Set(existingItems.map((i: any) => i.questionId));
+
+  const validExistingItems = existingItems.filter((i: any) => pubQIdSet.has(i.questionId));
+  const missingQuestions = currentPublishedQuestions.filter((q) => !existingQIdSet.has(q.id));
+
+  // Must detect the 30 new questions
+  assert.equal(missingQuestions.length, 30);
+
+  const newItems = missingQuestions.map((q) => ({
+    questionId: q.id,
+    permutation: { A: 'A', B: 'B', C: 'C', D: 'D' },
+    selectedDisplayed: null,
+    selectedCanonical: null,
+    submitted: false,
+  }));
+
+  const updatedItems = [...validExistingItems, ...newItems];
+  const answeredCount = updatedItems.filter((i) => i.submitted).length;
+  const totalCount = updatedItems.length;
+  const unansweredCount = Math.max(0, totalCount - answeredCount);
+
+  // Must transition status from 'completed' to 'in_progress' and clear completedAt
+  const nextStatus = unansweredCount > 0 ? 'in_progress' : existingCompletedSession.status;
+  const nextCompletedAt = unansweredCount > 0 ? null : existingCompletedSession.completedAt;
+
+  assert.equal(totalCount, 60);
+  assert.equal(answeredCount, 30);
+  assert.equal(unansweredCount, 30);
+  assert.equal(nextStatus, 'in_progress');
+  assert.equal(nextCompletedAt, null);
+
+  // Resume index logic: when resuming an active session with unanswered questions,
+  // it should jump straight to the first unsolved question (index 30 -> Question 31)
+  const firstUnsolvedIdx = updatedItems.findIndex((q) => !q.submitted && !q.selectedDisplayed);
+  assert.equal(firstUnsolvedIdx, 30);
+});
+

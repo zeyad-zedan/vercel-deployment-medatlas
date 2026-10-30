@@ -2964,6 +2964,69 @@ export async function createPracticeOrExamSession(
           }
         }
 
+        // Check if new questions were added to this lecture or if any questions were unpublished
+        const pubLectureQuestions = await db
+          .select()
+          .from(questions)
+          .where(
+            and(
+              eq(questions.lectureId, targetLectureId),
+              eq(questions.status, 'published')
+            )
+          )
+          .orderBy(asc(questions.id));
+
+        const pubQIdSet = new Set(pubLectureQuestions.map((q) => q.id));
+
+        let existingItems: SessionOrderItem[] = [];
+        try {
+          existingItems = JSON.parse(bestSession.questionOrderJson || '[]');
+        } catch {
+          existingItems = [];
+        }
+
+        const existingQIdSet = new Set(existingItems.map((i) => i.questionId));
+
+        // Keep items whose questions are still published
+        const validExistingItems = existingItems.filter((i) => pubQIdSet.has(i.questionId));
+
+        // Detect newly added published questions for this lecture
+        const missingQuestions = pubLectureQuestions.filter((q) => !existingQIdSet.has(q.id));
+
+        if (missingQuestions.length > 0 || validExistingItems.length !== existingItems.length) {
+          const newItems: SessionOrderItem[] = missingQuestions.map((q, idx) => ({
+            questionId: q.id,
+            permutation: createOptionPermutation(
+              Boolean(bestSession.shuffleOptions || params.shuffleOptions),
+              Date.now() + idx * 97 + q.id
+            ),
+            selectedDisplayed: null,
+            selectedCanonical: null,
+            submitted: false,
+          }));
+
+          const updatedItems = [...validExistingItems, ...newItems];
+          const answeredCount = updatedItems.filter((i) => i.submitted).length;
+          const totalCount = updatedItems.length;
+          const unansweredCount = Math.max(0, totalCount - answeredCount);
+
+          // If there are newly added questions or any unanswered questions,
+          // the session MUST NOT remain completed; it must be in_progress so the student can study!
+          const nextStatus = unansweredCount > 0 ? 'in_progress' : bestSession.status;
+          const nextCompletedAt = unansweredCount > 0 ? null : bestSession.completedAt;
+
+          await db
+            .update(examSessions)
+            .set({
+              questionOrderJson: JSON.stringify(updatedItems),
+              totalQuestions: totalCount,
+              unansweredCount,
+              status: nextStatus,
+              completedAt: nextCompletedAt,
+            })
+            .where(eq(examSessions.id, bestSession.id));
+        }
+
         // Return the single existing lecture session with its progress automatically applied
         return {
           session: await getExamSessionForStudent(userUid, bestSession.id),
