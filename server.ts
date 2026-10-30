@@ -67,6 +67,17 @@ import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
 import { isR2Configured, getR2PublicUrl, uploadToR2 } from './src/lib/r2-storage.ts';
 import { uploadPdfToFirebaseStorage, isFirebaseStorageConfigured } from './src/lib/firebase-storage.ts';
+import {
+  isTelegramConfigured,
+  uploadPdfToTelegram,
+  fetchTelegramPdfBuffer,
+} from './src/lib/telegram-storage.ts';
+import {
+  isPlanBActive,
+  recordPdfEgress,
+  getEgressStatus,
+  setPlanBOverride,
+} from './src/lib/egress-monitor.ts';
 
 // Validate AUTH_SESSION_SECRET at module load / startup (fails fast if missing or weak)
 validateAuthConfiguration();
@@ -93,12 +104,34 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 // Serve public static assets (including lecture PDFs)
 app.use(express.static(path.resolve(process.cwd(), 'public')));
 
-// Fallback dynamic resolver for uploaded lecture PDFs: serves from disk, redirects to Cloudflare R2, or restores from PostgreSQL database
+// Dynamic resolver for uploaded lecture PDFs:
+// - If Plan B is active (monthly egress >= 85%), streams directly from Telegram CDN (0 Supabase egress)
+// - If Cloudflare R2 is configured, redirects directly to R2 CDN
+// - Otherwise serves from local cache / database and tracks monthly PDF egress
 app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const safeFilename = path.basename(req.params.filename);
+    const relativeUrl = `/lectures/${safeFilename}`;
 
-    // 1. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
+    // 1. If Plan B (Telegram CDN fallback) is active (e.g. egress >= 85%), stream directly from Telegram with ZERO Supabase egress
+    if (isPlanBActive()) {
+      const fileRecord = await getUploadedPdfByUrl(relativeUrl);
+      if (fileRecord?.telegramFileId) {
+        try {
+          const tgStream = await fetchTelegramPdfBuffer(fileRecord.telegramFileId);
+          res.setHeader('Content-Type', tgStream.contentType || 'application/pdf');
+          res.setHeader('Content-Length', tgStream.contentLength);
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('X-MedAtlas-Source', 'telegram-plan-b');
+          return res.send(tgStream.buffer);
+        } catch (tgErr: any) {
+          console.warn('[TELEGRAM_STREAM_FALLBACK_WARN] Failed streaming from Telegram, falling back to local/DB:', tgErr?.message || tgErr);
+        }
+      }
+    }
+
+    // 2. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
     const r2DirectUrl = getR2PublicUrl(safeFilename);
     if (r2DirectUrl) {
       return res.redirect(302, r2DirectUrl);
@@ -113,11 +146,13 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
     }
 
     if (fs.existsSync(filePath)) {
+      const stats = fs.statSync(filePath);
+      recordPdfEgress(stats.size);
+      res.setHeader('Access-Control-Allow-Origin', '*');
       return res.sendFile(filePath);
     }
 
     // If missing from local disk, fetch directly from PostgreSQL database `lecture_files` table
-    const relativeUrl = `/lectures/${safeFilename}`;
     const fileRecord = await getUploadedPdfByUrl(relativeUrl);
     if (fileRecord && fileRecord.dataBase64) {
       const buf = Buffer.from(fileRecord.dataBase64, 'base64');
@@ -130,9 +165,11 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
       } catch {
         // Disk write failure is non-fatal; we still serve from DB
       }
+      recordPdfEgress(buf.length);
       res.setHeader('Content-Type', fileRecord.mimeType || 'application/pdf');
       res.setHeader('Content-Length', buf.length);
       res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Access-Control-Allow-Origin', '*');
       return res.send(buf);
     }
     return next();
@@ -795,6 +832,18 @@ app.post('/api/bookmarks/toggle', requireAuth, async (req: AuthRequest, res) => 
 // ============================================================================
 // PROTECTED ADMINISTRATOR API
 // ============================================================================
+app.get('/api/admin/egress-status', requireAuth, requireAdmin, (_req: AuthRequest, res) => {
+  return res.json(getEgressStatus());
+});
+
+app.post('/api/admin/egress-fallback', requireAuth, requireAdmin, (req: AuthRequest, res) => {
+  const { forceFallback } = req.body || {};
+  if (forceFallback === true || forceFallback === false || forceFallback === null) {
+    setPlanBOverride(forceFallback);
+  }
+  return res.json(getEgressStatus());
+});
+
 app.get('/api/admin/overview', requireAuth, requireAdmin, async (_req: AuthRequest, res) => {
   try {
     const data = await getAdminDashboardData();
@@ -920,7 +969,19 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
     const targetFilePath = path.join(lecturesDir, uniqueFileName);
     fs.writeFileSync(targetFilePath, buffer);
 
-    // 2. Save directly to PostgreSQL database `lecture_files` table
+    // 2. Upload to Telegram Channel (Plan B Emergency Fallback, 0 egress cost) if configured
+    let telegramFileId: string | null = null;
+    if (isTelegramConfigured()) {
+      try {
+        const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `📄 MedAtlas Lecture: ${fileName}`);
+        telegramFileId = tgResult.fileId;
+        console.log('✅ Uploaded lecture PDF backup to Telegram (Plan B CDN):', uniqueFileName, 'fileId:', telegramFileId);
+      } catch (tgErr: any) {
+        console.warn('[TELEGRAM_STORAGE_NOTICE] Telegram upload notice:', tgErr?.message || tgErr);
+      }
+    }
+
+    // 3. Save directly to PostgreSQL database `lecture_files` table with telegramFileId
     const savedRecord = await saveUploadedPdfFileAdmin(
       { uid: req.user!.uid, email: req.user!.email },
       {
@@ -929,6 +990,7 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
         fileSize: buffer.length,
         dataBase64: base64Clean,
         url: relativeUrl,
+        telegramFileId,
       }
     );
 
@@ -1075,6 +1137,17 @@ app.post('/api/admin/lectures/:id/attach-pdf', requireAuth, requireAdmin, async 
       }
       fs.writeFileSync(path.join(lecturesDir, uniqueFileName), buffer);
 
+      let telegramFileId: string | null = null;
+      if (isTelegramConfigured()) {
+        try {
+          const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `📄 MedAtlas Lecture: ${fileName}`);
+          telegramFileId = tgResult.fileId;
+          console.log('✅ Uploaded lecture PDF backup to Telegram (Plan B CDN):', uniqueFileName, 'fileId:', telegramFileId);
+        } catch (tgErr: any) {
+          console.warn('[TELEGRAM_STORAGE_NOTICE] Telegram upload notice:', tgErr?.message || tgErr);
+        }
+      }
+
       await saveUploadedPdfFileAdmin(
         { uid: req.user!.uid, email: req.user!.email },
         {
@@ -1083,6 +1156,7 @@ app.post('/api/admin/lectures/:id/attach-pdf', requireAuth, requireAdmin, async 
           fileSize: buffer.length,
           dataBase64: base64Clean,
           url: relativeUrl,
+          telegramFileId,
         }
       );
 

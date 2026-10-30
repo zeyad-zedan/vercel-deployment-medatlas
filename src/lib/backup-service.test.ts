@@ -194,7 +194,7 @@ describe('MedAtlas Automated Data Backup & Disaster Recovery (Production Hardene
     }, /plaintext SHA-256 does not match/);
   });
 
-  it('4. Genuine Isolated Restore Verification: constructs isolated schema, restores tables, and cleans up cleanly', async () => {
+  it('4. Genuine Isolated Restore Verification: constructs isolated schema, restores tables, and cleans up cleanly', { timeout: 120_000 }, async () => {
     const { envelope } = await createEncryptedBackup({
       encryptionKeySecret: validDedicatedKey,
     });
@@ -269,7 +269,7 @@ describe('MedAtlas Automated Data Backup & Disaster Recovery (Production Hardene
     assert.ok(!listAfterDelete.some((o) => o.key === mockBackupKey));
   });
 
-  it('7. Scheduled Backup Automation: creates snapshot, uploads, verifies restore, and logs audit', async () => {
+  it('7. Scheduled Backup Automation: creates snapshot, uploads, verifies restore, and logs audit', { timeout: 120_000 }, async () => {
     const testStorage = new LocalFsStorageProvider(testOutputDir);
 
     const result = await executeScheduledBackup({

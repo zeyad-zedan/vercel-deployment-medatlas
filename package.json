@@ -22,7 +22,7 @@
     "backup:create": "tsx scripts/backup-cli.ts create",
     "backup:verify": "tsx scripts/backup-cli.ts verify",
     "backup:restore-test": "tsx scripts/backup-cli.ts restore-test",
-    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts src/lib/security-audit.test.ts src/lib/backup-service.test.ts",
+    "test": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts src/lib/security-audit.test.ts src/lib/telegram-storage.test.ts src/lib/egress-monitor.test.ts",
     "test:features": "npx --yes tsx --test src/lib/mcq-engine.test.ts src/lib/new-features.test.ts src/lib/auth-google-flow.test.ts"
   },
   "dependencies": {

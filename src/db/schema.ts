@@ -106,6 +106,7 @@ export const lectureFiles = pgTable('lecture_files', {
   fileSize: integer('file_size').notNull().default(0),
   dataBase64: text('data_base64').notNull(),
   url: text('url').notNull().unique(),
+  telegramFileId: text('telegram_file_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

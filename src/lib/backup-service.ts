@@ -512,6 +512,7 @@ export async function testRestoreBackup(
           file_size INTEGER NOT NULL DEFAULT 0,
           data_base64 TEXT NOT NULL,
           url TEXT NOT NULL UNIQUE,
+          telegram_file_id TEXT,
           created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
         );
 
@@ -626,17 +627,32 @@ export async function testRestoreBackup(
         );
       `);
 
-      // 3. Insert records in foreign-key topological order using parameterized queries
+      // 3. Insert records in foreign-key topological order using batch parameterized queries
       const insertRows = async (tableName: string, rows: any[]) => {
         if (!rows || rows.length === 0) return;
-        for (const row of rows) {
-          const keys = Object.keys(row);
+        const CHUNK_SIZE = 50;
+        for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+          const chunk = rows.slice(i, i + CHUNK_SIZE);
+          const firstRow = chunk[0];
+          const keys = Object.keys(firstRow);
           if (keys.length === 0) continue;
           const quotedColumns = keys.map((k) => `"${k}"`).join(', ');
-          const placeholders = keys.map((_, idx) => `$${idx + 1}`).join(', ');
-          const values = keys.map((k) => row[k]);
+
+          const valueClauses: string[] = [];
+          const values: any[] = [];
+          let paramIdx = 1;
+
+          for (const row of chunk) {
+            const rowPlaceholders: string[] = [];
+            for (const key of keys) {
+              rowPlaceholders.push(`$${paramIdx++}`);
+              values.push(row[key]);
+            }
+            valueClauses.push(`(${rowPlaceholders.join(', ')})`);
+          }
+
           await client.query(
-            `INSERT INTO "${isolatedSchema}"."${tableName}" (${quotedColumns}) VALUES (${placeholders})`,
+            `INSERT INTO "${isolatedSchema}"."${tableName}" (${quotedColumns}) VALUES ${valueClauses.join(', ')}`,
             values
           );
         }

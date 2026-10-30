@@ -18,5 +18,6 @@ start-pdf-tool.bat
 start-remote-tunnel.bat
 *.bat
 public/lectures/*.pdf
+.egress-tracker.json
 
 

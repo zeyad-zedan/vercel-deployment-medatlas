@@ -4886,6 +4886,7 @@ export async function saveUploadedPdfFileAdmin(
     fileSize: number;
     dataBase64: string;
     url: string;
+    telegramFileId?: string | null;
   }
 ) {
   try {
@@ -4898,6 +4899,7 @@ export async function saveUploadedPdfFileAdmin(
         fileSize: Number(params.fileSize) || 0,
         dataBase64: params.dataBase64,
         url: params.url,
+        telegramFileId: params.telegramFileId || null,
       })
       .onConflictDoUpdate({
         target: lectureFiles.url,
@@ -4906,6 +4908,7 @@ export async function saveUploadedPdfFileAdmin(
           fileSize: Number(params.fileSize) || 0,
           dataBase64: params.dataBase64,
           mimeType: params.mimeType || 'application/pdf',
+          telegramFileId: params.telegramFileId || null,
         },
       })
       .returning();
@@ -4941,6 +4944,22 @@ export async function getUploadedPdfByUrl(url: string) {
   } catch (error) {
     console.error('Error fetching uploaded PDF from database:', error);
     return null;
+  }
+}
+
+/**
+ * Updates the telegram_file_id for an uploaded PDF file record.
+ */
+export async function updateLectureFileTelegramId(url: string, telegramFileId: string) {
+  try {
+    await db
+      .update(lectureFiles)
+      .set({ telegramFileId })
+      .where(eq(lectureFiles.url, url));
+    return true;
+  } catch (error) {
+    console.error('Error updating telegram_file_id in database:', error);
+    return false;
   }
 }
 
