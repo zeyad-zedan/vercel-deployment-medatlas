@@ -23,8 +23,10 @@ import {
   HelpCircle,
   AlertCircle,
   Upload,
+  Tag,
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
+import { parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
 
@@ -1098,6 +1100,7 @@ export const CustomPracticeView: React.FC<{
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>([]);
   const [selectedLectureIds, setSelectedLectureIds] = useState<number[]>([]);
   const [selectedDifficulties, setSelectedDifficulties] = useState<string[]>([]);
+  const [selectedSpecialTags, setSelectedSpecialTags] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState('');
   const [questionCount, setQuestionCount] = useState(5);
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
@@ -1116,6 +1119,33 @@ export const CustomPracticeView: React.FC<{
       ? allLectures
       : allLectures.filter((l: any) => selectedSubjectIds.includes(l.subjectId));
 
+  const activeScopeLectures =
+    selectedLectureIds.length > 0
+      ? filteredLectures.filter((l: any) => selectedLectureIds.includes(l.id))
+      : filteredLectures;
+
+  const specialTagCountsMap = new Map<string, { label: string; count: number }>();
+  for (const preset of ['Old Exam', 'كتاب القسم']) {
+    specialTagCountsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
+  }
+  for (const gt of catalog?.specialTags || []) {
+    if (gt?.label) {
+      specialTagCountsMap.set(gt.label.toLowerCase(), { label: gt.label, count: 0 });
+    }
+  }
+  for (const lect of activeScopeLectures) {
+    const breakdown = lect.specialTagBreakdown || {};
+    for (const [label, cnt] of Object.entries(breakdown)) {
+      const key = label.toLowerCase();
+      const existing = specialTagCountsMap.get(key);
+      specialTagCountsMap.set(key, {
+        label: existing?.label || label,
+        count: (existing?.count || 0) + Number(cnt || 0),
+      });
+    }
+  }
+  const availableSpecialTagOptions = Array.from(specialTagCountsMap.values());
+
   const handleLaunchCustom = (e: React.FormEvent) => {
     e.preventDefault();
     onStartSession({
@@ -1129,6 +1159,7 @@ export const CustomPracticeView: React.FC<{
       subjectIds: selectedSubjectIds.length > 0 ? selectedSubjectIds : undefined,
       lectureIds: selectedLectureIds.length > 0 ? selectedLectureIds : undefined,
       difficulties: selectedDifficulties.length > 0 ? selectedDifficulties : undefined,
+      specialTags: selectedSpecialTags.length > 0 ? selectedSpecialTags : undefined,
       tagFilter: tagFilter.trim() || undefined,
       requestedCount: Number(questionCount) || 5,
       shuffleQuestions,
@@ -1281,6 +1312,64 @@ export const CustomPracticeView: React.FC<{
               placeholder="e.g., Collagen, GFR, Necrosis"
               className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
             />
+          </div>
+        </div>
+
+        {/* 6. Special Tags / Source Labels Filter */}
+        <div className="space-y-2.5 pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-bold text-slate-900">
+              6. Special Tags / Source Labels (Optional — e.g., Old Exam, كتاب القسم)
+            </label>
+            {selectedSpecialTags.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedSpecialTags([])}
+                className="text-[11px] font-semibold text-[#0284C7] hover:underline cursor-pointer"
+              >
+                Clear Special Tags (Include All)
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedSpecialTags([])}
+              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                selectedSpecialTags.length === 0
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              All Questions
+            </button>
+            {availableSpecialTagOptions.map((item) => {
+              const isSelected = selectedSpecialTags.includes(item.label);
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() =>
+                    toggleItem(selectedSpecialTags, item.label, setSelectedSpecialTags)
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                      : 'bg-amber-50/70 text-amber-900 border-amber-300 hover:bg-amber-100'
+                  }`}
+                >
+                  <Tag className="w-3 h-3 shrink-0" />
+                  <span>{item.label}</span>
+                  <span
+                    className={`font-mono-tabular text-[10px] px-1.5 py-0.2 rounded-full ${
+                      isSelected ? 'bg-amber-700/40 text-white' : 'bg-amber-200/70 text-amber-900'
+                    }`}
+                  >
+                    {item.count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1478,6 +1567,13 @@ export const MockExamsView: React.FC<{
   // 4. Exam Parameters
   const [questionCount, setQuestionCount] = useState<number>(30);
   const [timeLimitMinutes, setTimeLimitMinutes] = useState<number>(45);
+  const [selectedSpecialTags, setSelectedSpecialTags] = useState<string[]>([]);
+
+  const toggleSpecialTag = (tagLabel: string) => {
+    setSelectedSpecialTags((prev) =>
+      prev.includes(tagLabel) ? prev.filter((t) => t !== tagLabel) : [...prev, tagLabel]
+    );
+  };
 
   const toggleSubject = (subjId: number) => {
     setSelectedSubjectIds((prev) => {
@@ -1513,9 +1609,44 @@ export const MockExamsView: React.FC<{
     }
   };
 
-  const totalAvailableInSelection = relevantLectures
-    .filter((l: any) => selectedLectureIds.includes(l.id))
-    .reduce((sum: number, l: any) => sum + (l.questionCount || 0), 0);
+  const selectedLecturesObjects = relevantLectures.filter((l: any) =>
+    selectedLectureIds.includes(l.id)
+  );
+
+  const mockSpecialTagsMap = new Map<string, { label: string; count: number }>();
+  for (const preset of ['Old Exam', 'كتاب القسم']) {
+    mockSpecialTagsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
+  }
+  for (const gt of catalog?.specialTags || []) {
+    if (gt?.label) {
+      mockSpecialTagsMap.set(gt.label.toLowerCase(), { label: gt.label, count: 0 });
+    }
+  }
+  for (const lect of selectedLecturesObjects) {
+    const breakdown = lect.specialTagBreakdown || {};
+    for (const [label, cnt] of Object.entries(breakdown)) {
+      const key = label.toLowerCase();
+      const existing = mockSpecialTagsMap.get(key);
+      mockSpecialTagsMap.set(key, {
+        label: existing?.label || label,
+        count: (existing?.count || 0) + Number(cnt || 0),
+      });
+    }
+  }
+  const availableMockSpecialTags = Array.from(mockSpecialTagsMap.values());
+
+  const totalUnfilteredInSelection = selectedLecturesObjects.reduce(
+    (sum: number, l: any) => sum + (l.questionCount || 0),
+    0
+  );
+
+  const totalAvailableInSelection =
+    selectedSpecialTags.length === 0
+      ? totalUnfilteredInSelection
+      : selectedSpecialTags.reduce((sum, label) => {
+          const entry = mockSpecialTagsMap.get(label.toLowerCase());
+          return sum + (entry?.count || 0);
+        }, 0);
 
   const selectedModuleObj = modulesList.find((m: any) => m.id === selectedModuleId);
   const selectedSubjectTitles = availableSubjects
@@ -1526,16 +1657,19 @@ export const MockExamsView: React.FC<{
     e.preventDefault();
     if (hasActiveRunningExam) return;
     const count = Math.min(questionCount, Math.max(1, totalAvailableInSelection || 10));
+    const tagSuffix =
+      selectedSpecialTags.length > 0 ? ` [${selectedSpecialTags.join(', ')}]` : '';
     const title =
       selectedModuleObj
-        ? `${selectedModuleObj.code} Mock Exam (${selectedSubjectTitles.join(' & ')})`
-        : `Medical Mock Exam (${selectedSubjectTitles.join(' & ')})`;
+        ? `${selectedModuleObj.code} Mock Exam (${selectedSubjectTitles.join(' & ')})${tagSuffix}`
+        : `Medical Mock Exam (${selectedSubjectTitles.join(' & ')})${tagSuffix}`;
 
     onStartSession({
       mode: 'exam',
       title,
       subjectIds: selectedSubjectIds.length > 0 ? selectedSubjectIds : undefined,
       lectureIds: selectedLectureIds.length > 0 ? selectedLectureIds : undefined,
+      specialTags: selectedSpecialTags.length > 0 ? selectedSpecialTags : undefined,
       requestedCount: count,
       shuffleQuestions: true,
       shuffleOptions: true,
@@ -1825,7 +1959,66 @@ export const MockExamsView: React.FC<{
           </div>
         </div>
 
-        {/* Step 4: Exam Length & Time Settings */}
+        {/* Step 4: Filter by Special Tags / Source Labels (Optional) */}
+        <div className="space-y-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">4</span>
+              <span>Filter by Special Tags / Source Labels (Optional — e.g., Old Exam, كتاب القسم)</span>
+            </label>
+            {selectedSpecialTags.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedSpecialTags([])}
+                className="text-[11px] font-bold text-[#08a39d] hover:underline cursor-pointer"
+              >
+                Include All Questions
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedSpecialTags([])}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                selectedSpecialTags.length === 0
+                  ? 'bg-[#08a39d] text-white border-[#08a39d] shadow-xs'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              All Questions ({totalUnfilteredInSelection})
+            </button>
+
+            {availableMockSpecialTags.map((item) => {
+              const isSelected = selectedSpecialTags.includes(item.label);
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => toggleSpecialTag(item.label)}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                      : 'bg-amber-50/70 text-amber-900 border-amber-300 hover:bg-amber-100'
+                  }`}
+                >
+                  <Tag className="w-3 h-3 shrink-0" />
+                  <span>{item.label}</span>
+                  <span
+                    className={`font-mono-tabular text-[10px] px-1.5 py-0.2 rounded-full ${
+                      isSelected ? 'bg-amber-700/40 text-white' : 'bg-amber-200/70 text-amber-900'
+                    }`}
+                  >
+                    {item.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 5: Exam Length & Time Settings */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-3 border-t border-slate-100">
           <div>
             <label className="block text-xs font-bold text-slate-900 mb-2 uppercase tracking-wider">
@@ -2055,11 +2248,22 @@ export const BookmarksView: React.FC<{
                 className="bg-white rounded-xl border border-slate-200 p-5 space-y-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                  <div>
-                    <span className="font-semibold text-slate-800">
-                      {item.subjectTitle}
-                    </span>{' '}
-                    · {item.lectureTitle} · Difficulty: {item.difficulty}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>
+                      <span className="font-semibold text-slate-800">
+                        {item.subjectTitle}
+                      </span>{' '}
+                      · {item.lectureTitle} · Difficulty: {item.difficulty}
+                    </span>
+                    {parseSpecialTags(item.specialTags).map((specTag) => (
+                      <span
+                        key={specTag}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                      >
+                        <Tag className="w-3 h-3 text-amber-600 shrink-0" />
+                        {specTag}
+                      </span>
+                    ))}
                   </div>
                   <div className="flex items-center gap-3">
                     {item.status && (

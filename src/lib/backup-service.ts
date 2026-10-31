@@ -548,6 +548,7 @@ export async function testRestoreBackup(
           explanation_d TEXT NOT NULL DEFAULT '',
           difficulty TEXT NOT NULL DEFAULT 'Medium',
           tags TEXT NOT NULL DEFAULT '',
+          special_tags TEXT NOT NULL DEFAULT '',
           diagram_svg TEXT NOT NULL DEFAULT '',
           page_number INTEGER,
           status TEXT NOT NULL DEFAULT 'published',

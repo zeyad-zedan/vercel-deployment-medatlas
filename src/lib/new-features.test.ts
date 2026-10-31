@@ -9,6 +9,7 @@ import {
   selectPracticeQuestions,
   computeTopicPerformance,
   parseAndValidateCsvQuestions,
+  parseSpecialTags,
   getSampleCsvTemplate,
   REQUIRED_CSV_COLUMNS,
   CanonicalQuestion,
@@ -539,4 +540,88 @@ test('14. Lecture Study Session Question Synchronization: Automatically un-compl
   const firstUnsolvedIdx = updatedItems.findIndex((q) => !q.submitted && !q.selectedDisplayed);
   assert.equal(firstUnsolvedIdx, 30);
 });
+
+test('17. Special Tags (e.g. "Old Exam", "كتاب القسم"): CSV parsing, student badge formatting, and Mock Exam / Custom Practice filtering', () => {
+  // 1. Official template includes special_tags column
+  assert.ok(REQUIRED_CSV_COLUMNS.includes('special_tags' as any));
+  const template = getSampleCsvTemplate();
+  assert.ok(template.includes('special_tags'));
+  assert.ok(template.includes('Old Exam,كتاب القسم'));
+
+  // 2. parseSpecialTags deduplicates and trims
+  assert.deepEqual(parseSpecialTags('Old Exam, كتاب القسم , old exam '), [
+    'Old Exam',
+    'كتاب القسم',
+  ]);
+  assert.deepEqual(parseSpecialTags(''), []);
+  assert.deepEqual(parseSpecialTags(null), []);
+
+  // 3. CSV parsing extracts special_tags and preserves backward compatibility when column is omitted
+  const csvWithSpecialTags = `subject,lecture,question_text,option_a,option_b,option_c,option_d,correct_answer,explanation,difficulty,tags,special_tags,page_number,status
+Histology,Epithelium,"Which junctional complex anchors epithelial cells to the basement membrane?",Tight junction,Gap junction,Hemidesmosome,Desmosome,C,Hemidesmosomes bind integrins to laminin in the basal lamina.,Medium,"Epithelium,Junctions","Old Exam,كتاب القسم",4,published`;
+
+  const report = parseAndValidateCsvQuestions(csvWithSpecialTags);
+  assert.equal(report.validCount, 1);
+  assert.equal(report.rows[0].specialTags, 'Old Exam,كتاب القسم');
+
+  // 4. formatQuestionForClient exposes specialTags in both Study and Exam modes so students see the notification badge
+  const qWithSpecial: CanonicalQuestion = {
+    ...TEST_QUESTION,
+    specialTags: 'Old Exam, كتاب القسم',
+  };
+  const perm = createOptionPermutation(false);
+  const studyClientQ = formatQuestionForClient(qWithSpecial, perm, false);
+  const examClientQ = formatQuestionForClient(qWithSpecial, perm, true);
+  assert.equal(studyClientQ.specialTags, 'Old Exam, كتاب القسم');
+  assert.equal(examClientQ.specialTags, 'Old Exam, كتاب القسم');
+
+  // 5. selectPracticeQuestions filters by specialTags for Mock Exam & Custom Practice
+  const pool = [
+    {
+      id: 1,
+      subjectId: 1,
+      lectureId: 10,
+      difficulty: 'Easy',
+      tags: 'Cell Biology',
+      specialTags: 'Old Exam',
+      status: 'published',
+    },
+    {
+      id: 2,
+      subjectId: 1,
+      lectureId: 10,
+      difficulty: 'Medium',
+      tags: 'Histology',
+      specialTags: 'كتاب القسم',
+      status: 'published',
+    },
+    {
+      id: 3,
+      subjectId: 1,
+      lectureId: 10,
+      difficulty: 'Hard',
+      tags: 'Physiology',
+      specialTags: '',
+      status: 'published',
+    },
+  ];
+
+  const oldExamOnly = selectPracticeQuestions(pool, {
+    specialTags: ['old exam'],
+  });
+  assert.equal(oldExamOnly.selectedQuestions.length, 1);
+  assert.equal(oldExamOnly.selectedQuestions[0].id, 1);
+
+  const deptBookOnly = selectPracticeQuestions(pool, {
+    specialTags: ['كتاب القسم'],
+  });
+  assert.equal(deptBookOnly.selectedQuestions.length, 1);
+  assert.equal(deptBookOnly.selectedQuestions[0].id, 2);
+
+  const bothSpecialTags = selectPracticeQuestions(pool, {
+    specialTags: ['Old Exam', 'كتاب القسم'],
+  });
+  assert.equal(bothSpecialTags.selectedQuestions.length, 2);
+});
+
 

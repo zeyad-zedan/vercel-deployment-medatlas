@@ -27,10 +27,30 @@ export interface CanonicalQuestion {
   explanationD: string;
   difficulty: DifficultyLevel;
   tags: string;
+  specialTags?: string;
   diagramSvg?: string;
   pageNumber?: number | null;
   status: ContentStatus;
   version?: number;
+}
+
+/**
+ * Parses a comma-separated special_tags string into unique trimmed labels (e.g. ["Old Exam", "كتاب القسم"]).
+ */
+export function parseSpecialTags(raw?: string | null): string[] {
+  if (!raw || typeof raw !== 'string') return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(trimmed);
+    }
+  }
+  return result;
 }
 
 export type OptionPermutation = Record<OptionKey, OptionKey>;
@@ -660,6 +680,7 @@ export function formatQuestionForClient(
       options: displayedOptions,
       difficulty: question.difficulty,
       tags: question.tags,
+      specialTags: question.specialTags || '',
       diagramSvg: safeDiagramSvg,
       pageNumber: question.pageNumber ?? null,
       permutation,
@@ -687,6 +708,7 @@ export function formatQuestionForClient(
     optionExplanations: displayedExplanations,
     difficulty: question.difficulty,
     tags: question.tags,
+    specialTags: question.specialTags || '',
     diagramSvg: safeDiagramSvg,
     pageNumber: question.pageNumber ?? null,
     permutation,
@@ -788,6 +810,7 @@ export interface QuestionSelectionCriteria {
   lectureIds?: number[];
   difficulties?: DifficultyLevel[];
   tagFilter?: string;
+  specialTags?: string[];
   requestedCount?: number;
   shuffleQuestions?: boolean;
   recentlyAnsweredIds?: Set<number>;
@@ -814,6 +837,7 @@ export function selectPracticeQuestions<
     lectureId: number;
     difficulty: string;
     tags: string;
+    specialTags?: string;
     status: string;
   }
 >(pool: T[], criteria: QuestionSelectionCriteria): QuestionSelectionResult<T> {
@@ -846,12 +870,36 @@ export function selectPracticeQuestions<
 
   if (criteria.tagFilter && criteria.tagFilter.trim() !== '') {
     const needle = criteria.tagFilter.trim().toLowerCase();
-    eligible = eligible.filter((q) =>
-      q.tags
+    eligible = eligible.filter((q) => {
+      const regularTags = q.tags
         .split(',')
-        .map((t) => t.trim().toLowerCase())
-        .some((t) => t.includes(needle))
-    );
+        .map((t) => t.trim().toLowerCase());
+      const specTags = parseSpecialTags(q.specialTags).map((t) => t.toLowerCase());
+      return (
+        regularTags.some((t) => t.includes(needle)) ||
+        specTags.some((t) => t.includes(needle))
+      );
+    });
+  }
+
+  if (criteria.specialTags && criteria.specialTags.length > 0) {
+    const targetSpecialTags = criteria.specialTags
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    if (targetSpecialTags.length > 0) {
+      eligible = eligible.filter((q) => {
+        const qSpecial = parseSpecialTags(q.specialTags).map((t) => t.toLowerCase());
+        const qRegular = q.tags
+          .split(',')
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean);
+        return targetSpecialTags.some(
+          (target) =>
+            qSpecial.some((qs) => qs === target || qs.includes(target)) ||
+            qRegular.some((qr) => qr === target || qr.includes(target))
+        );
+      });
+    }
   }
 
   const totalAvailable = eligible.length;
@@ -1092,6 +1140,7 @@ export interface ParsedCsvQuestionRow {
   explanationD: string;
   difficulty: DifficultyLevel;
   tags: string;
+  specialTags: string;
   pageNumber?: number | null;
   status: ContentStatus;
   contentHash: string;
@@ -1126,6 +1175,7 @@ export const REQUIRED_CSV_COLUMNS = [
   'explanation_d',
   'difficulty',
   'tags',
+  'special_tags',
   'page_number',
   'status',
 ] as const;
@@ -1213,6 +1263,13 @@ export function parseAndValidateCsvQuestions(
     const explanationD = getCol(raw, 'explanation_d');
     const rawDifficulty = getCol(raw, 'difficulty') || 'Medium';
     const tags = getCol(raw, 'tags');
+    const specialTags =
+      getCol(raw, 'special_tags') ||
+      getCol(raw, 'special_tag') ||
+      getCol(raw, 'source_tag') ||
+      getCol(raw, 'source_tags') ||
+      getCol(raw, 'label') ||
+      getCol(raw, 'badge');
     const rawStatus = (getCol(raw, 'status') || 'published').toLowerCase();
     const rawPage = getCol(raw, 'page_number') || getCol(raw, 'pdf_page_number');
     let pageNumber: number | null = null;
@@ -1309,6 +1366,7 @@ export function parseAndValidateCsvQuestions(
         ? normalizedDifficulty
         : 'Medium') as DifficultyLevel,
       tags,
+      specialTags,
       pageNumber,
       status: (VALID_STATUSES.includes(rawStatus as ContentStatus)
         ? rawStatus
@@ -1349,6 +1407,7 @@ export function getSampleCsvTemplate(): string {
     '"SER synthesizes steroid hormones and detoxifies lipid-soluble drugs via cytochrome P450."',
     '"Medium"',
     '"Organelles,Protein Trafficking,Cell Biology"',
+    '"Old Exam,كتاب القسم"',
     '"2"',
     '"published"',
   ].join(',');
@@ -1369,6 +1428,7 @@ export function getSampleCsvTemplate(): string {
     '"Funny current (If) mediates slow spontaneous depolarization during Phase 4."',
     '"Easy"',
     '"Electrophysiology,SA Node,Cardiovascular"',
+    '"Old Exam"',
     '"4"',
     '"published"',
   ].join(',');

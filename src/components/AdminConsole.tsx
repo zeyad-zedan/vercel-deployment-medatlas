@@ -15,9 +15,10 @@ import {
   ExternalLink,
   RotateCcw,
   ArrowRight,
+  Tag,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
-import { getSampleCsvTemplate } from '../lib/mcq-engine.ts';
+import { getSampleCsvTemplate, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
 
@@ -136,6 +137,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     'Medium'
   );
   const [qTags, setQTags] = useState('');
+  const [qSpecialTags, setQSpecialTags] = useState('');
   const [qStatus, setQStatus] = useState<'published' | 'draft' | 'archived'>(
     'published'
   );
@@ -398,6 +400,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       );
       setQDifficulty(q.difficulty);
       setQTags(q.tags || '');
+      setQSpecialTags(q.specialTags || '');
       setQStatus(q.status);
     } else {
       setEditingQuestion({ id: undefined });
@@ -417,6 +420,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       setQPageNumber('');
       setQDifficulty('Medium');
       setQTags('');
+      setQSpecialTags('');
       setQStatus('published');
     }
   };
@@ -454,6 +458,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         pageNumber: cleanPageNumber,
         difficulty: qDifficulty,
         tags: qTags,
+        specialTags: qSpecialTags,
         status: qStatus,
       });
       setEditingQuestion(null);
@@ -632,7 +637,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     const matchText =
       !qSearch.trim() ||
       q.questionText.toLowerCase().includes(qSearch.toLowerCase()) ||
-      q.tags.toLowerCase().includes(qSearch.toLowerCase());
+      q.tags.toLowerCase().includes(qSearch.toLowerCase()) ||
+      (q.specialTags || '').toLowerCase().includes(qSearch.toLowerCase());
     return matchSubj && matchStatus && matchText;
   });
 
@@ -2132,7 +2138,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Correct Answer Key
@@ -2181,6 +2187,35 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     placeholder="e.g., Collagen,Extracellular Matrix"
                     className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
                   />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Special Tags / Student Labels
+                  </label>
+                  <input
+                    type="text"
+                    value={qSpecialTags}
+                    onChange={(e) => setQSpecialTags(e.target.value)}
+                    placeholder="e.g., Old Exam, كتاب القسم"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-amber-300 bg-amber-50/30"
+                  />
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {['Old Exam', 'كتاب القسم'].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          const current = parseSpecialTags(qSpecialTags);
+                          if (!current.some((t) => t.toLowerCase() === preset.toLowerCase())) {
+                            setQSpecialTags([...current, preset].join(', '));
+                          }
+                        }}
+                        className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 cursor-pointer"
+                      >
+                        + {preset}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -2278,10 +2313,21 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 className="bg-white rounded-xl border border-slate-200 p-5 space-y-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                  <div className="font-mono-tabular">
-                    #{q.id} (v{q.version}) · {q.subjectTitle} · {q.lectureTitle} ·{' '}
-                    Difficulty: {q.difficulty} · Status: {q.status.toUpperCase()}
-                    {q.pageNumber ? ` · PDF Page: ${q.pageNumber}` : ''}
+                  <div className="flex flex-wrap items-center gap-2 font-mono-tabular">
+                    <span>
+                      #{q.id} (v{q.version}) · {q.subjectTitle} · {q.lectureTitle} ·{' '}
+                      Difficulty: {q.difficulty} · Status: {q.status.toUpperCase()}
+                      {q.pageNumber ? ` · PDF Page: ${q.pageNumber}` : ''}
+                    </span>
+                    {parseSpecialTags(q.specialTags).map((specTag) => (
+                      <span
+                        key={specTag}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                      >
+                        <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                        {specTag}
+                      </span>
+                    ))}
                   </div>
                   <div className="flex items-center gap-3">
                     <button
@@ -2486,7 +2532,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     Documented CSV Columns:
                   </p>
                   <p className="font-mono-tabular text-[11px] leading-relaxed">
-                    subject, lecture, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, explanation_a, explanation_b, explanation_c, explanation_d, difficulty, tags, status
+                    subject, lecture, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, explanation_a, explanation_b, explanation_c, explanation_d, difficulty, tags, special_tags, page_number, status
+                  </p>
+                  <p className="text-[11px] text-amber-800 pt-1">
+                    <strong>Tip:</strong> Use the <code className="font-mono bg-amber-100 px-1 rounded">special_tags</code> column for student labels like <code className="font-mono">&quot;Old Exam&quot;</code> or <code className="font-mono">&quot;كتاب القسم&quot;</code>.
                   </p>
                 </div>
               </div>
@@ -2589,11 +2638,22 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                           : 'border-red-200 bg-red-50/40'
                       }`}
                     >
-                      <div className="flex items-center justify-between font-mono-tabular">
-                        <span className="font-bold text-slate-900">
-                          CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
-                          {r.lecture || 'Missing Lecture'}
-                        </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2 font-mono-tabular">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-bold text-slate-900">
+                            CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
+                            {r.lecture || 'Missing Lecture'}
+                          </span>
+                          {parseSpecialTags(r.specialTags).map((specTag) => (
+                            <span
+                              key={specTag}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                            >
+                              <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                              {specTag}
+                            </span>
+                          ))}
+                        </div>
                         <span
                           className={`font-semibold ${
                             r.isValid
@@ -2780,9 +2840,20 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   Student Interface Preview · {previewQuestion.subjectTitle} ·{' '}
                   {previewQuestion.lectureTitle}
                 </p>
-                <h3 className="text-base font-bold text-slate-900">
-                  Question #{previewQuestion.id} ({previewQuestion.difficulty})
-                </h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900">
+                    Question #{previewQuestion.id} ({previewQuestion.difficulty})
+                  </h3>
+                  {parseSpecialTags(previewQuestion.specialTags).map((specTag) => (
+                    <span
+                      key={specTag}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                    >
+                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
+                      {specTag}
+                    </span>
+                  ))}
+                </div>
               </div>
               <button
                 type="button"

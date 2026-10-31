@@ -685,6 +685,7 @@ app.post('/api/sessions', requireAuth, async (req: AuthRequest, res) => {
       lectureIds,
       difficulties,
       tagFilter,
+      specialTags,
       requestedCount,
       shuffleQuestions,
       shuffleOptions,
@@ -701,6 +702,9 @@ app.post('/api/sessions', requireAuth, async (req: AuthRequest, res) => {
       lectureIds: Array.isArray(lectureIds) ? lectureIds.map(Number) : undefined,
       difficulties: Array.isArray(difficulties) ? difficulties : undefined,
       tagFilter: tagFilter ? String(tagFilter) : undefined,
+      specialTags: Array.isArray(specialTags)
+        ? specialTags.map(String).filter(Boolean)
+        : undefined,
       requestedCount: requestedCount ? Number(requestedCount) : undefined,
       shuffleQuestions: Boolean(shuffleQuestions),
       shuffleOptions: Boolean(shuffleOptions),
@@ -1271,6 +1275,7 @@ app.post('/api/admin/questions', requireAuth, requireAdmin, async (req: AuthRequ
       pageNumber,
       difficulty,
       tags,
+      specialTags,
       status,
     } = req.body || {};
 
@@ -1321,6 +1326,7 @@ app.post('/api/admin/questions', requireAuth, requireAdmin, async (req: AuthRequ
         pageNumber: parsedPageNumber,
         difficulty: difficulty || 'Medium',
         tags: tags ? String(tags) : '',
+        specialTags: specialTags ? String(specialTags) : '',
         status: status || 'published',
       }
     );

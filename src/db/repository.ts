@@ -26,6 +26,7 @@ import {
   selectPracticeQuestions,
   computeTopicPerformance,
   parseAndValidateCsvQuestions,
+  parseSpecialTags,
   sanitizeSvgDiagram,
   OPTION_KEYS,
 } from '../lib/mcq-engine.ts';
@@ -133,7 +134,19 @@ export function resolveUserFirebaseUid(user?: {
   return null;
 }
 
+let specialTagsColumnEnsured = false;
+
 export async function ensureSeededDatabase() {
+  if (!specialTagsColumnEnsured) {
+    try {
+      await db.execute(
+        sql`ALTER TABLE public.questions ADD COLUMN IF NOT EXISTS special_tags TEXT NOT NULL DEFAULT ''`
+      );
+      specialTagsColumnEnsured = true;
+    } catch {
+      // Non-fatal if running against mock or read-only DB
+    }
+  }
   await seedMedicalCurriculumIfEmpty();
 }
 
@@ -2629,6 +2642,8 @@ export async function getPublishedCatalog(userUid?: string) {
       number,
       { Easy: number; Medium: number; Hard: number }
     >();
+    const specialTagCountByLecture = new Map<number, Record<string, number>>();
+    const specialTagGlobalCounts = new Map<string, { label: string; count: number }>();
 
     for (const q of visibleQuestions) {
       questionCountByLecture.set(
@@ -2649,6 +2664,22 @@ export async function getPublishedCatalog(userUid?: string) {
         diffCounts[q.difficulty]++;
       }
       difficultyCountByLecture.set(q.lectureId, diffCounts);
+
+      const qSpecTags = parseSpecialTags(q.specialTags);
+      if (qSpecTags.length > 0) {
+        const lectSpec = specialTagCountByLecture.get(q.lectureId) || {};
+        for (const st of qSpecTags) {
+          const normKey = st.toLowerCase();
+          const globalEntry = specialTagGlobalCounts.get(normKey);
+          const canonicalLabel = globalEntry ? globalEntry.label : st;
+          lectSpec[canonicalLabel] = (lectSpec[canonicalLabel] || 0) + 1;
+          specialTagGlobalCounts.set(normKey, {
+            label: canonicalLabel,
+            count: (globalEntry?.count || 0) + 1,
+          });
+        }
+        specialTagCountByLecture.set(q.lectureId, lectSpec);
+      }
 
       if (latestAttemptByQ.has(q.id)) {
         const isCorrect = latestAttemptByQ.get(q.id) === true;
@@ -2711,6 +2742,7 @@ export async function getPublishedCatalog(userUid?: string) {
           Medium: 0,
           Hard: 0,
         },
+        specialTagBreakdown: specialTagCountByLecture.get(l.id) || {},
         questionBanks: banks,
       };
     });
@@ -2753,10 +2785,15 @@ export async function getPublishedCatalog(userUid?: string) {
       };
     });
 
+    const availableSpecialTags = Array.from(specialTagGlobalCounts.values()).sort(
+      (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+    );
+
     return {
       modules: enrichedModules,
       subjects: enrichedSubjects,
       lectures: enrichedLectures,
+      specialTags: availableSpecialTags,
       totalPublishedQuestions: visibleQuestions.length,
     };
   } catch (error) {
@@ -2888,6 +2925,7 @@ export async function createPracticeOrExamSession(
     lectureIds?: number[];
     difficulties?: DifficultyLevel[];
     tagFilter?: string;
+    specialTags?: string[];
     requestedCount?: number;
     shuffleQuestions?: boolean;
     shuffleOptions?: boolean;
@@ -3109,6 +3147,7 @@ export async function createPracticeOrExamSession(
       lectureIds: params.lectureIds,
       difficulties: params.difficulties,
       tagFilter: params.tagFilter,
+      specialTags: params.specialTags,
       requestedCount: params.requestedCount,
       shuffleQuestions: params.shuffleQuestions ?? params.mode !== 'study',
       recentlyAnsweredIds,
@@ -3348,6 +3387,7 @@ export async function getExamSessionForStudent(
           explanationD: source.explanationD || '',
           difficulty: (source.difficulty || 'Medium') as DifficultyLevel,
           tags: source.tags || '',
+          specialTags: source.specialTags || liveQ?.specialTags || '',
           diagramSvg: source.diagramSvg || liveQ?.diagramSvg || '',
           pageNumber: source.pageNumber ?? liveQ?.pageNumber ?? null,
           status: (liveQ?.status || 'published') as ContentStatus,
@@ -3577,6 +3617,7 @@ export async function saveSessionQuestionAnswer(
           explanationD: answeredQ.explanationD,
           difficulty: answeredQ.difficulty,
           tags: answeredQ.tags,
+          specialTags: answeredQ.specialTags || '',
           diagramSvg: answeredQ.diagramSvg || '',
           pageNumber: answeredQ.pageNumber ?? null,
           version: answeredQ.version,
@@ -3815,6 +3856,7 @@ export async function completeExamSession(
           explanationD: q.explanationD,
           difficulty: q.difficulty,
           tags: q.tags,
+          specialTags: q.specialTags || '',
           diagramSvg: q.diagramSvg || '',
           pageNumber: q.pageNumber ?? null,
           version: q.version,
@@ -3955,6 +3997,7 @@ export async function getStudentBookmarksAndReview(userUid: string) {
           explanationD: q.explanationD,
           difficulty: q.difficulty,
           tags: q.tags,
+          specialTags: q.specialTags || '',
           diagramSvg: sanitizeSvgDiagram(q.diagramSvg),
           lastAttemptStatus: !latestAtt
             ? 'unanswered'
@@ -3992,6 +4035,7 @@ export async function getStudentBookmarksAndReview(userUid: string) {
           explanationD: q.explanationD,
           difficulty: q.difficulty,
           tags: q.tags,
+          specialTags: q.specialTags || '',
           diagramSvg: sanitizeSvgDiagram(q.diagramSvg),
           isBookmarked: bookmarkedIds.has(q.id),
           status:
@@ -5043,6 +5087,7 @@ export async function upsertQuestionAdmin(
     pageNumber?: number | null;
     difficulty: DifficultyLevel;
     tags?: string;
+    specialTags?: string;
     status: ContentStatus;
   }
 ) {
@@ -5093,6 +5138,7 @@ export async function upsertQuestionAdmin(
           pageNumber: cleanPageNumber,
           difficulty: payload.difficulty,
           tags: payload.tags?.trim() || '',
+          specialTags: payload.specialTags?.trim() || '',
           status: payload.status,
           version: nextVersion,
           contentHash,
@@ -5135,6 +5181,7 @@ export async function upsertQuestionAdmin(
         pageNumber: cleanPageNumber,
         difficulty: payload.difficulty,
         tags: payload.tags?.trim() || '',
+        specialTags: payload.specialTags?.trim() || '',
         status: payload.status || 'published',
         version: 1,
         contentHash,
@@ -5880,6 +5927,7 @@ export async function executeCsvImportAdmin(
           explanationD: row.explanationD,
           difficulty: row.difficulty,
           tags: row.tags,
+          specialTags: row.specialTags || '',
           pageNumber: row.pageNumber ?? null,
           status: row.status,
           version: 1,
@@ -5999,6 +6047,7 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
       'explanation_d',
       'difficulty',
       'tags',
+      'special_tags',
       'page_number',
       'status',
     ].join(',');
@@ -6020,6 +6069,7 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
         escapeCsv(q.explanationD),
         escapeCsv(q.difficulty),
         escapeCsv(q.tags),
+        escapeCsv(q.specialTags || ''),
         escapeCsv(q.pageNumber ? String(q.pageNumber) : ''),
         escapeCsv(q.status),
       ].join(',')

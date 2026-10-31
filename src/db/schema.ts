@@ -152,6 +152,7 @@ export const questions = pgTable('questions', {
   explanationD: text('explanation_d').notNull().default(''),
   difficulty: text('difficulty').notNull().default('Medium'), // 'Easy' | 'Medium' | 'Hard'
   tags: text('tags').notNull().default(''),
+  specialTags: text('special_tags').notNull().default(''),
   diagramSvg: text('diagram_svg').notNull().default(''),
   pageNumber: integer('page_number'),
   status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'

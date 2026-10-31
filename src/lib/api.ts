@@ -669,6 +669,7 @@ export const api = {
     lectureIds?: number[];
     difficulties?: string[];
     tagFilter?: string;
+    specialTags?: string[];
     requestedCount?: number;
     shuffleQuestions?: boolean;
     shuffleOptions?: boolean;

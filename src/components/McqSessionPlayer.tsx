@@ -22,9 +22,10 @@ import {
   Sparkles,
   Maximize2,
   Check,
+  Tag,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
-import { OPTION_KEYS, OptionKey, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
+import { OPTION_KEYS, OptionKey, parseSpecialTags, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
 import { PdfViewerModal, PdfSlideViewer } from './PdfViewerModal.tsx';
 import { UniversityExamPlayer } from './UniversityExamPlayer.tsx';
 
@@ -997,7 +998,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               }`}
             >
               {/* Question Subheader Bar */}
-              <div className="flex items-center justify-between text-xs text-slate-500 font-mono-tabular pb-2 border-b border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 font-mono-tabular pb-2 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-slate-900 text-sm">
                     Question {currentIndex + 1}
@@ -1007,7 +1008,17 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                     {currentQ.lectureTitle}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 font-sans">
+                <div className="flex flex-wrap items-center gap-1.5 font-sans">
+                  {parseSpecialTags(currentQ.specialTags).map((specTag) => (
+                    <span
+                      key={specTag}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs"
+                      title={`Special Source Label: ${specTag}`}
+                    >
+                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
+                      {specTag}
+                    </span>
+                  ))}
                   <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-600">
                     {currentQ.difficulty || 'Medium'}
                   </span>

@@ -12,7 +12,9 @@ import {
   ArrowRight,
   ExternalLink,
   ShieldCheck,
+  Tag,
 } from 'lucide-react';
+import { parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 
 interface UniversityExamPlayerProps {
@@ -402,8 +404,21 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                           {isUnanswered ? '—' : isCorrect ? '✓' : '✗'}
                         </span>
                       </td>
-                      <td className="py-3 px-4 max-w-xs font-semibold text-slate-800 line-clamp-2">
-                        {q.questionText}
+                      <td className="py-3 px-4 max-w-xs font-semibold text-slate-800">
+                        <div className="line-clamp-2">{q.questionText}</div>
+                        {parseSpecialTags(q.specialTags).length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1">
+                            {parseSpecialTags(q.specialTags).map((specTag) => (
+                              <span
+                                key={specTag}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                              >
+                                <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                {specTag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-mono-tabular font-bold text-slate-700">
                         {userPick ? (
@@ -449,10 +464,21 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
         {reviewingQuestion && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
             <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-auto p-6 space-y-4">
-              <div className="flex items-center justify-between border-b pb-3">
-                <h3 className="font-bold text-[#15616d] text-base">
-                  Question Breakdown &amp; Analysis
-                </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-bold text-[#15616d] text-base">
+                    Question Breakdown &amp; Analysis
+                  </h3>
+                  {parseSpecialTags(reviewingQuestion.specialTags).map((specTag) => (
+                    <span
+                      key={specTag}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                    >
+                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
+                      {specTag}
+                    </span>
+                  ))}
+                </div>
                 <span className="text-xs font-mono-tabular text-slate-500">
                   {reviewingQuestion.lectureTitle} · Slide {reviewingQuestion.pageNumber || 1}
                 </span>
@@ -627,10 +653,22 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             {/* Question Card */}
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-4 sm:p-5 relative">
               {/* Question Title & Font Size Controls */}
-              <div className="shrink-0 font-bold text-xs sm:text-sm -mx-4 -mt-1 mb-3 px-4 pb-2 border-b border-[#d7d7d7] flex items-center justify-between min-h-[32px]">
-                <span className="text-slate-900">
-                  Question No. <span className="font-mono-tabular">{currentIndex + 1}</span>
-                </span>
+              <div className="shrink-0 font-bold text-xs sm:text-sm -mx-4 -mt-1 mb-3 px-4 pb-2 border-b border-[#d7d7d7] flex flex-wrap items-center justify-between gap-2 min-h-[32px]">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-900">
+                    Question No. <span className="font-mono-tabular">{currentIndex + 1}</span>
+                  </span>
+                  {parseSpecialTags(currentQ.specialTags).map((specTag) => (
+                    <span
+                      key={specTag}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs"
+                      title={`Special Source Label: ${specTag}`}
+                    >
+                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
+                      {specTag}
+                    </span>
+                  ))}
+                </div>
                 <div className="flex items-center gap-1 font-mono text-xs">
                   <button
                     type="button"
