@@ -690,7 +690,8 @@ export const api = {
     questionId: number,
     selectedOption: string | null,
     lockAnswer: boolean,
-    elapsedSeconds?: number
+    elapsedSeconds?: number,
+    slim = true
   ) =>
     apiRequest<{ session: any }>(`/api/sessions/${sessionId}/answer`, {
       method: 'POST',
@@ -700,6 +701,7 @@ export const api = {
         selectedOption,
         lockAnswer,
         elapsedSeconds,
+        slim,
       }),
     }),
 

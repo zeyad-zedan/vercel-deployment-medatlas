@@ -823,14 +823,15 @@ app.post('/api/sessions/:id/answer', requireAuth, async (req: AuthRequest, res) 
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
       return res.status(400).json({ error: 'Invalid session ID.' });
     }
-    const { questionId, selectedOption, lockAnswer, elapsedSeconds } = req.body || {};
+    const { questionId, selectedOption, lockAnswer, elapsedSeconds, slim } = req.body || {};
     const session = await saveSessionQuestionAnswer(
       req.user!.uid,
       sessionId,
       Number(questionId),
       selectedOption || null,
       Boolean(lockAnswer),
-      typeof elapsedSeconds === 'number' ? elapsedSeconds : undefined
+      typeof elapsedSeconds === 'number' ? elapsedSeconds : undefined,
+      Boolean(slim)
     );
     return res.json({ session });
   } catch (error) {

@@ -322,6 +322,41 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
    * revealing instant feedback and explanations without waiting for network round-trips.
    * In Exam Mode: Persists draft choice to server without revealing answers.
    */
+  const mergeSessionUpdate = (
+    updated: any,
+    targetQId: number,
+    opt?: OptionKey | null,
+    isLock?: boolean
+  ) => {
+    if (!updated) return;
+    setSession((prev: any) => {
+      if (!prev) return prev;
+      // If server returned the full questions array, adopt it directly
+      if (Array.isArray(updated.questions) && updated.questions.length > 0) {
+        return updated;
+      }
+      // Otherwise merge the lightweight summary efficiently without re-downloading questions
+      return {
+        ...prev,
+        correctCount: updated.correctCount ?? prev.correctCount,
+        incorrectCount: updated.incorrectCount ?? prev.incorrectCount,
+        unansweredCount: updated.unansweredCount ?? prev.unansweredCount,
+        scorePercentage: updated.scorePercentage ?? prev.scorePercentage,
+        elapsedSeconds: updated.elapsedSeconds ?? prev.elapsedSeconds,
+        status: updated.status ?? prev.status,
+        questions: (prev.questions || []).map((q: any) =>
+          q.id === targetQId
+            ? {
+                ...q,
+                submitted: isLock !== undefined ? isLock : q.submitted,
+                selectedDisplayed: opt !== undefined ? opt : q.selectedDisplayed,
+              }
+            : q
+        ),
+      };
+    });
+  };
+
   const handleSelectOption = async (opt: OptionKey) => {
     if (!currentQ || isCompleted) return;
 
@@ -352,7 +387,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         elapsedSeconds
       )
         .then((res) => {
-          setSession(res.session);
+          mergeSessionUpdate(res.session, currentQ.id, opt, false);
           onQuestionAnswered?.(res.session);
         })
         .catch((err: any) => {
@@ -393,7 +428,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         elapsedSeconds
       )
         .then((res) => {
-          setSession(res.session);
+          mergeSessionUpdate(res.session, currentQ.id, opt, true);
           onQuestionAnswered?.(res.session);
         })
         .catch((err: any) => {
@@ -424,7 +459,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               elapsedSeconds
             )
             .then((res) => {
-              setSession(res.session);
+              mergeSessionUpdate(res.session, q.id, draftOpt, !isExamMode);
               onQuestionAnswered?.(res.session);
             })
             .catch(() => {});

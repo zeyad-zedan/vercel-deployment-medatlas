@@ -2843,6 +2843,7 @@ export interface SessionOrderItem {
   selectedDisplayed: OptionKey | null;
   selectedCanonical: OptionKey | null;
   submitted: boolean;
+  correctAnswer?: OptionKey;
 }
 
 export interface ServerExamDeadlineStatus {
@@ -3039,7 +3040,10 @@ export async function createPracticeOrExamSession(
 
         // Check if new questions were added to this lecture or if any questions were unpublished
         const pubLectureQuestions = await db
-          .select()
+          .select({
+            id: questions.id,
+            correctAnswer: questions.correctAnswer,
+          })
           .from(questions)
           .where(
             and(
@@ -3076,6 +3080,7 @@ export async function createPracticeOrExamSession(
             selectedDisplayed: null,
             selectedCanonical: null,
             submitted: false,
+            correctAnswer: q.correctAnswer as OptionKey,
           }));
 
           const updatedItems = [...validExistingItems, ...newItems];
@@ -3119,6 +3124,7 @@ export async function createPracticeOrExamSession(
         tags: questions.tags,
         specialTags: questions.specialTags,
         status: questions.status,
+        correctAnswer: questions.correctAnswer,
       })
       .from(questions)
       .where(eq(questions.status, 'published'));
@@ -3212,6 +3218,7 @@ export async function createPracticeOrExamSession(
       selectedDisplayed: null,
       selectedCanonical: null,
       submitted: false,
+      correctAnswer: q.correctAnswer as OptionKey,
     }));
 
     const firstLect =
@@ -3548,7 +3555,8 @@ export async function saveSessionQuestionAnswer(
   questionId: number,
   displayedOption: OptionKey | null,
   lockAnswer: boolean,
-  _clientElapsedSeconds?: number
+  _clientElapsedSeconds?: number,
+  slim = false
 ) {
   try {
     if (
@@ -3598,6 +3606,20 @@ export async function saveSessionQuestionAnswer(
     // In Study or Custom mode, once a question is locked/submitted and its explanation revealed,
     // prevent overwriting the submitted answer.
     if (session.mode !== 'exam' && targetItem.submitted) {
+      if (slim) {
+        return {
+          id: session.id,
+          status: session.status,
+          correctCount: session.correctCount,
+          incorrectCount: session.incorrectCount,
+          unansweredCount: session.unansweredCount,
+          scorePercentage: session.scorePercentage,
+          elapsedSeconds: session.elapsedSeconds,
+          updatedQuestionId: questionId,
+          submitted: true,
+          selectedDisplayed: targetItem.selectedDisplayed,
+        };
+      }
       return getExamSessionForStudent(userUid, sessionId);
     }
 
@@ -3611,35 +3633,49 @@ export async function saveSessionQuestionAnswer(
     }
 
     const qIds = orderItems.map((i) => i.questionId);
-    let dbQuestions = getCachedSessionQuestions(sessionId);
-    const catalogPromise = getCachedCatalog();
+    let cachedQs = getCachedSessionQuestions(sessionId);
+    let qMap = cachedQs ? new Map(cachedQs.map((q) => [q.id, q])) : null;
 
-    if (!dbQuestions) {
-      dbQuestions =
-        qIds.length > 0
-          ? await db.select().from(questions).where(inArray(questions.id, qIds))
-          : [];
-      setCachedSessionQuestions(sessionId, dbQuestions);
-    }
-    const catalog = await catalogPromise;
-    const qMap = new Map(dbQuestions.map((q) => [q.id, q]));
-    const sMap = new Map(catalog.subjects.map((s: any) => [s.id, s.title]));
-    const lMap = new Map(catalog.lectures.map((l: any) => [l.id, l.title]));
+    // Check if every item in orderItems already has correctAnswer recorded
+    const allHaveCorrect = orderItems.every((item) => Boolean(item.correctAnswer));
 
     let liveCorrectCount = 0;
     let liveIncorrectCount = 0;
     let liveUnansweredCount = 0;
-    for (const item of orderItems) {
-      const q = qMap.get(item.questionId);
-      if (!q) continue;
-      if (item.selectedCanonical === null || item.selectedCanonical === undefined) {
-        liveUnansweredCount++;
-      } else if (item.selectedCanonical === q.correctAnswer) {
-        liveCorrectCount++;
-      } else {
-        liveIncorrectCount++;
+
+    if (allHaveCorrect) {
+      for (const item of orderItems) {
+        if (item.selectedCanonical === null || item.selectedCanonical === undefined) {
+          liveUnansweredCount++;
+        } else if (item.selectedCanonical === item.correctAnswer) {
+          liveCorrectCount++;
+        } else {
+          liveIncorrectCount++;
+        }
+      }
+    } else {
+      // Legacy session backfill: if cachedQs exists, use it; otherwise query database
+      if (!qMap) {
+        const dbQuestions =
+          qIds.length > 0
+            ? await db.select().from(questions).where(inArray(questions.id, qIds))
+            : [];
+        setCachedSessionQuestions(sessionId, dbQuestions);
+        qMap = new Map(dbQuestions.map((q) => [q.id, q]));
+      }
+      for (const item of orderItems) {
+        const q = qMap.get(item.questionId);
+        if (q) item.correctAnswer = q.correctAnswer as OptionKey;
+        if (item.selectedCanonical === null || item.selectedCanonical === undefined) {
+          liveUnansweredCount++;
+        } else if (item.selectedCanonical === item.correctAnswer) {
+          liveCorrectCount++;
+        } else {
+          liveIncorrectCount++;
+        }
       }
     }
+
     const totalQCount = orderItems.length;
     const liveScorePercentage =
       totalQCount > 0 ? Math.round((liveCorrectCount / totalQCount) * 100) : 0;
@@ -3671,58 +3707,87 @@ export async function saveSessionQuestionAnswer(
       );
 
     // Immediately record/upsert the question attempt in question_attempts so dashboard & lecture labels update live
-    const answeredQ = qMap.get(questionId);
-    if (answeredQ && (session.mode !== 'exam' || lockAnswer)) {
-      await db
-        .delete(questionAttempts)
-        .where(
-          and(
-            eq(questionAttempts.sessionId, sessionId),
-            eq(questionAttempts.questionId, questionId),
-            eq(questionAttempts.userUid, userUid)
-          )
-        );
-
-      if (targetItem.selectedCanonical !== null) {
-        const snapshotJson = JSON.stringify({
-          id: answeredQ.id,
-          subjectTitle: sMap.get(answeredQ.subjectId) || 'Medical Subject',
-          lectureTitle: lMap.get(answeredQ.lectureId) || 'Lecture',
-          questionText: answeredQ.questionText,
-          optionA: answeredQ.optionA,
-          optionB: answeredQ.optionB,
-          optionC: answeredQ.optionC,
-          optionD: answeredQ.optionD,
-          correctAnswer: answeredQ.correctAnswer,
-          explanation: answeredQ.explanation,
-          explanationA: answeredQ.explanationA,
-          explanationB: answeredQ.explanationB,
-          explanationC: answeredQ.explanationC,
-          explanationD: answeredQ.explanationD,
-          difficulty: answeredQ.difficulty,
-          tags: answeredQ.tags,
-          specialTags: answeredQ.specialTags || '',
-          diagramSvg: answeredQ.diagramSvg || '',
-          pageNumber: answeredQ.pageNumber ?? null,
-          version: answeredQ.version,
-        });
-
-        await db
-          .insert(questionAttempts)
-          .values({
-            sessionId,
-            userUid,
-            questionId: answeredQ.id,
-            subjectId: answeredQ.subjectId,
-            lectureId: answeredQ.lectureId,
-            selectedOption: targetItem.selectedCanonical,
-            correctOptionSnapshot: answeredQ.correctAnswer,
-            isCorrect: targetItem.selectedCanonical === answeredQ.correctAnswer,
-            questionSnapshotJson: snapshotJson,
-            timeSpentSeconds: 0,
-          })
-          .onConflictDoNothing();
+    if (session.mode !== 'exam' || lockAnswer) {
+      let answeredQ = qMap?.get(questionId);
+      if (!answeredQ) {
+        const rows = await db
+          .select()
+          .from(questions)
+          .where(eq(questions.id, questionId));
+        answeredQ = rows[0];
       }
+
+      if (answeredQ) {
+        await db
+          .delete(questionAttempts)
+          .where(
+            and(
+              eq(questionAttempts.sessionId, sessionId),
+              eq(questionAttempts.questionId, questionId),
+              eq(questionAttempts.userUid, userUid)
+            )
+          );
+
+        if (targetItem.selectedCanonical !== null) {
+          const catalog = await getCachedCatalog();
+          const sMap = new Map(catalog.subjects.map((s: any) => [s.id, s.title]));
+          const lMap = new Map(catalog.lectures.map((l: any) => [l.id, l.title]));
+
+          const snapshotJson = JSON.stringify({
+            id: answeredQ.id,
+            subjectTitle: sMap.get(answeredQ.subjectId) || 'Medical Subject',
+            lectureTitle: lMap.get(answeredQ.lectureId) || 'Lecture',
+            questionText: answeredQ.questionText,
+            optionA: answeredQ.optionA,
+            optionB: answeredQ.optionB,
+            optionC: answeredQ.optionC,
+            optionD: answeredQ.optionD,
+            correctAnswer: answeredQ.correctAnswer,
+            explanation: answeredQ.explanation,
+            explanationA: answeredQ.explanationA,
+            explanationB: answeredQ.explanationB,
+            explanationC: answeredQ.explanationC,
+            explanationD: answeredQ.explanationD,
+            difficulty: answeredQ.difficulty,
+            tags: answeredQ.tags,
+            specialTags: answeredQ.specialTags || '',
+            diagramSvg: answeredQ.diagramSvg || '',
+            pageNumber: answeredQ.pageNumber ?? null,
+            version: answeredQ.version,
+          });
+
+          await db
+            .insert(questionAttempts)
+            .values({
+              sessionId,
+              userUid,
+              questionId: answeredQ.id,
+              subjectId: answeredQ.subjectId,
+              lectureId: answeredQ.lectureId,
+              selectedOption: targetItem.selectedCanonical,
+              correctOptionSnapshot: answeredQ.correctAnswer,
+              isCorrect: targetItem.selectedCanonical === answeredQ.correctAnswer,
+              questionSnapshotJson: snapshotJson,
+              timeSpentSeconds: 0,
+            })
+            .onConflictDoNothing();
+        }
+      }
+    }
+
+    if (slim) {
+      return {
+        id: session.id,
+        status: session.status,
+        correctCount: liveCorrectCount,
+        incorrectCount: liveIncorrectCount,
+        unansweredCount: liveUnansweredCount,
+        scorePercentage: liveScorePercentage,
+        elapsedSeconds: updatedElapsed,
+        updatedQuestionId: questionId,
+        submitted: targetItem.submitted,
+        selectedDisplayed: targetItem.selectedDisplayed,
+      };
     }
 
     session.questionOrderJson = JSON.stringify(orderItems);
