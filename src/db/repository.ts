@@ -3107,21 +3107,24 @@ export async function createPracticeOrExamSession(
         };
       }
     }
-    const pubSubjects = await db
-      .select()
-      .from(subjects)
-      .where(eq(subjects.status, 'published'));
-    const pubLectures = await db
-      .select()
-      .from(lectures)
-      .where(eq(lectures.status, 'published'));
+    const catalog = await getCachedCatalog();
+    const pubSubjects = catalog.subjects.filter((s: any) => s.status === 'published');
+    const pubLectures = catalog.lectures.filter((l: any) => l.status === 'published');
     const pubQuestions = await db
-      .select()
+      .select({
+        id: questions.id,
+        subjectId: questions.subjectId,
+        lectureId: questions.lectureId,
+        difficulty: questions.difficulty,
+        tags: questions.tags,
+        specialTags: questions.specialTags,
+        status: questions.status,
+      })
       .from(questions)
       .where(eq(questions.status, 'published'));
 
-    const subjMap = new Map(pubSubjects.map((s) => [s.id, s]));
-    const lectMap = new Map(pubLectures.map((l) => [l.id, l]));
+    const subjMap = new Map(pubSubjects.map((s: any) => [s.id, s]));
+    const lectMap = new Map(pubLectures.map((l: any) => [l.id, l]));
 
     // Only include questions whose parent subject and lecture are ALSO published
     const eligiblePool = pubQuestions.filter(
@@ -3131,7 +3134,7 @@ export async function createPracticeOrExamSession(
     let recentlyAnsweredIds = new Set<number>();
     if (params.avoidRecent) {
       const recentAttempts = await db
-        .select()
+        .select({ questionId: questionAttempts.questionId })
         .from(questionAttempts)
         .where(eq(questionAttempts.userUid, userUid))
         .orderBy(desc(questionAttempts.answeredAt))
@@ -3144,7 +3147,10 @@ export async function createPracticeOrExamSession(
     let mistakeQuestionIds: Set<number> | undefined = undefined;
     if (params.onlyMistakes) {
       const pastAttempts = await db
-        .select()
+        .select({
+          questionId: questionAttempts.questionId,
+          isCorrect: questionAttempts.isCorrect,
+        })
         .from(questionAttempts)
         .where(
           and(
@@ -3301,6 +3307,38 @@ async function getCachedCatalog() {
   return { subjects: allSubjs, lectures: allLecs };
 }
 
+interface CachedSessionQuestions {
+  questions: any[];
+  expiresAt: number;
+}
+const sessionQuestionsCache = new Map<number, CachedSessionQuestions>();
+const SESSION_QUESTIONS_CACHE_TTL = 60 * 60 * 1000; // 60 minutes TTL
+
+export function getCachedSessionQuestions(sessionId: number): any[] | null {
+  const cached = sessionQuestionsCache.get(sessionId);
+  if (!cached) return null;
+  if (Date.now() > cached.expiresAt) {
+    sessionQuestionsCache.delete(sessionId);
+    return null;
+  }
+  return cached.questions;
+}
+
+export function setCachedSessionQuestions(sessionId: number, qs: any[]): void {
+  if (sessionQuestionsCache.size > 1000) {
+    const oldestKey = sessionQuestionsCache.keys().next().value;
+    if (oldestKey !== undefined) sessionQuestionsCache.delete(oldestKey);
+  }
+  sessionQuestionsCache.set(sessionId, {
+    questions: qs,
+    expiresAt: Date.now() + SESSION_QUESTIONS_CACHE_TTL,
+  });
+}
+
+export function evictCachedSessionQuestions(sessionId: number): void {
+  sessionQuestionsCache.delete(sessionId);
+}
+
 /**
  * Retrieves an exam session for its owner student.
  * Strictly enforces userUid ownership so students can NEVER access another student's session.
@@ -3347,11 +3385,23 @@ export async function getExamSessionForStudent(
     const orderItems: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
     const qIds = orderItems.map((item) => item.questionId);
 
+    const cachedQs = getCachedSessionQuestions(session.id);
+    const questionsPromise = cachedQs
+      ? Promise.resolve(cachedQs)
+      : qIds.length > 0
+      ? db
+          .select()
+          .from(questions)
+          .where(inArray(questions.id, qIds))
+          .then((qs) => {
+            setCachedSessionQuestions(session.id, qs);
+            return qs;
+          })
+      : Promise.resolve([]);
+
     // Parallelize all remote queries together with cached catalog:
     const [allQuestions, userBookmarks, catalog, savedAttempts] = await Promise.all([
-      qIds.length > 0
-        ? db.select().from(questions).where(inArray(questions.id, qIds))
-        : Promise.resolve([]),
+      questionsPromise,
       db.select().from(bookmarks).where(eq(bookmarks.userUid, userUid)),
       getCachedCatalog(),
       session.status === 'completed'
@@ -3561,12 +3611,17 @@ export async function saveSessionQuestionAnswer(
     }
 
     const qIds = orderItems.map((i) => i.questionId);
-    const [dbQuestions, catalog] = await Promise.all([
-      qIds.length > 0
-        ? db.select().from(questions).where(inArray(questions.id, qIds))
-        : Promise.resolve([]),
-      getCachedCatalog(),
-    ]);
+    let dbQuestions = getCachedSessionQuestions(sessionId);
+    const catalogPromise = getCachedCatalog();
+
+    if (!dbQuestions) {
+      dbQuestions =
+        qIds.length > 0
+          ? await db.select().from(questions).where(inArray(questions.id, qIds))
+          : [];
+      setCachedSessionQuestions(sessionId, dbQuestions);
+    }
+    const catalog = await catalogPromise;
     const qMap = new Map(dbQuestions.map((q) => [q.id, q]));
     const sMap = new Map(catalog.subjects.map((s: any) => [s.id, s.title]));
     const lMap = new Map(catalog.lectures.map((l: any) => [l.id, l.title]));
@@ -3798,12 +3853,18 @@ export async function completeExamSession(
       }
 
       const qIds = orderItems.map((i) => i.questionId);
+      const cachedQs = getCachedSessionQuestions(sessionId);
       const dbQuestions =
-        qIds.length > 0
+        cachedQs ||
+        (qIds.length > 0
           ? await tx.select().from(questions).where(inArray(questions.id, qIds))
-          : [];
-      const allSubjects = await tx.select().from(subjects);
-      const allLectures = await tx.select().from(lectures);
+          : []);
+      if (!cachedQs && dbQuestions.length > 0) {
+        setCachedSessionQuestions(sessionId, dbQuestions);
+      }
+      const catalog = await getCachedCatalog();
+      const allSubjects = catalog.subjects;
+      const allLectures = catalog.lectures;
 
       const qMap = new Map(dbQuestions.map((q) => [q.id, q]));
       const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
@@ -3969,7 +4030,12 @@ export async function getStudentBookmarksAndReview(userUid: string) {
       .orderBy(desc(bookmarks.createdAt));
 
     const userAttempts = await db
-      .select()
+      .select({
+        questionId: questionAttempts.questionId,
+        selectedOption: questionAttempts.selectedOption,
+        isCorrect: questionAttempts.isCorrect,
+        answeredAt: questionAttempts.answeredAt,
+      })
       .from(questionAttempts)
       .where(eq(questionAttempts.userUid, userUid))
       .orderBy(desc(questionAttempts.answeredAt));
@@ -4010,8 +4076,9 @@ export async function getStudentBookmarksAndReview(userUid: string) {
             )
         : [];
 
-    const allSubjects = await db.select().from(subjects);
-    const allLectures = await db.select().from(lectures);
+    const catalog = await getCachedCatalog();
+    const allSubjects = catalog.subjects;
+    const allLectures = catalog.lectures;
 
     const qMap = new Map(relevantQuestions.map((q) => [q.id, q]));
     const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
@@ -4113,7 +4180,13 @@ export async function getStudentBookmarksAndReview(userUid: string) {
 export async function consolidateUserLectureSessions(userUid: string) {
   try {
     const allUserSessions = await db
-      .select()
+      .select({
+        id: examSessions.id,
+        lectureId: examSessions.lectureId,
+        status: examSessions.status,
+        startedAt: examSessions.startedAt,
+        questionOrderJson: examSessions.questionOrderJson,
+      })
       .from(examSessions)
       .where(eq(examSessions.userUid, userUid))
       .orderBy(desc(examSessions.startedAt));
@@ -4168,7 +4241,15 @@ export async function getStudentDashboardAnalytics(userUid: string) {
     await ensureSeededDatabase();
     await resolveActiveMockExamsForUser(userUid);
     await consolidateUserLectureSessions(userUid);
-    const [userSessions, userAttempts, userBookmarks, allSubjects, allLectures, allQuestions] =
+    const catalog = await getCachedCatalog();
+    const allSubjects = (catalog.subjects || [])
+      .filter((s: any) => s.status === 'published')
+      .sort((a: any, b: any) => (a.displayOrder || 0) - (b.displayOrder || 0));
+    const allLectures = (catalog.lectures || [])
+      .filter((l: any) => l.status === 'published')
+      .sort((a: any, b: any) => (a.lectureNumber || 0) - (b.lectureNumber || 0));
+
+    const [userSessions, userAttempts, userBookmarks, allQuestions] =
       await Promise.all([
         db
           .select()
@@ -4176,21 +4257,21 @@ export async function getStudentDashboardAnalytics(userUid: string) {
           .where(eq(examSessions.userUid, userUid))
           .orderBy(desc(examSessions.startedAt)),
         db
-          .select()
+          .select({
+            id: questionAttempts.id,
+            sessionId: questionAttempts.sessionId,
+            userUid: questionAttempts.userUid,
+            questionId: questionAttempts.questionId,
+            subjectId: questionAttempts.subjectId,
+            lectureId: questionAttempts.lectureId,
+            selectedOption: questionAttempts.selectedOption,
+            isCorrect: questionAttempts.isCorrect,
+            answeredAt: questionAttempts.answeredAt,
+          })
           .from(questionAttempts)
           .where(eq(questionAttempts.userUid, userUid))
           .orderBy(desc(questionAttempts.answeredAt)),
         db.select().from(bookmarks).where(eq(bookmarks.userUid, userUid)),
-        db
-          .select()
-          .from(subjects)
-          .where(eq(subjects.status, 'published'))
-          .orderBy(asc(subjects.displayOrder)),
-        db
-          .select()
-          .from(lectures)
-          .where(eq(lectures.status, 'published'))
-          .orderBy(asc(lectures.lectureNumber)),
         db
           .select({
             id: questions.id,
@@ -4274,10 +4355,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
               subjectId: q.subjectId,
               lectureId: q.lectureId,
               selectedOption: canonical,
-              correctOptionSnapshot: q.correctAnswer,
               isCorrect: isCorr,
-              questionSnapshotJson: snapshotJson,
-              timeSpentSeconds: 0,
               answeredAt: s.startedAt,
             });
 
@@ -4419,18 +4497,11 @@ export async function getStudentDashboardAnalytics(userUid: string) {
 
     // Weak-topic analysis with small-sample transparency
     const attemptsWithTags = uniqueLatestAttempts.map((att) => {
-      let tags = '';
-      try {
-        const snap = JSON.parse(att.questionSnapshotJson);
-        tags = snap.tags || '';
-      } catch {
-        const liveQ = allQuestions.find((q) => q.id === att.questionId);
-        tags = liveQ?.tags || '';
-      }
+      const liveQ = att.questionId ? qMap.get(att.questionId) : undefined;
       return {
         questionId: att.questionId,
         isCorrect: att.isCorrect,
-        tags,
+        tags: liveQ?.tags || '',
       };
     });
 
@@ -6082,8 +6153,9 @@ export async function executeCsvImportAdmin(
 
 export async function exportQuestionBankCsvAdmin(): Promise<string> {
   try {
-    const allSubjects = await db.select().from(subjects);
-    const allLectures = await db.select().from(lectures);
+    const catalog = await getCachedCatalog();
+    const allSubjects = catalog.subjects;
+    const allLectures = catalog.lectures;
     const allQuestions = await db
       .select()
       .from(questions)

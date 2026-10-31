@@ -166,16 +166,25 @@ export default function App() {
   const loadStudentWorkspaceData = useCallback(async (silent = false) => {
     if (!silent) setLoadingDashboard(true);
     try {
-      const [dash, bkm] = await Promise.all([
-        api.getDashboard(),
-        api.getBookmarks(),
-      ]);
+      const dash = await api.getDashboard();
       setDashboardData(dash);
-      setBookmarksData(bkm);
     } catch (err: any) {
-      console.error('Error loading workspace data:', err);
+      console.error('Error loading dashboard data:', err);
     } finally {
       if (!silent) setLoadingDashboard(false);
+    }
+  }, []);
+
+  const [loadingBookmarks, setLoadingBookmarks] = useState(false);
+  const loadBookmarksData = useCallback(async () => {
+    setLoadingBookmarks(true);
+    try {
+      const bkm = await api.getBookmarks();
+      setBookmarksData(bkm);
+    } catch (err: any) {
+      console.error('Error loading bookmarks:', err);
+    } finally {
+      setLoadingBookmarks(false);
     }
   }, []);
 
@@ -214,11 +223,22 @@ export default function App() {
   useEffect(() => {
     if (user) {
       loadStudentWorkspaceData();
-      if (user.role === 'admin') {
-        loadAdminData();
-      }
     }
-  }, [user, loadStudentWorkspaceData, loadAdminData]);
+  }, [user, loadStudentWorkspaceData]);
+
+  // Lazy-load bookmarks only when the Bookmarks tab is active
+  useEffect(() => {
+    if (user && activeTab === 'bookmarks' && !bookmarksData) {
+      loadBookmarksData();
+    }
+  }, [user, activeTab, bookmarksData, loadBookmarksData]);
+
+  // Lazy-load full admin console only when the Admin tab is active
+  useEffect(() => {
+    if (user?.role === 'admin' && activeTab === 'admin' && !adminData) {
+      loadAdminData();
+    }
+  }, [user, activeTab, adminData, loadAdminData]);
 
   // Restore active session directly from URL path (/session/:id) or localStorage
   useEffect(() => {
@@ -574,8 +594,7 @@ export default function App() {
                   onStartSession={handleStartSession}
                   onRefresh={() => {
                     loadStudentWorkspaceData();
-                    loadCatalog();
-                    if (user?.role === 'admin') loadAdminData();
+                    loadCatalog(true);
                   }}
                   isAdmin={user?.role === 'admin'}
                 />
@@ -602,7 +621,7 @@ export default function App() {
                 <BookmarksView
                   bookmarksData={bookmarksData}
                   catalog={catalog}
-                  onRefresh={loadStudentWorkspaceData}
+                  onRefresh={loadBookmarksData}
                 />
               )}
 
