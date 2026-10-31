@@ -617,6 +617,21 @@ export interface UserSessionStateRecord {
  * - Uses the dedicated `users.sessionsRevokedAt` timestamp (never `users.updatedAt`) so ordinary
  *   profile updates do not invalidate sessions.
  */
+async function withDbRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 200 * attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export async function lookupUserSessionState(
   uid: string,
   email?: string,
@@ -635,10 +650,12 @@ export async function lookupUserSessionState(
     );
   }
 
-  const tombstones = await db
-    .select()
-    .from(deletedAccounts)
-    .where(or(...tombstoneConditions));
+  const tombstones = await withDbRetry(() =>
+    db
+      .select()
+      .from(deletedAccounts)
+      .where(or(...tombstoneConditions))
+  );
 
   // Any tombstone matching the exact UID or firebaseUid is permanently deleted forever
   const directUidTombstone = tombstones.some(
@@ -651,15 +668,17 @@ export async function lookupUserSessionState(
     userLookupConditions.push(eq(users.email, normalizedEmail));
   }
 
-  const matchedUsers = await db
-    .select()
-    .from(users)
-    .where(or(...userLookupConditions));
+  const matchedUsers = await withDbRetry(() =>
+    db
+      .select()
+      .from(users)
+      .where(or(...userLookupConditions))
+  );
 
   const dbUserByIdentity =
     matchedUsers.find((u) => u.uid === uid || u.firebaseUid === uid) ?? null;
   const dbUserByEmail = normalizedEmail
-    ? matchedUsers.find((u) => u.email.toLowerCase().trim() === normalizedEmail) ?? null
+    ? matchedUsers.find((u) => u.email && u.email.toLowerCase().trim() === normalizedEmail) ?? null
     : null;
 
   // Detect identity conflict: an active PostgreSQL account owns this email,
@@ -718,7 +737,7 @@ export async function lookupUserSessionState(
 
   // If the authenticated user has a different email in the token than the email bound to their DB row, flag conflict
   const hasIdentityConflict = Boolean(
-    normalizedEmail && dbUser.email.toLowerCase().trim() !== normalizedEmail
+    normalizedEmail && dbUser.email && dbUser.email.toLowerCase().trim() !== normalizedEmail
   );
 
   // Dedicated session revocation timestamp: ONLY derived from users.sessionsRevokedAt (never updatedAt)
@@ -862,7 +881,10 @@ export const requireAuth = async (
         message: dbErr?.message,
         code: dbErr?.code,
       });
-      return res.status(500).json({ error: 'Authentication verification service error.' });
+      return res.status(500).json({
+        error: 'Authentication verification service error.',
+        detail: dbErr?.message || String(dbErr),
+      });
     }
 
     if (state.isDeleted) {

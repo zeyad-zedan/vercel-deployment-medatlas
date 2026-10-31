@@ -64,6 +64,7 @@ import {
   getPdfTelegramMetadataByUrl,
   attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
+import { pool, isDatabaseConfigured } from './src/db/index.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
 import { isR2Configured, getR2PublicUrl, uploadToR2 } from './src/lib/r2-storage.ts';
@@ -312,7 +313,11 @@ function sendErrorResponse(
   if (error instanceof ClientSafeError) {
     return res.status(error.statusCode).json({ error: error.message });
   }
-  return res.status(defaultStatus).json({ error: fallbackMessage });
+  const detail = error instanceof Error ? error.message : undefined;
+  return res.status(defaultStatus).json({
+    error: fallbackMessage,
+    ...(detail ? { detail } : {}),
+  });
 }
 
 // Middleware to verify database-backed Administrator role without creating unverified admins
@@ -351,6 +356,36 @@ const requireAdmin = async (req: AuthRequest, res: Response, next: NextFunction)
     );
   }
 };
+
+// ============================================================================
+// SYSTEM HEALTH & DIAGNOSTICS API
+// ============================================================================
+app.get('/api/health', async (_req, res) => {
+  const isConfigured = isDatabaseConfigured();
+  if (!isConfigured) {
+    return res.status(500).json({
+      status: 'error',
+      error: 'Database environment variables are missing.',
+    });
+  }
+  try {
+    const t0 = Date.now();
+    await pool.query('SELECT 1 as ok');
+    return res.json({
+      status: 'ok',
+      database: 'connected',
+      latencyMs: Date.now() - t0,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      status: 'error',
+      database: 'disconnected',
+      error: error?.message || 'Database connection error',
+      code: error?.code,
+    });
+  }
+});
 
 // ============================================================================
 // PUBLIC CATALOG API
