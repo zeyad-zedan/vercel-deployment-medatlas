@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   Tag,
 } from 'lucide-react';
-import { parseSpecialTags } from '../lib/mcq-engine.ts';
+import { parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 
 interface UniversityExamPlayerProps {
@@ -406,15 +406,19 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       </td>
                       <td className="py-3 px-4 max-w-xs font-semibold text-slate-800">
                         <div className="line-clamp-2">{q.questionText}</div>
-                        {parseSpecialTags(q.specialTags).length > 0 && (
+                        {parseAllQuestionTags(q.tags, q.specialTags).length > 0 && (
                           <div className="flex flex-wrap items-center gap-1 mt-1">
-                            {parseSpecialTags(q.specialTags).map((specTag) => (
+                            {parseAllQuestionTags(q.tags, q.specialTags).map((tagItem) => (
                               <span
-                                key={specTag}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                                key={tagItem.label}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border ${
+                                  tagItem.isSpecial
+                                    ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                                    : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                                }`}
                               >
-                                <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
-                                {specTag}
+                                <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                                {tagItem.label}
                               </span>
                             ))}
                           </div>
@@ -469,13 +473,17 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <h3 className="font-bold text-[#15616d] text-base">
                     Question Breakdown &amp; Analysis
                   </h3>
-                  {parseSpecialTags(reviewingQuestion.specialTags).map((specTag) => (
+                  {parseAllQuestionTags(reviewingQuestion.tags, reviewingQuestion.specialTags).map((tagItem) => (
                     <span
-                      key={specTag}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                      key={tagItem.label}
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border ${
+                        tagItem.isSpecial
+                          ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                          : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                      }`}
                     >
-                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
-                      {specTag}
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                      {tagItem.label}
                     </span>
                   ))}
                 </div>
@@ -658,14 +666,18 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <span className="text-slate-900">
                     Question No. <span className="font-mono-tabular">{currentIndex + 1}</span>
                   </span>
-                  {parseSpecialTags(currentQ.specialTags).map((specTag) => (
+                  {parseAllQuestionTags(currentQ.tags, currentQ.specialTags).map((tagItem) => (
                     <span
-                      key={specTag}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs"
-                      title={`Special Source Label: ${specTag}`}
+                      key={tagItem.label}
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border shadow-2xs ${
+                        tagItem.isSpecial
+                          ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                          : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                      }`}
+                      title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Tag: ${tagItem.label}`}
                     >
-                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
-                      {specTag}
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                      {tagItem.label}
                     </span>
                   ))}
                 </div>

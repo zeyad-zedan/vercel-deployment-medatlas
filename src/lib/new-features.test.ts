@@ -10,6 +10,7 @@ import {
   computeTopicPerformance,
   parseAndValidateCsvQuestions,
   parseSpecialTags,
+  parseAllQuestionTags,
   getSampleCsvTemplate,
   REQUIRED_CSV_COLUMNS,
   CanonicalQuestion,
@@ -555,6 +556,24 @@ test('17. Special Tags (e.g. "Old Exam", "كتاب القسم"): CSV parsing, st
   ]);
   assert.deepEqual(parseSpecialTags(''), []);
   assert.deepEqual(parseSpecialTags(null), []);
+
+  // 2b. parseAllQuestionTags extracts both special tags and topic tags, deduplicating appropriately
+  assert.deepEqual(
+    parseAllQuestionTags('Cardiology, Arrhythmia, Old Exam', 'Old Exam, كتاب القسم'),
+    [
+      { label: 'Old Exam', isSpecial: true },
+      { label: 'كتاب القسم', isSpecial: true },
+      { label: 'Cardiology', isSpecial: false },
+      { label: 'Arrhythmia', isSpecial: false },
+    ]
+  );
+  assert.deepEqual(parseAllQuestionTags('Pathology', null), [
+    { label: 'Pathology', isSpecial: false },
+  ]);
+  assert.deepEqual(parseAllQuestionTags(null, 'Special'), [
+    { label: 'Special', isSpecial: true },
+  ]);
+  assert.deepEqual(parseAllQuestionTags(undefined, undefined), []);
 
   // 3. CSV parsing extracts special_tags and preserves backward compatibility when column is omitted
   const csvWithSpecialTags = `subject,lecture,question_text,option_a,option_b,option_c,option_d,correct_answer,explanation,difficulty,tags,special_tags,page_number,status

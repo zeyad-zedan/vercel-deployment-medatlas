@@ -18,7 +18,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
-import { getSampleCsvTemplate, parseSpecialTags } from '../lib/mcq-engine.ts';
+import { getSampleCsvTemplate, parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
 
@@ -2319,13 +2319,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                       Difficulty: {q.difficulty} · Status: {q.status.toUpperCase()}
                       {q.pageNumber ? ` · PDF Page: ${q.pageNumber}` : ''}
                     </span>
-                    {parseSpecialTags(q.specialTags).map((specTag) => (
+                    {parseAllQuestionTags(q.tags, q.specialTags).map((tagItem) => (
                       <span
-                        key={specTag}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                        key={tagItem.label}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans border ${
+                          tagItem.isSpecial
+                            ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                            : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                        }`}
+                        title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
                       >
-                        <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
-                        {specTag}
+                        <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
+                        {tagItem.label}
                       </span>
                     ))}
                   </div>
@@ -2644,13 +2649,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                             CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
                             {r.lecture || 'Missing Lecture'}
                           </span>
-                          {parseSpecialTags(r.specialTags).map((specTag) => (
+                          {parseAllQuestionTags(r.tags, r.specialTags).map((tagItem) => (
                             <span
-                              key={specTag}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                              key={tagItem.label}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans border ${
+                                tagItem.isSpecial
+                                  ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                                  : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                              }`}
+                              title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
                             >
-                              <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
-                              {specTag}
+                              <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
+                              {tagItem.label}
                             </span>
                           ))}
                         </div>
@@ -2844,13 +2854,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <h3 className="text-base font-bold text-slate-900">
                     Question #{previewQuestion.id} ({previewQuestion.difficulty})
                   </h3>
-                  {parseSpecialTags(previewQuestion.specialTags).map((specTag) => (
+                  {parseAllQuestionTags(previewQuestion.tags, previewQuestion.specialTags).map((tagItem) => (
                     <span
-                      key={specTag}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                      key={tagItem.label}
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border ${
+                        tagItem.isSpecial
+                          ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                          : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                      }`}
+                      title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
                     >
-                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
-                      {specTag}
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
+                      {tagItem.label}
                     </span>
                   ))}
                 </div>

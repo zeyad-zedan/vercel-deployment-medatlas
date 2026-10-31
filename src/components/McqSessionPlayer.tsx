@@ -25,7 +25,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
-import { OPTION_KEYS, OptionKey, parseSpecialTags, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
+import { OPTION_KEYS, OptionKey, parseAllQuestionTags, parseSpecialTags, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
 import { PdfViewerModal, PdfSlideViewer } from './PdfViewerModal.tsx';
 import { UniversityExamPlayer } from './UniversityExamPlayer.tsx';
 
@@ -1009,14 +1009,18 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 font-sans">
-                  {parseSpecialTags(currentQ.specialTags).map((specTag) => (
+                  {parseAllQuestionTags(currentQ.tags, currentQ.specialTags).map((tagItem) => (
                     <span
-                      key={specTag}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs"
-                      title={`Special Source Label: ${specTag}`}
+                      key={tagItem.label}
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border shadow-2xs ${
+                        tagItem.isSpecial
+                          ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                          : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                      }`}
+                      title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
                     >
-                      <Tag className="w-3 h-3 text-amber-600 shrink-0" />
-                      {specTag}
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
+                      {tagItem.label}
                     </span>
                   ))}
                   <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-600">

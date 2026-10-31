@@ -53,6 +53,48 @@ export function parseSpecialTags(raw?: string | null): string[] {
   return result;
 }
 
+export interface QuestionTagBadge {
+  label: string;
+  isSpecial: boolean;
+}
+
+/**
+ * Extracts and deduplicates all tags (both special source labels and general topic tags) for a question.
+ * Special tags are marked with isSpecial = true (rendered as prominent amber badges).
+ * Standard topic tags are marked with isSpecial = false (rendered as slate/sky/teal badges).
+ */
+export function parseAllQuestionTags(
+  tags?: string | null,
+  specialTags?: string | null
+): QuestionTagBadge[] {
+  const result: QuestionTagBadge[] = [];
+  const seen = new Set<string>();
+
+  // 1. First add special tags (isSpecial: true)
+  for (const item of parseSpecialTags(specialTags)) {
+    const lower = item.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push({ label: item, isSpecial: true });
+    }
+  }
+
+  // 2. Add standard tags if not already present in special tags
+  if (tags && typeof tags === 'string') {
+    for (const part of tags.split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        result.push({ label: trimmed, isSpecial: false });
+      }
+    }
+  }
+
+  return result;
+}
+
 export type OptionPermutation = Record<OptionKey, OptionKey>;
 
 /**

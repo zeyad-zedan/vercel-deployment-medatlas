@@ -26,7 +26,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
-import { parseSpecialTags } from '../lib/mcq-engine.ts';
+import { parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
 
@@ -2255,13 +2255,18 @@ export const BookmarksView: React.FC<{
                       </span>{' '}
                       · {item.lectureTitle} · Difficulty: {item.difficulty}
                     </span>
-                    {parseSpecialTags(item.specialTags).map((specTag) => (
+                    {parseAllQuestionTags(item.tags, item.specialTags).map((tagItem) => (
                       <span
-                        key={specTag}
-                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+                        key={tagItem.label}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border ${
+                          tagItem.isSpecial
+                            ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                            : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                        }`}
+                        title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
                       >
-                        <Tag className="w-3 h-3 text-amber-600 shrink-0" />
-                        {specTag}
+                        <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
+                        {tagItem.label}
                       </span>
                     ))}
                   </div>
