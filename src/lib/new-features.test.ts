@@ -11,6 +11,7 @@ import {
   parseAndValidateCsvQuestions,
   parseSpecialTags,
   parseAllQuestionTags,
+  isBinaryFlagTrue,
   getSampleCsvTemplate,
   REQUIRED_CSV_COLUMNS,
   CanonicalQuestion,
@@ -582,6 +583,37 @@ Histology,Epithelium,"Which junctional complex anchors epithelial cells to the b
   const report = parseAndValidateCsvQuestions(csvWithSpecialTags);
   assert.equal(report.validCount, 1);
   assert.equal(report.rows[0].specialTags, 'Old Exam,كتاب القسم');
+
+  // 3b. Binary flag columns system: "old exams", "كتاب القسم", "important" taking 0 or 1
+  assert.equal(isBinaryFlagTrue('1'), true);
+  assert.equal(isBinaryFlagTrue(1), true);
+  assert.equal(isBinaryFlagTrue('true'), true);
+  assert.equal(isBinaryFlagTrue('yes'), true);
+  assert.equal(isBinaryFlagTrue('نعم'), true);
+  assert.equal(isBinaryFlagTrue('0'), false);
+  assert.equal(isBinaryFlagTrue(0), false);
+  assert.equal(isBinaryFlagTrue('false'), false);
+  assert.equal(isBinaryFlagTrue('no'), false);
+  assert.equal(isBinaryFlagTrue(''), false);
+  assert.equal(isBinaryFlagTrue(null), false);
+
+  const csvWithBinaryFlags = `subject,lecture,question_text,option_a,option_b,option_c,option_d,correct_answer,explanation,tags,"old exams","كتاب القسم","important"
+Pathology,Cell Injury,"Which necrosis type is characteristic of myocardial infarction?",Coagulative necrosis,Liquefactive necrosis,Caseous necrosis,Fat necrosis,A,Ischemic injury in solid organs produces coagulative necrosis.,Necrosis,1,1,0
+Pathology,Cell Injury,"Which necrosis type is characteristic of acute cerebral infarction?",Coagulative necrosis,Liquefactive necrosis,Caseous necrosis,Fat necrosis,B,Brain infarcts undergo liquefactive necrosis.,Necrosis,0,0,1
+Pathology,Cell Injury,"Which necrosis type is seen in tuberculous granulomas?",Coagulative necrosis,Liquefactive necrosis,Caseous necrosis,Fat necrosis,C,Caseous necrosis presents with cheese-like debris.,Necrosis,0,0,0`;
+
+  const binaryReport = parseAndValidateCsvQuestions(csvWithBinaryFlags);
+  assert.equal(binaryReport.validCount, 3);
+  assert.equal(binaryReport.rows[0].specialTags, 'Old Exams, كتاب القسم');
+  assert.equal(binaryReport.rows[1].specialTags, 'Important');
+  assert.equal(binaryReport.rows[2].specialTags, '');
+
+  // 3c. Underscored variations like old_exams, كتاب_القسم, important
+  const csvUnderscoredFlags = `subject,lecture,question_text,option_a,option_b,option_c,option_d,correct_answer,explanation,old_exams,كتاب_القسم,important
+Histology,Cartilage,"Which collagen type predominates in hyaline cartilage matrix?",Type I collagen,Type II collagen,Type III collagen,Type IV collagen,B,Hyaline and elastic cartilage contain predominantly Type II collagen.,1,0,1`;
+  const underscoredReport = parseAndValidateCsvQuestions(csvUnderscoredFlags);
+  assert.equal(underscoredReport.validCount, 1);
+  assert.equal(underscoredReport.rows[0].specialTags, 'Old Exams, Important');
 
   // 4. formatQuestionForClient exposes specialTags in both Study and Exam modes so students see the notification badge
   const qWithSpecial: CanonicalQuestion = {

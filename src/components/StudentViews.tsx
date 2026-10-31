@@ -1125,21 +1125,26 @@ export const CustomPracticeView: React.FC<{
       : filteredLectures;
 
   const specialTagCountsMap = new Map<string, { label: string; count: number }>();
-  for (const preset of ['Old Exam', 'كتاب القسم']) {
+  for (const preset of ['Old Exams', 'كتاب القسم', 'Important']) {
     specialTagCountsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
   }
   for (const gt of catalog?.specialTags || []) {
     if (gt?.label) {
-      specialTagCountsMap.set(gt.label.toLowerCase(), { label: gt.label, count: 0 });
+      const normKey = gt.label.toLowerCase() === 'old exam' ? 'old exams' : gt.label.toLowerCase();
+      const existing = specialTagCountsMap.get(normKey);
+      specialTagCountsMap.set(normKey, {
+        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : gt.label),
+        count: (existing?.count || 0) + Number(gt.count || 0),
+      });
     }
   }
   for (const lect of activeScopeLectures) {
     const breakdown = lect.specialTagBreakdown || {};
     for (const [label, cnt] of Object.entries(breakdown)) {
-      const key = label.toLowerCase();
-      const existing = specialTagCountsMap.get(key);
-      specialTagCountsMap.set(key, {
-        label: existing?.label || label,
+      const normKey = label.toLowerCase() === 'old exam' ? 'old exams' : label.toLowerCase();
+      const existing = specialTagCountsMap.get(normKey);
+      specialTagCountsMap.set(normKey, {
+        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : label),
         count: (existing?.count || 0) + Number(cnt || 0),
       });
     }
@@ -1614,21 +1619,26 @@ export const MockExamsView: React.FC<{
   );
 
   const mockSpecialTagsMap = new Map<string, { label: string; count: number }>();
-  for (const preset of ['Old Exam', 'كتاب القسم']) {
+  for (const preset of ['Old Exams', 'كتاب القسم', 'Important']) {
     mockSpecialTagsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
   }
   for (const gt of catalog?.specialTags || []) {
     if (gt?.label) {
-      mockSpecialTagsMap.set(gt.label.toLowerCase(), { label: gt.label, count: 0 });
+      const normKey = gt.label.toLowerCase() === 'old exam' ? 'old exams' : gt.label.toLowerCase();
+      const existing = mockSpecialTagsMap.get(normKey);
+      mockSpecialTagsMap.set(normKey, {
+        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : gt.label),
+        count: (existing?.count || 0) + Number(gt.count || 0),
+      });
     }
   }
   for (const lect of selectedLecturesObjects) {
     const breakdown = lect.specialTagBreakdown || {};
     for (const [label, cnt] of Object.entries(breakdown)) {
-      const key = label.toLowerCase();
-      const existing = mockSpecialTagsMap.get(key);
-      mockSpecialTagsMap.set(key, {
-        label: existing?.label || label,
+      const normKey = label.toLowerCase() === 'old exam' ? 'old exams' : label.toLowerCase();
+      const existing = mockSpecialTagsMap.get(normKey);
+      mockSpecialTagsMap.set(normKey, {
+        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : label),
         count: (existing?.count || 0) + Number(cnt || 0),
       });
     }

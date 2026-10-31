@@ -937,8 +937,22 @@ export function selectPracticeQuestions<
           .filter(Boolean);
         return targetSpecialTags.some(
           (target) =>
-            qSpecial.some((qs) => qs === target || qs.includes(target)) ||
-            qRegular.some((qr) => qr === target || qr.includes(target))
+            qSpecial.some(
+              (qs) =>
+                qs === target ||
+                qs.includes(target) ||
+                target.includes(qs) ||
+                (target === 'old exams' && qs === 'old exam') ||
+                (target === 'old exam' && qs === 'old exams')
+            ) ||
+            qRegular.some(
+              (qr) =>
+                qr === target ||
+                qr.includes(target) ||
+                target.includes(qr) ||
+                (target === 'old exams' && qr === 'old exam') ||
+                (target === 'old exam' && qr === 'old exams')
+            )
         );
       });
     }
@@ -1201,6 +1215,55 @@ export interface CsvValidationReport {
   headerErrors: string[];
 }
 
+export function isBinaryFlagTrue(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  const s = String(val).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes' || s === 'y' || s === 'نعم' || s === 'صحيح';
+}
+
+export const STANDARD_NON_FLAG_COLUMNS = new Set([
+  'subject',
+  'lecture',
+  'question text',
+  'question_text',
+  'option a',
+  'option_a',
+  'option b',
+  'option_b',
+  'option c',
+  'option_c',
+  'option d',
+  'option_d',
+  'correct answer',
+  'correct_answer',
+  'explanation',
+  'explanation a',
+  'explanation_a',
+  'explanation b',
+  'explanation_b',
+  'explanation c',
+  'explanation_c',
+  'explanation d',
+  'explanation_d',
+  'difficulty',
+  'tags',
+  'special tags',
+  'special_tags',
+  'special tag',
+  'special_tag',
+  'source tags',
+  'source_tags',
+  'source tag',
+  'source_tag',
+  'label',
+  'badge',
+  'page number',
+  'page_number',
+  'pdf page number',
+  'pdf_page_number',
+  'status',
+]);
+
 export const REQUIRED_CSV_COLUMNS = [
   'subject',
   'lecture',
@@ -1217,6 +1280,9 @@ export const REQUIRED_CSV_COLUMNS = [
   'explanation_d',
   'difficulty',
   'tags',
+  'old_exams',
+  'كتاب_القسم',
+  'important',
   'special_tags',
   'page_number',
   'status',
@@ -1305,13 +1371,71 @@ export function parseAndValidateCsvQuestions(
     const explanationD = getCol(raw, 'explanation_d');
     const rawDifficulty = getCol(raw, 'difficulty') || 'Medium';
     const tags = getCol(raw, 'tags');
-    const specialTags =
+    // Collect special tags from both legacy special_tags column and individual 0/1 binary flag columns
+    const collectedSpecialTags = new Set<string>();
+
+    // 1. Any legacy/explicit special_tags column (e.g. "Old Exams, كتاب القسم")
+    const explicitSpecialTags =
       getCol(raw, 'special_tags') ||
       getCol(raw, 'special_tag') ||
       getCol(raw, 'source_tag') ||
       getCol(raw, 'source_tags') ||
       getCol(raw, 'label') ||
       getCol(raw, 'badge');
+    if (explicitSpecialTags) {
+      for (const t of parseSpecialTags(explicitSpecialTags)) {
+        collectedSpecialTags.add(t);
+      }
+    }
+
+    // 2. Binary 0 or 1 flag columns (e.g. "old exams", "كتاب القسم", "important", or custom flags)
+    let flagColumnsFound = false;
+    for (let colIdx = 0; colIdx < headerRow.length; colIdx++) {
+      const colHeaderRaw = headerRow[colIdx] || '';
+      const colHeaderClean = colHeaderRaw.replace(/^["']|["']$/g, '').trim();
+      const normHeader = colHeaderClean.toLowerCase().replace(/[\s\-_]+/g, ' ');
+
+      if (STANDARD_NON_FLAG_COLUMNS.has(normHeader)) {
+        continue;
+      }
+
+      const cellVal = colIdx < raw.length ? (raw[colIdx] || '').trim() : '';
+      if (!isBinaryFlagTrue(cellVal)) {
+        continue;
+      }
+
+      flagColumnsFound = true;
+
+      // Check known aliases for clean display labels
+      if (
+        normHeader === 'old exams' ||
+        normHeader === 'old exam' ||
+        normHeader === 'امتحانات سابقة'
+      ) {
+        collectedSpecialTags.add('Old Exams');
+      } else if (
+        normHeader === 'كتاب القسم' ||
+        normHeader === 'kitab elqesm'
+      ) {
+        collectedSpecialTags.add('كتاب القسم');
+      } else if (
+        normHeader === 'important' ||
+        normHeader === 'مهم' ||
+        normHeader === 'هام'
+      ) {
+        collectedSpecialTags.add('Important');
+      } else {
+        const pretty =
+          colHeaderClean.length > 0
+            ? colHeaderClean.charAt(0).toUpperCase() + colHeaderClean.slice(1)
+            : colHeaderClean;
+        collectedSpecialTags.add(pretty);
+      }
+    }
+
+    const specialTags = flagColumnsFound
+      ? Array.from(collectedSpecialTags).join(', ')
+      : explicitSpecialTags;
     const rawStatus = (getCol(raw, 'status') || 'published').toLowerCase();
     const rawPage = getCol(raw, 'page_number') || getCol(raw, 'pdf_page_number');
     let pageNumber: number | null = null;
@@ -1449,6 +1573,9 @@ export function getSampleCsvTemplate(): string {
     '"SER synthesizes steroid hormones and detoxifies lipid-soluble drugs via cytochrome P450."',
     '"Medium"',
     '"Organelles,Protein Trafficking,Cell Biology"',
+    '"1"',
+    '"1"',
+    '"0"',
     '"Old Exam,كتاب القسم"',
     '"2"',
     '"published"',
@@ -1470,7 +1597,10 @@ export function getSampleCsvTemplate(): string {
     '"Funny current (If) mediates slow spontaneous depolarization during Phase 4."',
     '"Easy"',
     '"Electrophysiology,SA Node,Cardiovascular"',
-    '"Old Exam"',
+    '"0"',
+    '"0"',
+    '"1"',
+    '"Important"',
     '"4"',
     '"published"',
   ].join(',');

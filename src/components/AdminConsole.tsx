@@ -2200,7 +2200,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     className="w-full px-3 py-2 text-sm rounded-lg border border-amber-300 bg-amber-50/30"
                   />
                   <div className="flex flex-wrap gap-1 mt-1.5">
-                    {['Old Exam', 'كتاب القسم'].map((preset) => (
+                    {['Old Exams', 'كتاب القسم', 'Important'].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -2532,15 +2532,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   onChange={handleFileUpload}
                   className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#0284C7] file:text-white hover:file:bg-[#0369A1] cursor-pointer"
                 />
-                <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1 text-slate-600">
+                <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5 text-slate-600">
                   <p className="font-semibold text-slate-900">
                     Documented CSV Columns:
                   </p>
                   <p className="font-mono-tabular text-[11px] leading-relaxed">
-                    subject, lecture, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, explanation_a, explanation_b, explanation_c, explanation_d, difficulty, tags, special_tags, page_number, status
+                    subject, lecture, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, explanation_a, explanation_b, explanation_c, explanation_d, difficulty, tags, &quot;old exams&quot;, &quot;كتاب القسم&quot;, &quot;important&quot;, page_number, status
                   </p>
-                  <p className="text-[11px] text-amber-800 pt-1">
-                    <strong>Tip:</strong> Use the <code className="font-mono bg-amber-100 px-1 rounded">special_tags</code> column for student labels like <code className="font-mono">&quot;Old Exam&quot;</code> or <code className="font-mono">&quot;كتاب القسم&quot;</code>.
+                  <p className="text-[11px] text-amber-800 pt-0.5">
+                    <strong>New Tag System (0 or 1):</strong> Add columns named <code className="font-mono bg-amber-100 px-1 rounded">&quot;old exams&quot;</code>, <code className="font-mono bg-amber-100 px-1 rounded">&quot;كتاب القسم&quot;</code>, and <code className="font-mono bg-amber-100 px-1 rounded">&quot;important&quot;</code> with values <code className="font-mono font-bold">1</code> or <code className="font-mono font-bold">0</code> to tag questions with student notification badges.
                   </p>
                 </div>
               </div>

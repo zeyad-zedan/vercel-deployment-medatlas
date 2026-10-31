@@ -6047,13 +6047,27 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
       'explanation_d',
       'difficulty',
       'tags',
+      'old_exams',
+      'كتاب_القسم',
+      'important',
       'special_tags',
       'page_number',
       'status',
     ].join(',');
 
-    const lines = allQuestions.map((q) =>
-      [
+    const lines = allQuestions.map((q) => {
+      const qSpec = (q.specialTags || '').toLowerCase();
+      const isOldExam =
+        qSpec.includes('old exam') || qSpec.includes('old exams') || qSpec.includes('امتحانات سابقة')
+          ? '1'
+          : '0';
+      const isKitab = qSpec.includes('كتاب القسم') ? '1' : '0';
+      const isImportant =
+        qSpec.includes('important') || qSpec.includes('مهم') || qSpec.includes('هام')
+          ? '1'
+          : '0';
+
+      return [
         escapeCsv(sMap.get(q.subjectId) || ''),
         escapeCsv(lMap.get(q.lectureId) || ''),
         escapeCsv(q.questionText),
@@ -6069,11 +6083,14 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
         escapeCsv(q.explanationD),
         escapeCsv(q.difficulty),
         escapeCsv(q.tags),
+        escapeCsv(isOldExam),
+        escapeCsv(isKitab),
+        escapeCsv(isImportant),
         escapeCsv(q.specialTags || ''),
         escapeCsv(q.pageNumber ? String(q.pageNumber) : ''),
         escapeCsv(q.status),
-      ].join(',')
-    );
+      ].join(',');
+    });
 
     return [headers, ...lines].join('\n');
   } catch (error) {
