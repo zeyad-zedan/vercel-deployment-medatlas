@@ -926,10 +926,15 @@ export const api = {
       body: JSON.stringify({ csvContent, targetLectureId }),
     }),
 
-  executeCsvImport: (fileName: string, csvContent: string, targetLectureId?: number) =>
+  executeCsvImport: (
+    fileName: string,
+    csvContent: string,
+    targetLectureId?: number,
+    rowOverrides?: Record<number, { specialTags?: string; tags?: string }>
+  ) =>
     apiRequest<any>('/api/admin/import/execute', {
       method: 'POST',
-      body: JSON.stringify({ fileName, csvContent, targetLectureId }),
+      body: JSON.stringify({ fileName, csvContent, targetLectureId, rowOverrides }),
     }),
 
   exportQuestionBankCsv: async (): Promise<string> => {

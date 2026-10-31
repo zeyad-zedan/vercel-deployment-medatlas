@@ -1521,7 +1521,7 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const { fileName, csvContent, targetLectureId } = req.body || {};
+      const { fileName, csvContent, targetLectureId, rowOverrides } = req.body || {};
       if (!csvContent || typeof csvContent !== 'string') {
         return res.status(400).json({ error: 'CSV content is required for import.' });
       }
@@ -1529,7 +1529,8 @@ app.post(
         { uid: req.user!.uid, email: req.user!.email },
         fileName || 'upload.csv',
         csvContent,
-        targetLectureId ? Number(targetLectureId) : undefined
+        targetLectureId ? Number(targetLectureId) : undefined,
+        rowOverrides
       );
       return res.json(result);
     } catch (error) {

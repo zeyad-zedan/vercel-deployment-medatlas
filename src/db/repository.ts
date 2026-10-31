@@ -5790,7 +5790,8 @@ export async function executeCsvImportAdmin(
   admin: { uid: string; email: string },
   fileName: string,
   csvContent: string,
-  targetLectureId?: number
+  targetLectureId?: number,
+  rowOverrides?: Record<number, { specialTags?: string; tags?: string }>
 ) {
   try {
     const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
@@ -5911,6 +5912,11 @@ export async function executeCsvImportAdmin(
 
         affectedLectureIds.add(destLectureId);
 
+        const override = rowOverrides?.[row.rowNumber];
+        const finalSpecialTags =
+          override?.specialTags !== undefined ? override.specialTags : (row.specialTags || '');
+        const finalTags = override?.tags !== undefined ? override.tags : row.tags;
+
         await tx.insert(questions).values({
           subjectId: destSubjectId,
           lectureId: destLectureId,
@@ -5926,8 +5932,8 @@ export async function executeCsvImportAdmin(
           explanationC: row.explanationC,
           explanationD: row.explanationD,
           difficulty: row.difficulty,
-          tags: row.tags,
-          specialTags: row.specialTags || '',
+          tags: finalTags,
+          specialTags: finalSpecialTags,
           pageNumber: row.pageNumber ?? null,
           status: row.status,
           version: 1,

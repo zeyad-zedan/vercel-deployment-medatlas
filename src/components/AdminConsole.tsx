@@ -150,6 +150,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [validatingCsv, setValidatingCsv] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
   const [importTargetLectureId, setImportTargetLectureId] = useState<number | 'auto'>('auto');
+  const [rowTagOverrides, setRowTagOverrides] = useState<Record<number, string>>({});
+  const [rowCustomTagInput, setRowCustomTagInput] = useState<Record<number, string>>({});
+  const [bulkAddTagInput, setBulkAddTagInput] = useState('');
 
   if (loading || !adminData) {
     return (
@@ -564,6 +567,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     clearAlerts();
+    setRowTagOverrides({});
+    setRowCustomTagInput({});
+    setBulkAddTagInput('');
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.csv')) {
@@ -587,6 +593,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
   const handleLoadSampleIntoEditor = () => {
     clearAlerts();
+    setRowTagOverrides({});
+    setRowCustomTagInput({});
+    setBulkAddTagInput('');
     setCsvFileName('sample_batch_import.csv');
     setCsvContent(getSampleCsvTemplate());
     setCsvPreviewReport(null);
@@ -595,6 +604,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
   const handleValidateCsv = async () => {
     clearAlerts();
+    setRowTagOverrides({});
+    setRowCustomTagInput({});
+    setBulkAddTagInput('');
     if (!csvContent.trim()) {
       setErrorMsg('Please upload a CSV file or load the sample CSV template first.');
       return;
@@ -611,12 +623,74 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
   };
 
+  const handleAddTagToRow = (rowNumber: number, tagToAdd: string) => {
+    const trimmed = tagToAdd.trim();
+    if (!trimmed) return;
+    const originalRow = csvPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
+    const curr =
+      rowTagOverrides[rowNumber] !== undefined
+        ? rowTagOverrides[rowNumber]
+        : (originalRow?.specialTags || '');
+    const existingList = parseSpecialTags(curr);
+    if (!existingList.some((t) => t.toLowerCase() === trimmed.toLowerCase())) {
+      const updated = [...existingList, trimmed].join(', ');
+      setRowTagOverrides((prev) => ({
+        ...prev,
+        [rowNumber]: updated,
+      }));
+    }
+  };
+
+  const handleRemoveTagFromRow = (rowNumber: number, tagToRemove: string) => {
+    const originalRow = csvPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
+    const curr =
+      rowTagOverrides[rowNumber] !== undefined
+        ? rowTagOverrides[rowNumber]
+        : (originalRow?.specialTags || '');
+    const existingList = parseSpecialTags(curr);
+    const updated = existingList
+      .filter((t) => t.toLowerCase() !== tagToRemove.toLowerCase())
+      .join(', ');
+    setRowTagOverrides((prev) => ({
+      ...prev,
+      [rowNumber]: updated,
+    }));
+  };
+
+  const handleAddTagToAllRows = (tagToAdd: string) => {
+    const trimmed = tagToAdd.trim();
+    if (!trimmed || !csvPreviewReport?.rows) return;
+    setRowTagOverrides((prev) => {
+      const next = { ...prev };
+      for (const r of csvPreviewReport.rows) {
+        if (!r.isValid) continue;
+        const curr = next[r.rowNumber] !== undefined ? next[r.rowNumber] : (r.specialTags || '');
+        const existingList = parseSpecialTags(curr);
+        const allTags = parseAllQuestionTags(r.tags, curr);
+        if (!allTags.some((t) => t.label.toLowerCase() === trimmed.toLowerCase())) {
+          next[r.rowNumber] = [...existingList, trimmed].join(', ');
+        }
+      }
+      return next;
+    });
+  };
+
   const handleConfirmCsvImport = async () => {
     clearAlerts();
     setImportingCsv(true);
     try {
       const targetId = importTargetLectureId !== 'auto' ? Number(importTargetLectureId) : undefined;
-      const res = await api.executeCsvImport(csvFileName, csvContent, targetId);
+      const formattedOverrides: Record<number, { specialTags: string }> = {};
+      for (const [rowNumStr, specTags] of Object.entries(rowTagOverrides)) {
+        const rowNum = Number(rowNumStr);
+        formattedOverrides[rowNum] = { specialTags: specTags };
+      }
+      const res = await api.executeCsvImport(
+        csvFileName,
+        csvContent,
+        targetId,
+        Object.keys(formattedOverrides).length > 0 ? formattedOverrides : undefined
+      );
       setCsvImportResult(res);
       const affectedCount = res.affectedLectures?.length || 1;
       setFeedbackMsg(
@@ -2631,67 +2705,271 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   </div>
                 )}
 
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                  {(csvPreviewReport.rows || []).map((r: any) => (
-                    <div
-                      key={r.rowNumber}
-                      className={`p-3 rounded-lg border text-xs ${
-                        r.isValid
-                          ? 'border-emerald-200 bg-emerald-50/40'
-                          : r.isDuplicate
-                          ? 'border-amber-200 bg-amber-50/40'
-                          : 'border-red-200 bg-red-50/40'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 font-mono-tabular">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-bold text-slate-900">
-                            CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
-                            {r.lecture || 'Missing Lecture'}
-                          </span>
-                          {parseAllQuestionTags(r.tags, r.specialTags).map((tagItem) => (
-                            <span
-                              key={tagItem.label}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans border ${
-                                tagItem.isSpecial
-                                  ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
-                                  : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
-                              }`}
-                              title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Topic Tag: ${tagItem.label}`}
-                            >
-                              <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'}`} />
-                              {tagItem.label}
-                            </span>
-                          ))}
-                        </div>
-                        <span
-                          className={`font-semibold ${
-                            r.isValid
-                              ? 'text-emerald-700'
-                              : r.isDuplicate
-                              ? 'text-amber-700'
-                              : 'text-red-700'
-                          }`}
-                        >
-                          {r.isValid
-                            ? '✓ Ready to Import'
-                            : r.isDuplicate
-                            ? 'Skipped (Duplicate)'
-                            : '✕ Invalid Row'}
-                        </span>
-                      </div>
-                      <p className="text-slate-700 truncate mt-1">
-                        {r.questionText || '(Empty question stem)'}
-                      </p>
-                      {r.errors?.length > 0 && (
-                        <ul className="mt-1.5 text-red-700 list-disc list-inside space-y-0.5">
-                          {r.errors.map((err: string, i: number) => (
-                            <li key={i}>{err}</li>
-                          ))}
-                        </ul>
-                      )}
+                {/* Bulk Tag All Valid Questions Toolbar */}
+                {csvPreviewReport.validCount > 0 && (
+                  <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-slate-800">
+                        Tag All Valid Questions ({csvPreviewReport.validCount}):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleAddTagToAllRows('Old Exams')}
+                        className="px-2.5 py-1 rounded-full font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 transition-colors cursor-pointer text-[11px]"
+                        title="Add 'Old Exams' tag to all valid questions"
+                      >
+                        + Old Exams to All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddTagToAllRows('كتاب القسم')}
+                        className="px-2.5 py-1 rounded-full font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 transition-colors cursor-pointer text-[11px]"
+                        title="Add 'كتاب القسم' tag to all valid questions"
+                      >
+                        + كتاب القسم to All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddTagToAllRows('Important')}
+                        className="px-2.5 py-1 rounded-full font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 transition-colors cursor-pointer text-[11px]"
+                        title="Add 'Important' tag to all valid questions"
+                      >
+                        + Important to All
+                      </button>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Custom tag for all..."
+                        value={bulkAddTagInput}
+                        onChange={(e) => setBulkAddTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (bulkAddTagInput.trim()) {
+                              handleAddTagToAllRows(bulkAddTagInput.trim());
+                              setBulkAddTagInput('');
+                            }
+                          }
+                        }}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 bg-white placeholder-slate-400 focus:outline-none focus:border-sky-500 w-36"
+                      />
+                      <button
+                        type="button"
+                        disabled={!bulkAddTagInput.trim()}
+                        onClick={() => {
+                          if (bulkAddTagInput.trim()) {
+                            handleAddTagToAllRows(bulkAddTagInput.trim());
+                            setBulkAddTagInput('');
+                          }
+                        }}
+                        className="px-3 py-1 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                      >
+                        Apply to All
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2.5 max-h-96 overflow-y-auto">
+                  {(csvPreviewReport.rows || []).map((r: any) => {
+                    const effectiveSpecialTags =
+                      rowTagOverrides[r.rowNumber] !== undefined
+                        ? rowTagOverrides[r.rowNumber]
+                        : (r.specialTags || '');
+                    const allTags = parseAllQuestionTags(r.tags, effectiveSpecialTags);
+                    const existingTagNamesLower = new Set(allTags.map((t) => t.label.toLowerCase()));
+
+                    const isOldExamIncluded =
+                      existingTagNamesLower.has('old exams') ||
+                      existingTagNamesLower.has('old exam') ||
+                      existingTagNamesLower.has('امتحانات سابقة');
+
+                    const isKitabIncluded =
+                      existingTagNamesLower.has('كتاب القسم') ||
+                      existingTagNamesLower.has('kitab elqesm');
+
+                    const isImportantIncluded =
+                      existingTagNamesLower.has('important') ||
+                      existingTagNamesLower.has('مهم') ||
+                      existingTagNamesLower.has('هام');
+
+                    const customVal = (rowCustomTagInput[r.rowNumber] || '').trim();
+                    const isCustomAlreadyIncluded = customVal
+                      ? existingTagNamesLower.has(customVal.toLowerCase())
+                      : false;
+
+                    return (
+                      <div
+                        key={r.rowNumber}
+                        className={`p-3.5 rounded-lg border text-xs ${
+                          r.isValid
+                            ? 'border-emerald-200 bg-emerald-50/40'
+                            : r.isDuplicate
+                            ? 'border-amber-200 bg-amber-50/40'
+                            : 'border-red-200 bg-red-50/40'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 font-mono-tabular">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-bold text-slate-900">
+                              CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
+                              {r.lecture || 'Missing Lecture'}
+                            </span>
+                            {allTags.map((tagItem) => (
+                              <span
+                                key={tagItem.label}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans border ${
+                                  tagItem.isSpecial
+                                    ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
+                                    : 'font-medium bg-sky-50 text-sky-800 border-sky-200'
+                                }`}
+                                title={
+                                  tagItem.isSpecial
+                                    ? `Special Source Label: ${tagItem.label}`
+                                    : `Topic Tag: ${tagItem.label}`
+                                }
+                              >
+                                <Tag
+                                  className={`w-2.5 h-2.5 shrink-0 ${
+                                    tagItem.isSpecial ? 'text-amber-600' : 'text-sky-600'
+                                  }`}
+                                />
+                                {tagItem.label}
+                                {tagItem.isSpecial && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveTagFromRow(r.rowNumber, tagItem.label)}
+                                    className="hover:text-red-700 ml-0.5 font-bold cursor-pointer text-xs"
+                                    title={`Remove ${tagItem.label} from this question`}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                          <span
+                            className={`font-semibold ${
+                              r.isValid
+                                ? 'text-emerald-700'
+                                : r.isDuplicate
+                                ? 'text-amber-700'
+                                : 'text-red-700'
+                            }`}
+                          >
+                            {r.isValid
+                              ? '✓ Ready to Import'
+                              : r.isDuplicate
+                              ? 'Skipped (Duplicate)'
+                              : '✕ Invalid Row'}
+                          </span>
+                        </div>
+                        <p className="text-slate-800 font-serif-academic mt-1.5 text-xs sm:text-sm">
+                          {r.questionText || '(Empty question stem)'}
+                        </p>
+                        {r.errors?.length > 0 && (
+                          <ul className="mt-1.5 text-red-700 list-disc list-inside space-y-0.5">
+                            {r.errors.map((err: string, i: number) => (
+                              <li key={i}>{err}</li>
+                            ))}
+                          </ul>
+                        )}
+
+                        {/* Tag Adding Controls for this MCQ row */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 mt-2 border-t border-slate-200/60 text-[11px]">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-semibold text-slate-500">Add tag:</span>
+                            {!isOldExamIncluded && (
+                              <button
+                                type="button"
+                                onClick={() => handleAddTagToRow(r.rowNumber, 'Old Exams')}
+                                className="px-2 py-0.5 rounded-full font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors cursor-pointer"
+                                title="Add 'Old Exams' tag"
+                              >
+                                + Old Exams
+                              </button>
+                            )}
+                            {!isKitabIncluded && (
+                              <button
+                                type="button"
+                                onClick={() => handleAddTagToRow(r.rowNumber, 'كتاب القسم')}
+                                className="px-2 py-0.5 rounded-full font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors cursor-pointer"
+                                title="Add 'كتاب القسم' tag"
+                              >
+                                + كتاب القسم
+                              </button>
+                            )}
+                            {!isImportantIncluded && (
+                              <button
+                                type="button"
+                                onClick={() => handleAddTagToRow(r.rowNumber, 'Important')}
+                                className="px-2 py-0.5 rounded-full font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors cursor-pointer"
+                                title="Add 'Important' tag"
+                              >
+                                + Important
+                              </button>
+                            )}
+
+                            {/* Custom Tag input for this question */}
+                            <div className="flex items-center gap-1 ml-1">
+                              <input
+                                type="text"
+                                placeholder="+ Custom tag..."
+                                value={rowCustomTagInput[r.rowNumber] || ''}
+                                onChange={(e) =>
+                                  setRowCustomTagInput((prev) => ({
+                                    ...prev,
+                                    [r.rowNumber]: e.target.value,
+                                  }))
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    if (customVal && !isCustomAlreadyIncluded) {
+                                      handleAddTagToRow(r.rowNumber, customVal);
+                                      setRowCustomTagInput((prev) => ({
+                                        ...prev,
+                                        [r.rowNumber]: '',
+                                      }));
+                                    }
+                                  }
+                                }}
+                                className="px-2 py-0.5 text-[11px] rounded border border-slate-300 bg-white placeholder-slate-400 focus:outline-none focus:border-sky-500 w-28"
+                              />
+                              <button
+                                type="button"
+                                disabled={!customVal || isCustomAlreadyIncluded}
+                                onClick={() => {
+                                  if (customVal && !isCustomAlreadyIncluded) {
+                                    handleAddTagToRow(r.rowNumber, customVal);
+                                    setRowCustomTagInput((prev) => ({
+                                      ...prev,
+                                      [r.rowNumber]: '',
+                                    }));
+                                  }
+                                }}
+                                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-40 cursor-pointer font-medium"
+                                title={
+                                  isCustomAlreadyIncluded
+                                    ? 'Tag already added'
+                                    : 'Add tag to this question'
+                                }
+                              >
+                                Add
+                              </button>
+                            </div>
+                          </div>
+
+                          {rowTagOverrides[r.rowNumber] !== undefined && (
+                            <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              Tags modified
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
