@@ -2565,12 +2565,29 @@ export async function deleteUserAccount(uid: string) {
   }
 }
 
+let cachedPublishedCatalog: any = null;
+let cachedCatalogExpiresAt = 0;
+const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+
+export function invalidateCatalogCache(): void {
+  cachedPublishedCatalog = null;
+  cachedCatalogExpiresAt = 0;
+  cachedSubjects = null;
+  cachedLectures = null;
+  catalogCacheExpiry = 0;
+}
+
 /**
  * Returns published subjects, lectures, and question counts for the public & student interfaces.
  * Draft and archived items are strictly filtered out at the database query level.
  */
 export async function getPublishedCatalog(userUid?: string) {
   try {
+    const now = Date.now();
+    if (!userUid && cachedPublishedCatalog && now < cachedCatalogExpiresAt) {
+      return cachedPublishedCatalog;
+    }
+
     await ensureSeededDatabase();
     const pubModules = await db
       .select()
@@ -2800,13 +2817,20 @@ export async function getPublishedCatalog(userUid?: string) {
       (a, b) => b.count - a.count || a.label.localeCompare(b.label)
     );
 
-    return {
+    const result = {
       modules: enrichedModules,
       subjects: enrichedSubjects,
       lectures: enrichedLectures,
       specialTags: availableSpecialTags,
       totalPublishedQuestions: visibleQuestions.length,
     };
+
+    if (!userUid) {
+      cachedPublishedCatalog = result;
+      cachedCatalogExpiresAt = Date.now() + CATALOG_CACHE_TTL_MS;
+    }
+
+    return result;
   } catch (error) {
     console.error('Error fetching published catalog:', error);
     throw new Error('Failed to load educational catalog.', { cause: error });
@@ -3261,12 +3285,6 @@ export async function createPracticeOrExamSession(
 let cachedSubjects: any[] | null = null;
 let cachedLectures: any[] | null = null;
 let catalogCacheExpiry = 0;
-
-export function invalidateCatalogCache() {
-  cachedSubjects = null;
-  cachedLectures = null;
-  catalogCacheExpiry = 0;
-}
 
 async function getCachedCatalog() {
   const now = Date.now();
@@ -3956,17 +3974,6 @@ export async function getStudentBookmarksAndReview(userUid: string) {
       .where(eq(questionAttempts.userUid, userUid))
       .orderBy(desc(questionAttempts.answeredAt));
 
-    const allQuestions = await db
-      .select()
-      .from(questions)
-      .where(eq(questions.status, 'published'));
-    const allSubjects = await db.select().from(subjects);
-    const allLectures = await db.select().from(lectures);
-
-    const qMap = new Map(allQuestions.map((q) => [q.id, q]));
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
-
     const latestAttemptByQuestion = new Map<
       number,
       { selectedOption: string | null; isCorrect: boolean; answeredAt: Date }
@@ -3980,6 +3987,35 @@ export async function getStudentBookmarksAndReview(userUid: string) {
         });
       }
     }
+
+    // Only load the specific questions the user has bookmarked or attempted,
+    // avoiding downloading the entire question database on bookmark page loads.
+    const neededQIds = Array.from(
+      new Set([
+        ...userBookmarks.map((b) => b.questionId),
+        ...Array.from(latestAttemptByQuestion.keys()),
+      ])
+    ).filter((id): id is number => typeof id === 'number' && id > 0);
+
+    const relevantQuestions =
+      neededQIds.length > 0
+        ? await db
+            .select()
+            .from(questions)
+            .where(
+              and(
+                inArray(questions.id, neededQIds),
+                eq(questions.status, 'published')
+              )
+            )
+        : [];
+
+    const allSubjects = await db.select().from(subjects);
+    const allLectures = await db.select().from(lectures);
+
+    const qMap = new Map(relevantQuestions.map((q) => [q.id, q]));
+    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
+    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
 
     const bookmarkedItems = userBookmarks
       .map((b) => {
@@ -4156,7 +4192,14 @@ export async function getStudentDashboardAnalytics(userUid: string) {
           .where(eq(lectures.status, 'published'))
           .orderBy(asc(lectures.lectureNumber)),
         db
-          .select()
+          .select({
+            id: questions.id,
+            subjectId: questions.subjectId,
+            lectureId: questions.lectureId,
+            correctAnswer: questions.correctAnswer,
+            tags: questions.tags,
+            difficulty: questions.difficulty,
+          })
           .from(questions)
           .where(eq(questions.status, 'published')),
       ]);
@@ -4205,22 +4248,22 @@ export async function getStudentDashboardAnalytics(userUid: string) {
               id: q.id,
               subjectTitle: sMap.get(q.subjectId) || 'Medical Subject',
               lectureTitle: lMap.get(q.lectureId) || 'Lecture',
-              questionText: q.questionText,
-              optionA: q.optionA,
-              optionB: q.optionB,
-              optionC: q.optionC,
-              optionD: q.optionD,
+              questionText: (q as any).questionText || '',
+              optionA: (q as any).optionA || '',
+              optionB: (q as any).optionB || '',
+              optionC: (q as any).optionC || '',
+              optionD: (q as any).optionD || '',
               correctAnswer: q.correctAnswer,
-              explanation: q.explanation,
-              explanationA: q.explanationA,
-              explanationB: q.explanationB,
-              explanationC: q.explanationC,
-              explanationD: q.explanationD,
+              explanation: (q as any).explanation || '',
+              explanationA: (q as any).explanationA || '',
+              explanationB: (q as any).explanationB || '',
+              explanationC: (q as any).explanationC || '',
+              explanationD: (q as any).explanationD || '',
               difficulty: q.difficulty,
               tags: q.tags,
-              diagramSvg: q.diagramSvg || '',
-              pageNumber: q.pageNumber ?? null,
-              version: q.version,
+              diagramSvg: (q as any).diagramSvg || '',
+              pageNumber: (q as any).pageNumber ?? null,
+              version: (q as any).version || 1,
             });
 
             synthesizedAttempts.push({
@@ -5166,6 +5209,7 @@ export async function upsertQuestionAdmin(
         updated.id,
         `Updated question #${updated.id} to v${nextVersion} (historical attempt snapshots remain untouched)`
       );
+      invalidateCatalogCache();
       return {
         ...updated,
         diagramSvg: sanitizeSvgDiagram(updated.diagramSvg),
@@ -5207,6 +5251,7 @@ export async function upsertQuestionAdmin(
       created.id,
       `Created question #${created.id} (${created.difficulty})`
     );
+    invalidateCatalogCache();
     return {
       ...created,
       diagramSvg: sanitizeSvgDiagram(created.diagramSvg),
@@ -5423,6 +5468,7 @@ export async function deleteOrArchiveQuestionAdmin(
       questionId,
       `Permanently deleted question #${questionId}`
     );
+    invalidateCatalogCache();
     return {
       action: 'deleted',
       message: `Question #${questionId} was permanently deleted.`,

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   BookOpen,
   Bookmark,
@@ -148,11 +148,14 @@ export default function App() {
   const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
 
-  const loadCatalog = useCallback(async () => {
+  const catalogLoadedRef = useRef(false);
+  const loadCatalog = useCallback(async (force = false) => {
+    if (!force && catalogLoadedRef.current) return;
     setLoadingCatalog(true);
     try {
       const data = await api.getCatalog();
       setCatalog(data);
+      catalogLoadedRef.current = true;
     } catch (err: any) {
       console.error('Failed to load catalog:', err);
     } finally {
@@ -210,13 +213,12 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
-      loadCatalog();
       loadStudentWorkspaceData();
       if (user.role === 'admin') {
         loadAdminData();
       }
     }
-  }, [user, loadCatalog, loadStudentWorkspaceData, loadAdminData]);
+  }, [user, loadStudentWorkspaceData, loadAdminData]);
 
   // Restore active session directly from URL path (/session/:id) or localStorage
   useEffect(() => {
@@ -544,9 +546,6 @@ export default function App() {
               }}
               onSessionCompleted={(completed) => {
                 setActiveSession(completed);
-                loadStudentWorkspaceData(true);
-              }}
-              onQuestionAnswered={() => {
                 loadStudentWorkspaceData(true);
               }}
             />

@@ -440,6 +440,7 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/catalog', async (_req, res) => {
   try {
     const catalog = await getPublishedCatalog();
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=300');
     return res.json(catalog);
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load catalog.', 500);
