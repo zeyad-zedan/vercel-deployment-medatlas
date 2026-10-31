@@ -159,7 +159,12 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
       try {
         const cachedPdf = pdfBufferCache.get(relativeUrl);
         if (cachedPdf) {
-          sendPdfBuffer(res, cachedPdf.buffer, cachedPdf.contentType, 'telegram-memory-cache');
+          sendPdfBuffer(
+            res,
+            cachedPdf.buffer,
+            cachedPdf.contentType,
+            isPlanBActive() ? 'telegram-plan-b' : 'telegram-memory-cache'
+          );
           return;
         }
         const fileMeta = await getPdfTelegramMetadataByUrl(relativeUrl);

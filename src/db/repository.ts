@@ -3299,14 +3299,14 @@ let cachedSubjects: any[] | null = null;
 let cachedLectures: any[] | null = null;
 let catalogCacheExpiry = 0;
 
-async function getCachedCatalog() {
+async function getCachedCatalog(runner: any = db) {
   const now = Date.now();
   if (cachedSubjects && cachedLectures && now < catalogCacheExpiry) {
     return { subjects: cachedSubjects, lectures: cachedLectures };
   }
   const [allSubjs, allLecs] = await Promise.all([
-    db.select().from(subjects),
-    db.select().from(lectures),
+    runner.select().from(subjects),
+    runner.select().from(lectures),
   ]);
   cachedSubjects = allSubjs;
   cachedLectures = allLecs;
@@ -3927,7 +3927,7 @@ export async function completeExamSession(
       if (!cachedQs && dbQuestions.length > 0) {
         setCachedSessionQuestions(sessionId, dbQuestions);
       }
-      const catalog = await getCachedCatalog();
+      const catalog = await getCachedCatalog(tx);
       const allSubjects = catalog.subjects;
       const allLectures = catalog.lectures;
 
@@ -3990,6 +3990,7 @@ export async function completeExamSession(
       const avgTimePerQ =
         score.totalQuestions > 0 ? Math.round(finalElapsed / score.totalQuestions) : 0;
 
+      const attemptRecords = [];
       for (const res of score.questionResults) {
         const q = qMap.get(res.questionId);
         if (!q) continue;
@@ -4017,20 +4018,24 @@ export async function completeExamSession(
           version: q.version,
         });
 
+        attemptRecords.push({
+          sessionId,
+          userUid,
+          questionId: q.id,
+          subjectId: q.subjectId,
+          lectureId: q.lectureId,
+          selectedOption: res.selectedCanonical,
+          correctOptionSnapshot: res.correctCanonical,
+          isCorrect: res.isCorrect,
+          questionSnapshotJson: snapshotJson,
+          timeSpentSeconds: avgTimePerQ,
+        });
+      }
+
+      if (attemptRecords.length > 0) {
         await tx
           .insert(questionAttempts)
-          .values({
-            sessionId,
-            userUid,
-            questionId: q.id,
-            subjectId: q.subjectId,
-            lectureId: q.lectureId,
-            selectedOption: res.selectedCanonical,
-            correctOptionSnapshot: res.correctCanonical,
-            isCorrect: res.isCorrect,
-            questionSnapshotJson: snapshotJson,
-            timeSpentSeconds: avgTimePerQ,
-          })
+          .values(attemptRecords)
           .onConflictDoNothing();
       }
     });

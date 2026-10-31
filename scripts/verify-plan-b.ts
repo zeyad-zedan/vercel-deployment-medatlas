@@ -65,14 +65,23 @@ async function verifyAll() {
       );
 
       const statusAfterNormal = getEgressStatus();
-      assert.equal(
-        statusAfterNormal.currentBytes,
-        normalBuf.length,
-        'Egress monitor must record exact bytes served'
-      );
+      if (normalSource === 'telegram') {
+        assert.equal(
+          statusAfterNormal.currentBytes,
+          0,
+          'Telegram-first delivery must consume 0 bytes of local/database egress'
+        );
+        console.log('✅ Telegram-first delivery confirmed: 0 bytes drawn from database/local egress!');
+      } else {
+        assert.equal(
+          statusAfterNormal.currentBytes,
+          normalBuf.length,
+          'Egress monitor must record exact bytes served when served locally'
+        );
+      }
       assert.equal(statusAfterNormal.isPlanBActive, false);
       console.log(
-        '✅ Egress Monitor recorded:',
+        '✅ Egress Monitor status:',
         statusAfterNormal.currentBytes,
         'bytes (' + statusAfterNormal.percentUsed + '%)'
       );
