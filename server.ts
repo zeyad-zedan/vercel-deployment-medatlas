@@ -153,7 +153,9 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
 
     // 2. Telegram-first delivery: whenever the PDF has a Telegram file id, serve it from Telegram
     // (ZERO Supabase egress). The database copy is only a last-resort fallback.
-    if (isTelegramConfigured()) {
+    if (!isTelegramConfigured()) {
+      res.setHeader('X-MedAtlas-Telegram-Skip', 'not-configured');
+    } else {
       try {
         const cachedPdf = pdfBufferCache.get(relativeUrl);
         if (cachedPdf) {
@@ -171,7 +173,12 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
           sendPdfBuffer(res, tgStream.buffer, contentType, isPlanBActive() ? 'telegram-plan-b' : 'telegram');
           return;
         }
+        res.setHeader('X-MedAtlas-Telegram-Skip', 'no-file-id');
       } catch (tgErr: any) {
+        res.setHeader(
+          'X-MedAtlas-Telegram-Skip',
+          String(tgErr?.message || 'error').replace(/[^\x20-\x7E]/g, ' ').slice(0, 120).replace(/bot\d+:[\w-]+/g, 'bot***')
+        );
         console.warn('[TELEGRAM_STREAM_FALLBACK_WARN] Failed streaming from Telegram, falling back to local/DB:', tgErr?.message || tgErr);
       }
     }
