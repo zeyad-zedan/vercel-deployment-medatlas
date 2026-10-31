@@ -2590,8 +2590,16 @@ export async function getPublishedCatalog(userUid?: string) {
       .where(eq(lectures.status, 'published'))
       .orderBy(asc(lectures.lectureNumber), asc(lectures.id));
 
+    // Only the lightweight columns needed for counts/tags are fetched (never full text/explanations),
+    // which keeps every catalog load at a few KB of database egress instead of hundreds of KB.
     const pubQuestions = await db
-      .select()
+      .select({
+        id: questions.id,
+        subjectId: questions.subjectId,
+        lectureId: questions.lectureId,
+        difficulty: questions.difficulty,
+        specialTags: questions.specialTags,
+      })
       .from(questions)
       .where(eq(questions.status, 'published'));
 
@@ -2610,7 +2618,10 @@ export async function getPublishedCatalog(userUid?: string) {
     // Fetch user attempts if authenticated to compute live progress & accuracy without double-counting
     const userAttempts = userUid
       ? await db
-          .select()
+          .select({
+            questionId: questionAttempts.questionId,
+            isCorrect: questionAttempts.isCorrect,
+          })
           .from(questionAttempts)
           .where(
             and(

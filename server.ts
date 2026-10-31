@@ -103,7 +103,40 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Dynamic resolver for uploaded lecture PDFs (must precede express.static so egress tracking and Plan B switch are always active):
+// Small bounded in-memory cache for PDFs fetched from Telegram (warm serverless instances reuse it,
+// avoiding repeated Telegram round-trips). Capped by total bytes.
+const PDF_CACHE_MAX_BYTES = 40 * 1024 * 1024;
+const pdfBufferCache = new Map<string, { buffer: Buffer; contentType: string }>();
+let pdfBufferCacheBytes = 0;
+
+function cachePdfBuffer(key: string, buffer: Buffer, contentType: string) {
+  if (buffer.length > PDF_CACHE_MAX_BYTES / 2) return;
+  const existing = pdfBufferCache.get(key);
+  if (existing) {
+    pdfBufferCacheBytes -= existing.buffer.length;
+    pdfBufferCache.delete(key);
+  }
+  while (pdfBufferCacheBytes + buffer.length > PDF_CACHE_MAX_BYTES && pdfBufferCache.size > 0) {
+    const oldestKey = pdfBufferCache.keys().next().value as string;
+    const oldest = pdfBufferCache.get(oldestKey);
+    pdfBufferCache.delete(oldestKey);
+    if (oldest) pdfBufferCacheBytes -= oldest.buffer.length;
+  }
+  pdfBufferCache.set(key, { buffer, contentType });
+  pdfBufferCacheBytes += buffer.length;
+}
+
+function sendPdfBuffer(res: Response, buffer: Buffer, contentType: string, source: string) {
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Length', buffer.length);
+  // Allow browsers and the Vercel edge CDN to cache the PDF so repeat views never hit the function/DB.
+  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-MedAtlas-Source', source);
+  return res.send(buffer);
+}
+
+// Dynamic resolver for uploaded lecture PDFs (must precede express.static so egress tracking is always active):
 // - If Plan B is active (monthly egress >= 85%), streams directly from Telegram CDN (0 Supabase egress)
 // - If Cloudflare R2 is configured, redirects directly to R2 CDN
 // - Otherwise serves from local cache / database and tracks monthly PDF egress
@@ -112,28 +145,35 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
     const safeFilename = path.basename(req.params.filename);
     const relativeUrl = `/lectures/${safeFilename}`;
 
-    // 1. If Plan B (Telegram CDN fallback) is active (e.g. egress >= 85%), stream directly from Telegram with ZERO Supabase egress
-    if (isPlanBActive()) {
-      const fileMeta = await getPdfTelegramMetadataByUrl(relativeUrl);
-      if (fileMeta?.telegramFileId) {
-        try {
-          const tgStream = await fetchTelegramPdfBuffer(fileMeta.telegramFileId);
-          res.setHeader('Content-Type', tgStream.contentType || 'application/pdf');
-          res.setHeader('Content-Length', tgStream.contentLength);
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('X-MedAtlas-Source', 'telegram-plan-b');
-          return res.send(tgStream.buffer);
-        } catch (tgErr: any) {
-          console.warn('[TELEGRAM_STREAM_FALLBACK_WARN] Failed streaming from Telegram, falling back to local/DB:', tgErr?.message || tgErr);
-        }
-      }
-    }
-
-    // 2. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
+    // 1. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
     const r2DirectUrl = getR2PublicUrl(safeFilename);
     if (r2DirectUrl) {
       return res.redirect(302, r2DirectUrl);
+    }
+
+    // 2. Telegram-first delivery: whenever the PDF has a Telegram file id, serve it from Telegram
+    // (ZERO Supabase egress). The database copy is only a last-resort fallback.
+    if (isTelegramConfigured()) {
+      try {
+        const cachedPdf = pdfBufferCache.get(relativeUrl);
+        if (cachedPdf) {
+          sendPdfBuffer(res, cachedPdf.buffer, cachedPdf.contentType, 'telegram-memory-cache');
+          return;
+        }
+        const fileMeta = await getPdfTelegramMetadataByUrl(relativeUrl);
+        if (fileMeta?.telegramFileId) {
+          const tgStream = await fetchTelegramPdfBuffer(fileMeta.telegramFileId);
+          const contentType =
+            tgStream.contentType && tgStream.contentType.includes('pdf')
+              ? tgStream.contentType
+              : 'application/pdf';
+          cachePdfBuffer(relativeUrl, tgStream.buffer, contentType);
+          sendPdfBuffer(res, tgStream.buffer, contentType, isPlanBActive() ? 'telegram-plan-b' : 'telegram');
+          return;
+        }
+      } catch (tgErr: any) {
+        console.warn('[TELEGRAM_STREAM_FALLBACK_WARN] Failed streaming from Telegram, falling back to local/DB:', tgErr?.message || tgErr);
+      }
     }
 
     const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
@@ -168,7 +208,7 @@ app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFun
       recordPdfEgress(buf.length);
       res.setHeader('Content-Type', fileRecord.mimeType || 'application/pdf');
       res.setHeader('Content-Length', buf.length);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('X-MedAtlas-Source', 'supabase-db');
       return res.send(buf);
