@@ -746,6 +746,12 @@ export const api = {
 
   // Administrator Operations
   getAdminOverview: () => apiRequest<any>('/api/admin/overview'),
+  getEgressStatus: () => apiRequest<any>('/api/admin/egress-status'),
+  setEgressFallback: (forceFallback: boolean | null) =>
+    apiRequest<any>('/api/admin/egress-fallback', {
+      method: 'POST',
+      body: JSON.stringify({ forceFallback }),
+    }),
 
   saveModule: (payload: any) =>
     apiRequest<{ module: any }>('/api/admin/modules', {

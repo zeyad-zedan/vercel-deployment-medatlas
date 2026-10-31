@@ -943,7 +943,11 @@ app.post('/api/admin/egress-fallback', requireAuth, requireAdmin, (req: AuthRequ
 app.get('/api/admin/overview', requireAuth, requireAdmin, async (_req: AuthRequest, res) => {
   try {
     const data = await getAdminDashboardData();
-    return res.json(data);
+    return res.json({
+      ...data,
+      egressStatus: getEgressStatus(),
+      isTelegramConfigured: isTelegramConfigured(),
+    });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load admin overview.', 500);
   }
