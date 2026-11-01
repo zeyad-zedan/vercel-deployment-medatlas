@@ -1128,16 +1128,6 @@ export const CustomPracticeView: React.FC<{
   for (const preset of ['Old Exams', 'كتاب القسم', 'Important']) {
     specialTagCountsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
   }
-  for (const gt of catalog?.specialTags || []) {
-    if (gt?.label) {
-      const normKey = gt.label.toLowerCase() === 'old exam' ? 'old exams' : gt.label.toLowerCase();
-      const existing = specialTagCountsMap.get(normKey);
-      specialTagCountsMap.set(normKey, {
-        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : gt.label),
-        count: (existing?.count || 0) + Number(gt.count || 0),
-      });
-    }
-  }
   for (const lect of activeScopeLectures) {
     const breakdown = lect.specialTagBreakdown || {};
     for (const [label, cnt] of Object.entries(breakdown)) {
@@ -1621,16 +1611,6 @@ export const MockExamsView: React.FC<{
   const mockSpecialTagsMap = new Map<string, { label: string; count: number }>();
   for (const preset of ['Old Exams', 'كتاب القسم', 'Important']) {
     mockSpecialTagsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
-  }
-  for (const gt of catalog?.specialTags || []) {
-    if (gt?.label) {
-      const normKey = gt.label.toLowerCase() === 'old exam' ? 'old exams' : gt.label.toLowerCase();
-      const existing = mockSpecialTagsMap.get(normKey);
-      mockSpecialTagsMap.set(normKey, {
-        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : gt.label),
-        count: (existing?.count || 0) + Number(gt.count || 0),
-      });
-    }
   }
   for (const lect of selectedLecturesObjects) {
     const breakdown = lect.specialTagBreakdown || {};
