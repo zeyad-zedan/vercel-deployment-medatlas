@@ -3992,6 +3992,9 @@ export async function completeExamSession(
 
       const attemptRecords = [];
       for (const res of score.questionResults) {
+        // Only record questions that were genuinely answered (skip untouched/unselected questions)
+        if (!res.selectedCanonical) continue;
+
         const q = qMap.get(res.questionId);
         if (!q) continue;
 

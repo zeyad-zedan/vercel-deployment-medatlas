@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { db, examSessions, users, questionAttempts } from '../src/db/index.ts';
-import { desc, gte, eq, count } from 'drizzle-orm';
+import { desc, gte, eq, count, and, isNotNull } from 'drizzle-orm';
 
 const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
 const configuredChannelId = process.env.TELEGRAM_CHANNEL_ID?.trim();
@@ -52,7 +52,7 @@ export async function buildActivityReportChunks(hours: number = 6): Promise<stri
         count: count(),
       })
       .from(questionAttempts)
-      .where(gte(questionAttempts.answeredAt, since))
+      .where(and(gte(questionAttempts.answeredAt, since), isNotNull(questionAttempts.selectedOption)))
       .groupBy(questionAttempts.isCorrect),
   ]);
 
