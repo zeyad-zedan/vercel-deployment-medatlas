@@ -1,5 +1,19 @@
 # MedAtlas MCQ — Medical Education & Examination Platform
 
+PDF storage is Telegram-only. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID` in
+the application and local upload portal environments. Uploads must succeed in Telegram
+before attachment metadata is saved. `/lectures/:filename` returns an error when Telegram
+is unavailable; it never downloads PDF contents from PostgreSQL or Supabase Storage.
+Existing database PDF blobs are retained for recovery but are excluded from reads and new backups.
+The Telegram sync script now validates references only; missing files must be re-uploaded
+from original PDFs. The activity listener reads MCQ activity from PostgreSQL on demand and
+sends reports through Telegram; Telegram does not replace the MCQ database.
+
+Database egress optimization: apply `drizzle/0002_egress_indexes.sql` statements individually
+(outside a transaction), and run `npx tsx scripts/repair-legacy-attempts.ts --apply` once before
+deploying the optimized dashboard. The repair is idempotent and only fills missing attempt rows.
+The application egress widget is not a Supabase usage meter; use the Supabase dashboard for billing usage.
+
 MedAtlas MCQ is a full-stack lecture-based multiple-choice question (MCQ) learning platform designed for medical students and medical curriculum administrators.
 
 ---

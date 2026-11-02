@@ -189,9 +189,9 @@ export function getEgressStatus() {
     telegramConfigured: telegramAvailable,
     month: inMemoryState.month,
     daysUntilReset: calculateDaysUntilReset(),
-    statusMessage: planBActive
-      ? 'Plan B Active: Lecture PDFs are being served via Telegram CDN (0 Supabase egress used).'
-      : `Normal Operation: Lecture PDFs served normally (${percentUsed.toFixed(1)}% of 85% threshold).`,
+    pdfDeliveryMode: 'telegram-only',
+    measuresSupabaseUsage: false,
+    statusMessage: 'PDF delivery uses Telegram exclusively. This counter does not measure Supabase database egress; consult the Supabase dashboard.',
   };
 }
 

@@ -41,7 +41,9 @@ test('automatically activates Plan B when egress reaches or exceeds 85%', () => 
 
   const status = getEgressStatus();
   assert.equal(status.isPlanBActive, true);
-  assert.match(status.statusMessage, /Plan B Active/);
+  assert.equal(status.pdfDeliveryMode, 'telegram-only');
+  assert.equal(status.measuresSupabaseUsage, false);
+  assert.match(status.statusMessage, /does not measure Supabase database egress/);
 });
 
 test('admin can force-enable Plan B regardless of current egress', () => {

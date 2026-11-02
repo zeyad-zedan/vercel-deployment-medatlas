@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { eq, and, or, desc, asc, inArray, isNull, sql } from 'drizzle-orm';
+import { eq, and, or, desc, asc, inArray, isNull, sql, getTableColumns } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   users,
@@ -2570,6 +2570,7 @@ let cachedCatalogExpiresAt = 0;
 const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
 
 export function invalidateCatalogCache(): void {
+  questionMetadataCache = null;
   cachedPublishedCatalog = null;
   cachedCatalogExpiresAt = 0;
   cachedSubjects = null;
@@ -2609,25 +2610,16 @@ export async function getPublishedCatalog(userUid?: string) {
 
     // Only the lightweight columns needed for counts/tags are fetched (never full text/explanations),
     // which keeps every catalog load at a few KB of database egress instead of hundreds of KB.
-    const pubQuestions = await db
-      .select({
-        id: questions.id,
-        subjectId: questions.subjectId,
-        lectureId: questions.lectureId,
-        difficulty: questions.difficulty,
-        specialTags: questions.specialTags,
-      })
-      .from(questions)
-      .where(eq(questions.status, 'published'));
+    const pubQuestions = await getQuestionMetadata();
 
     const pubBanks = await db
       .select()
       .from(questionBanks)
       .where(eq(questionBanks.status, 'published'));
 
-    const subjSet = new Set(pubSubjects.map((s) => s.id));
-    const visibleLectures = pubLectures.filter((l) => subjSet.has(l.subjectId));
-    const lectSet = new Set(visibleLectures.map((l) => l.id));
+    const subjSet = new Set(pubSubjects.map((s: any) => s.id));
+    const visibleLectures = pubLectures.filter((l: any) => subjSet.has(l.subjectId));
+    const lectSet = new Set(visibleLectures.map((l: any) => l.id));
     const visibleQuestions = pubQuestions.filter(
       (q) => subjSet.has(q.subjectId) && lectSet.has(q.lectureId)
     );
@@ -2689,7 +2681,7 @@ export async function getPublishedCatalog(userUid?: string) {
         Hard: 0,
       };
       if (q.difficulty === 'Easy' || q.difficulty === 'Medium' || q.difficulty === 'Hard') {
-        diffCounts[q.difficulty]++;
+        diffCounts[q.difficulty as DifficultyLevel]++;
       }
       difficultyCountByLecture.set(q.lectureId, diffCounts);
 
@@ -2741,7 +2733,7 @@ export async function getPublishedCatalog(userUid?: string) {
       }
     }
 
-    const enrichedLectures = visibleLectures.map((l) => {
+    const enrichedLectures = visibleLectures.map((l: any) => {
       const parentSubj = pubSubjects.find((s) => s.id === l.subjectId);
       const banks = pubBanks.filter((b) => b.lectureId === l.id);
       const qCount = questionCountByLecture.get(l.id) || 0;
@@ -2775,8 +2767,8 @@ export async function getPublishedCatalog(userUid?: string) {
       };
     });
 
-    const enrichedSubjects = pubSubjects.map((s) => {
-      const subLectures = enrichedLectures.filter((l) => l.subjectId === s.id);
+    const enrichedSubjects = pubSubjects.map((s: any) => {
+      const subLectures = enrichedLectures.filter((l: any) => l.subjectId === s.id);
       const qCount = questionCountBySubject.get(s.id) || 0;
       const attempted = attemptedCountBySubject.get(s.id) || 0;
       const correct = correctCountBySubject.get(s.id) || 0;
@@ -3115,22 +3107,10 @@ export async function createPracticeOrExamSession(
     const catalog = await getCachedCatalog();
     const pubSubjects = catalog.subjects.filter((s: any) => s.status === 'published');
     const pubLectures = catalog.lectures.filter((l: any) => l.status === 'published');
-    const pubQuestions = await db
-      .select({
-        id: questions.id,
-        subjectId: questions.subjectId,
-        lectureId: questions.lectureId,
-        difficulty: questions.difficulty,
-        tags: questions.tags,
-        specialTags: questions.specialTags,
-        status: questions.status,
-        correctAnswer: questions.correctAnswer,
-      })
-      .from(questions)
-      .where(eq(questions.status, 'published'));
+    const pubQuestions = await getQuestionMetadata();
 
-    const subjMap = new Map(pubSubjects.map((s: any) => [s.id, s]));
-    const lectMap = new Map(pubLectures.map((l: any) => [l.id, l]));
+    const subjMap = new Map<number, any>(pubSubjects.map((s: any) => [s.id, s]));
+    const lectMap = new Map<number, any>(pubLectures.map((l: any) => [l.id, l]));
 
     // Only include questions whose parent subject and lecture are ALSO published
     const eligiblePool = pubQuestions.filter(
@@ -3146,7 +3126,7 @@ export async function createPracticeOrExamSession(
         .orderBy(desc(questionAttempts.answeredAt))
         .limit(30);
       recentlyAnsweredIds = new Set(
-        recentAttempts.map((a) => a.questionId).filter((id): id is number => id !== null)
+        recentAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
       );
     }
 
@@ -3299,6 +3279,17 @@ let cachedSubjects: any[] | null = null;
 let cachedLectures: any[] | null = null;
 let catalogCacheExpiry = 0;
 
+let questionMetadataCache: { expiresAt: number; rows: any[] } | null = null;
+async function getQuestionMetadata() {
+  if (questionMetadataCache && Date.now() < questionMetadataCache.expiresAt) return questionMetadataCache.rows;
+  const rows = await db.select({ id: questions.id, subjectId: questions.subjectId,
+    lectureId: questions.lectureId, difficulty: questions.difficulty, tags: questions.tags,
+    specialTags: questions.specialTags, status: questions.status, correctAnswer: questions.correctAnswer })
+    .from(questions).where(eq(questions.status, 'published'));
+  questionMetadataCache = { rows, expiresAt: Date.now() + 60_000 };
+  return rows;
+}
+
 async function getCachedCatalog(runner: any = db) {
   const now = Date.now();
   if (cachedSubjects && cachedLectures && now < catalogCacheExpiry) {
@@ -3425,12 +3416,12 @@ export async function getExamSessionForStudent(
     ]);
 
     const { subjects: allSubjects, lectures: allLectures } = catalog;
-    const bookmarkedSet = new Set(userBookmarks.map((b) => b.questionId));
+    const bookmarkedSet = new Set(userBookmarks.map((b: any) => b.questionId));
 
     const qMap = new Map(allQuestions.map((q) => [q.id, q]));
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
-    const lPdfMap = new Map(allLectures.map((l) => [l.id, l.pdfUrl]));
+    const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+    const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
+    const lPdfMap = new Map(allLectures.map((l: any) => [l.id, l.pdfUrl]));
 
     const attemptSnapshotMap = new Map<number, any>();
     for (const att of savedAttempts) {
@@ -3550,258 +3541,84 @@ export async function getExamSessionForStudent(
  * Strictly enforces server-side exam deadlines and prevents modifying locked answers.
  */
 export async function saveSessionQuestionAnswer(
-  userUid: string,
-  sessionId: number,
-  questionId: number,
-  displayedOption: OptionKey | null,
-  lockAnswer: boolean,
-  _clientElapsedSeconds?: number,
-  slim = false
+  userUid: string, sessionId: number, questionId: number,
+  displayedOption: OptionKey | null, lockAnswer: boolean,
+  _clientElapsedSeconds?: number, slim = false
 ) {
-  try {
-    if (
-      displayedOption !== null &&
-      displayedOption !== undefined &&
-      !OPTION_KEYS.includes(displayedOption)
-    ) {
-      throw new ClientSafeError('Invalid answer option. Must be A, B, C, D, or null.', 400);
-    }
-
-    const rows = await db
-      .select()
-      .from(examSessions)
-      .where(and(eq(examSessions.id, sessionId), eq(examSessions.userUid, userUid)));
-
-    if (rows.length === 0) {
-      throw new ClientSafeError('Forbidden: Session not found for this user.', 403);
-    }
-
-    const session = rows[0];
-    if (session.status !== 'in_progress') {
-      throw new ClientSafeError(
-        'Cannot modify answers for a session that is already completed.',
-        409
-      );
-    }
-
-    const deadlineStatus = evaluateServerExamDeadline({
-      mode: session.mode,
-      startedAt: session.startedAt,
-      timeLimitSeconds: session.timeLimitSeconds,
-    });
-
-    if (deadlineStatus.isExpired) {
-      throw new ClientSafeError(
-        'Exam time limit has expired. Further answer modifications are not allowed.',
-        409
-      );
-    }
-
-    const orderItems: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
-    const targetItem = orderItems.find((item) => item.questionId === questionId);
-    if (!targetItem) {
-      throw new ClientSafeError('Question does not belong to this session.', 400);
-    }
-
-    // In Study or Custom mode, once a question is locked/submitted and its explanation revealed,
-    // prevent overwriting the submitted answer.
-    if (session.mode !== 'exam' && targetItem.submitted) {
-      if (slim) {
-        return {
-          id: session.id,
-          status: session.status,
-          correctCount: session.correctCount,
-          incorrectCount: session.incorrectCount,
-          unansweredCount: session.unansweredCount,
-          scorePercentage: session.scorePercentage,
-          elapsedSeconds: session.elapsedSeconds,
-          updatedQuestionId: questionId,
-          submitted: true,
-          selectedDisplayed: targetItem.selectedDisplayed,
-        };
-      }
-      return getExamSessionForStudent(userUid, sessionId);
-    }
-
-    targetItem.selectedDisplayed = displayedOption ?? null;
-    targetItem.selectedCanonical = resolveCanonicalOption(
-      displayedOption ?? null,
-      targetItem.permutation
-    );
-    if (lockAnswer) {
-      targetItem.submitted = true;
-    }
-
-    const qIds = orderItems.map((i) => i.questionId);
-    let cachedQs = getCachedSessionQuestions(sessionId);
-    let qMap = cachedQs ? new Map(cachedQs.map((q) => [q.id, q])) : null;
-
-    // Check if every item in orderItems already has correctAnswer recorded
-    const allHaveCorrect = orderItems.every((item) => Boolean(item.correctAnswer));
-
-    let liveCorrectCount = 0;
-    let liveIncorrectCount = 0;
-    let liveUnansweredCount = 0;
-
-    if (allHaveCorrect) {
-      for (const item of orderItems) {
-        if (item.selectedCanonical === null || item.selectedCanonical === undefined) {
-          liveUnansweredCount++;
-        } else if (item.selectedCanonical === item.correctAnswer) {
-          liveCorrectCount++;
-        } else {
-          liveIncorrectCount++;
-        }
-      }
-    } else {
-      // Legacy session backfill: if cachedQs exists, use it; otherwise query database
-      if (!qMap) {
-        const dbQuestions =
-          qIds.length > 0
-            ? await db.select().from(questions).where(inArray(questions.id, qIds))
-            : [];
-        setCachedSessionQuestions(sessionId, dbQuestions);
-        qMap = new Map(dbQuestions.map((q) => [q.id, q]));
-      }
-      for (const item of orderItems) {
-        const q = qMap.get(item.questionId);
-        if (q) item.correctAnswer = q.correctAnswer as OptionKey;
-        if (item.selectedCanonical === null || item.selectedCanonical === undefined) {
-          liveUnansweredCount++;
-        } else if (item.selectedCanonical === item.correctAnswer) {
-          liveCorrectCount++;
-        } else {
-          liveIncorrectCount++;
-        }
-      }
-    }
-
-    const totalQCount = orderItems.length;
-    const liveScorePercentage =
-      totalQCount > 0 ? Math.round((liveCorrectCount / totalQCount) * 100) : 0;
-
-    const updatedElapsed = Math.max(
-      session.elapsedSeconds,
-      deadlineStatus.effectiveElapsedSeconds,
-      typeof _clientElapsedSeconds === 'number' && Number.isFinite(_clientElapsedSeconds)
-        ? Math.max(0, Math.floor(_clientElapsedSeconds))
-        : 0
-    );
-
-    await db
-      .update(examSessions)
-      .set({
-        questionOrderJson: JSON.stringify(orderItems),
-        correctCount: liveCorrectCount,
-        incorrectCount: liveIncorrectCount,
-        unansweredCount: liveUnansweredCount,
-        scorePercentage: liveScorePercentage,
-        elapsedSeconds: updatedElapsed,
-      })
-      .where(
-        and(
-          eq(examSessions.id, sessionId),
-          eq(examSessions.userUid, userUid),
-          eq(examSessions.status, 'in_progress')
-        )
-      );
-
-    // Immediately record/upsert the question attempt in question_attempts so dashboard & lecture labels update live
-    if (session.mode !== 'exam' || lockAnswer) {
-      let answeredQ = qMap?.get(questionId);
-      if (!answeredQ) {
-        const rows = await db
-          .select()
-          .from(questions)
-          .where(eq(questions.id, questionId));
-        answeredQ = rows[0];
-      }
-
-      if (answeredQ) {
-        await db
-          .delete(questionAttempts)
-          .where(
-            and(
-              eq(questionAttempts.sessionId, sessionId),
-              eq(questionAttempts.questionId, questionId),
-              eq(questionAttempts.userUid, userUid)
-            )
-          );
-
-        if (targetItem.selectedCanonical !== null) {
-          const catalog = await getCachedCatalog();
-          const sMap = new Map(catalog.subjects.map((s: any) => [s.id, s.title]));
-          const lMap = new Map(catalog.lectures.map((l: any) => [l.id, l.title]));
-
-          const snapshotJson = JSON.stringify({
-            id: answeredQ.id,
-            subjectTitle: sMap.get(answeredQ.subjectId) || 'Medical Subject',
-            lectureTitle: lMap.get(answeredQ.lectureId) || 'Lecture',
-            questionText: answeredQ.questionText,
-            optionA: answeredQ.optionA,
-            optionB: answeredQ.optionB,
-            optionC: answeredQ.optionC,
-            optionD: answeredQ.optionD,
-            correctAnswer: answeredQ.correctAnswer,
-            explanation: answeredQ.explanation,
-            explanationA: answeredQ.explanationA,
-            explanationB: answeredQ.explanationB,
-            explanationC: answeredQ.explanationC,
-            explanationD: answeredQ.explanationD,
-            difficulty: answeredQ.difficulty,
-            tags: answeredQ.tags,
-            specialTags: answeredQ.specialTags || '',
-            diagramSvg: answeredQ.diagramSvg || '',
-            pageNumber: answeredQ.pageNumber ?? null,
-            version: answeredQ.version,
-          });
-
-          await db
-            .insert(questionAttempts)
-            .values({
-              sessionId,
-              userUid,
-              questionId: answeredQ.id,
-              subjectId: answeredQ.subjectId,
-              lectureId: answeredQ.lectureId,
-              selectedOption: targetItem.selectedCanonical,
-              correctOptionSnapshot: answeredQ.correctAnswer,
-              isCorrect: targetItem.selectedCanonical === answeredQ.correctAnswer,
-              questionSnapshotJson: snapshotJson,
-              timeSpentSeconds: 0,
-            })
-            .onConflictDoNothing();
-        }
-      }
-    }
-
-    if (slim) {
-      return {
-        id: session.id,
-        status: session.status,
-        correctCount: liveCorrectCount,
-        incorrectCount: liveIncorrectCount,
-        unansweredCount: liveUnansweredCount,
-        scorePercentage: liveScorePercentage,
-        elapsedSeconds: updatedElapsed,
-        updatedQuestionId: questionId,
-        submitted: targetItem.submitted,
-        selectedDisplayed: targetItem.selectedDisplayed,
-      };
-    }
-
-    session.questionOrderJson = JSON.stringify(orderItems);
-    session.correctCount = liveCorrectCount;
-    session.incorrectCount = liveIncorrectCount;
-    session.unansweredCount = liveUnansweredCount;
-    session.scorePercentage = liveScorePercentage;
-    session.elapsedSeconds = updatedElapsed;
-    return getExamSessionForStudent(userUid, sessionId, session);
-  } catch (error: any) {
-    if (error instanceof ClientSafeError) throw error;
-    console.error('Error saving question answer:', error);
-    throw new Error('Failed to save question response.', { cause: error });
+  if (displayedOption != null && !OPTION_KEYS.includes(displayedOption)) {
+    throw new ClientSafeError('Invalid answer option. Must be A, B, C, D, or null.', 400);
   }
+  const result = await db.transaction(async (tx) => {
+    // Lock without transferring the full answer document out of PostgreSQL.
+    const locked: any = await tx.execute(sql`
+      SELECT id, mode, status, started_at, time_limit_seconds, elapsed_seconds,
+             correct_count, incorrect_count, unanswered_count, score_percentage,
+             (SELECT e.value FROM jsonb_array_elements(question_order_json::jsonb) e(value)
+              WHERE (e.value->>'questionId')::int = ${questionId}) AS item
+      FROM exam_sessions WHERE id = ${sessionId} AND user_uid = ${userUid} FOR UPDATE`);
+    const row = locked.rows[0];
+    if (!row) throw new ClientSafeError('Forbidden: Session not found for this user.', 403);
+    if (row.status !== 'in_progress') throw new ClientSafeError('Cannot modify a completed session.', 409);
+    const deadline = evaluateServerExamDeadline({ mode: row.mode, startedAt: row.started_at, timeLimitSeconds: row.time_limit_seconds });
+    if (deadline.isExpired) throw new ClientSafeError('Exam time limit has expired.', 409);
+    const item: SessionOrderItem = row.item;
+    if (!item) throw new ClientSafeError('Question does not belong to this session.', 400);
+    if (row.mode !== 'exam' && item.submitted) return {
+      id: sessionId, status: row.status, correctCount: row.correct_count,
+      incorrectCount: row.incorrect_count, unansweredCount: row.unanswered_count,
+      scorePercentage: row.score_percentage, elapsedSeconds: row.elapsed_seconds,
+      updatedQuestionId: questionId, submitted: true, selectedDisplayed: item.selectedDisplayed,
+    };
+    const cachedQ = getCachedSessionQuestions(sessionId)?.find((q) => q.id === questionId);
+    const q = cachedQ || (await tx.select().from(questions).where(eq(questions.id, questionId)).limit(1))[0];
+    if (!q) throw new ClientSafeError('Question no longer exists.', 404);
+    item.selectedDisplayed = displayedOption ?? null;
+    item.selectedCanonical = resolveCanonicalOption(displayedOption ?? null, item.permutation);
+    item.correctAnswer = q.correctAnswer as OptionKey;
+    if (lockAnswer) item.submitted = true;
+    const elapsed = Math.max(row.elapsed_seconds, deadline.effectiveElapsedSeconds);
+    // Replace one answer and compute totals inside PostgreSQL; return only small counters.
+    const updated: any = await tx.execute(sql`
+      WITH changed AS (
+        SELECT jsonb_agg(CASE WHEN (e.value->>'questionId')::int = ${questionId}
+                        THEN ${JSON.stringify(item)}::jsonb ELSE e.value END ORDER BY e.ordinality) AS items
+        FROM exam_sessions s, jsonb_array_elements(s.question_order_json::jsonb) WITH ORDINALITY e(value, ordinality)
+        WHERE s.id = ${sessionId} AND s.user_uid = ${userUid}
+      ), totals AS (
+        SELECT count(*) FILTER (WHERE value->>'selectedCanonical' IS NULL)::int AS unanswered,
+               count(*) FILTER (WHERE value->>'selectedCanonical' = value->>'correctAnswer')::int AS correct,
+               count(*) FILTER (WHERE value->>'selectedCanonical' IS NOT NULL AND
+                 value->>'selectedCanonical' IS DISTINCT FROM value->>'correctAnswer')::int AS incorrect,
+               count(*)::int AS total FROM changed, jsonb_array_elements(items)
+      )
+      UPDATE exam_sessions SET question_order_json = changed.items::text,
+        correct_count = totals.correct, incorrect_count = totals.incorrect,
+        unanswered_count = totals.unanswered,
+        score_percentage = CASE WHEN totals.total > 0 THEN round(100.0 * totals.correct / totals.total)::int ELSE 0 END,
+        elapsed_seconds = ${elapsed}
+      FROM changed, totals WHERE exam_sessions.id = ${sessionId} AND exam_sessions.user_uid = ${userUid}
+      RETURNING correct_count, incorrect_count, unanswered_count, score_percentage`);
+    if (row.mode !== 'exam' || lockAnswer) {
+      await tx.delete(questionAttempts).where(and(eq(questionAttempts.sessionId, sessionId),
+        eq(questionAttempts.questionId, questionId), eq(questionAttempts.userUid, userUid)));
+      if (item.selectedCanonical != null) {
+        const catalog = await getCachedCatalog(tx);
+        await tx.insert(questionAttempts).values({ sessionId, userUid, questionId,
+          subjectId: q.subjectId, lectureId: q.lectureId, selectedOption: item.selectedCanonical,
+          correctOptionSnapshot: q.correctAnswer, isCorrect: item.selectedCanonical === q.correctAnswer,
+          questionSnapshotJson: JSON.stringify({ ...q,
+            subjectTitle: catalog.subjects.find((s: any) => s.id === q.subjectId)?.title || 'Medical Subject',
+            lectureTitle: catalog.lectures.find((l: any) => l.id === q.lectureId)?.title || 'Lecture' }),
+          timeSpentSeconds: 0 }).onConflictDoNothing();
+      }
+    }
+    const counts = updated.rows[0];
+    return { id: sessionId, status: row.status, correctCount: counts.correct_count,
+      incorrectCount: counts.incorrect_count, unansweredCount: counts.unanswered_count,
+      scorePercentage: counts.score_percentage, elapsedSeconds: elapsed,
+      updatedQuestionId: questionId, submitted: item.submitted, selectedDisplayed: item.selectedDisplayed };
+  });
+  return slim ? result : getExamSessionForStudent(userUid, sessionId);
 }
 
 /**
@@ -3932,8 +3749,8 @@ export async function completeExamSession(
       const allLectures = catalog.lectures;
 
       const qMap = new Map(dbQuestions.map((q) => [q.id, q]));
-      const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-      const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
+      const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+      const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
 
       const canonicalAnswersMap: Record<number, OptionKey | null> = {};
       const questionsForScoring: Array<{ id: number; correctAnswer: OptionKey }> = [];
@@ -4131,7 +3948,7 @@ export async function getStudentBookmarksAndReview(userUid: string) {
     // avoiding downloading the entire question database on bookmark page loads.
     const neededQIds = Array.from(
       new Set([
-        ...userBookmarks.map((b) => b.questionId),
+        ...userBookmarks.map((b: any) => b.questionId),
         ...Array.from(latestAttemptByQuestion.keys()),
       ])
     ).filter((id): id is number => typeof id === 'number' && id > 0);
@@ -4154,11 +3971,11 @@ export async function getStudentBookmarksAndReview(userUid: string) {
     const allLectures = catalog.lectures;
 
     const qMap = new Map(relevantQuestions.map((q) => [q.id, q]));
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
+    const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+    const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
 
     const bookmarkedItems = userBookmarks
-      .map((b) => {
+      .map((b: any) => {
         const q = qMap.get(b.questionId);
         if (!q) return null;
         const latestAtt = latestAttemptByQuestion.get(q.id);
@@ -4198,7 +4015,7 @@ export async function getStudentBookmarksAndReview(userUid: string) {
       })
       .filter(Boolean);
 
-    const bookmarkedIds = new Set(userBookmarks.map((b) => b.questionId));
+    const bookmarkedIds = new Set(userBookmarks.map((b: any) => b.questionId));
     const answeredReviewItems = Array.from(latestAttemptByQuestion.entries())
       .map(([questionId, latestAtt]) => {
         const q = qMap.get(questionId);
@@ -4313,7 +4130,6 @@ export async function getStudentDashboardAnalytics(userUid: string) {
   try {
     await ensureSeededDatabase();
     await resolveActiveMockExamsForUser(userUid);
-    await consolidateUserLectureSessions(userUid);
     const catalog = await getCachedCatalog();
     const allSubjects = (catalog.subjects || [])
       .filter((s: any) => s.status === 'published')
@@ -4325,12 +4141,12 @@ export async function getStudentDashboardAnalytics(userUid: string) {
     const [userSessions, userAttempts, userBookmarks, allQuestions] =
       await Promise.all([
         db
-          .select()
+          .select({ ...getTableColumns(examSessions), questionOrderJson: sql<string>`'[]'` })
           .from(examSessions)
           .where(eq(examSessions.userUid, userUid))
           .orderBy(desc(examSessions.startedAt)),
         db
-          .select({
+          .selectDistinctOn([questionAttempts.questionId], {
             id: questionAttempts.id,
             sessionId: questionAttempts.sessionId,
             userUid: questionAttempts.userUid,
@@ -4343,140 +4159,20 @@ export async function getStudentDashboardAnalytics(userUid: string) {
           })
           .from(questionAttempts)
           .where(eq(questionAttempts.userUid, userUid))
-          .orderBy(desc(questionAttempts.answeredAt)),
+          .orderBy(questionAttempts.questionId, desc(questionAttempts.answeredAt), desc(questionAttempts.id)),
         db.select().from(bookmarks).where(eq(bookmarks.userUid, userUid)),
-        db
-          .select({
-            id: questions.id,
-            subjectId: questions.subjectId,
-            lectureId: questions.lectureId,
-            correctAnswer: questions.correctAnswer,
-            tags: questions.tags,
-            difficulty: questions.difficulty,
-          })
-          .from(questions)
-          .where(eq(questions.status, 'published')),
+        getQuestionMetadata(),
       ]);
 
     const completedSessions = userSessions.filter((s) => s.status === 'completed');
     const inProgressSessions = userSessions.filter((s) => s.status === 'in_progress');
 
     const qMap = new Map(allQuestions.map((q) => [q.id, q]));
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
-
-    // Ensure any questions already solved inside in_progress sessions are reflected immediately in attempts
-    const recordedAttemptKeys = new Set(
-      userAttempts.map((a) => `${a.sessionId}:${a.questionId}`)
-    );
+    const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+    const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
     const synthesizedAttempts: typeof userAttempts = [];
 
-    for (const s of userSessions) {
-      if (s.mode === 'exam' && s.status === 'in_progress') continue;
-      try {
-        const orderItems: SessionOrderItem[] = JSON.parse(s.questionOrderJson || '[]');
-        let liveCorrect = 0;
-        let liveIncorrect = 0;
-        let liveUnanswered = 0;
-
-        for (const item of orderItems) {
-          const q = qMap.get(item.questionId);
-          if (!q) continue;
-          const canonical =
-            item.selectedCanonical ??
-            resolveCanonicalOption(item.selectedDisplayed ?? null, item.permutation);
-
-          if (!canonical) {
-            liveUnanswered++;
-            continue;
-          }
-
-          const isCorr = canonical === q.correctAnswer;
-          if (isCorr) liveCorrect++;
-          else liveIncorrect++;
-
-          const key = `${s.id}:${q.id}`;
-          if (!recordedAttemptKeys.has(key)) {
-            recordedAttemptKeys.add(key);
-            const snapshotJson = JSON.stringify({
-              id: q.id,
-              subjectTitle: sMap.get(q.subjectId) || 'Medical Subject',
-              lectureTitle: lMap.get(q.lectureId) || 'Lecture',
-              questionText: (q as any).questionText || '',
-              optionA: (q as any).optionA || '',
-              optionB: (q as any).optionB || '',
-              optionC: (q as any).optionC || '',
-              optionD: (q as any).optionD || '',
-              correctAnswer: q.correctAnswer,
-              explanation: (q as any).explanation || '',
-              explanationA: (q as any).explanationA || '',
-              explanationB: (q as any).explanationB || '',
-              explanationC: (q as any).explanationC || '',
-              explanationD: (q as any).explanationD || '',
-              difficulty: q.difficulty,
-              tags: q.tags,
-              diagramSvg: (q as any).diagramSvg || '',
-              pageNumber: (q as any).pageNumber ?? null,
-              version: (q as any).version || 1,
-            });
-
-            synthesizedAttempts.push({
-              id: 0,
-              sessionId: s.id,
-              userUid,
-              questionId: q.id,
-              subjectId: q.subjectId,
-              lectureId: q.lectureId,
-              selectedOption: canonical,
-              isCorrect: isCorr,
-              answeredAt: s.startedAt,
-            });
-
-            // Backfill into question_attempts asynchronously so it's permanently stored
-            db.insert(questionAttempts)
-              .values({
-                sessionId: s.id,
-                userUid,
-                questionId: q.id,
-                subjectId: q.subjectId,
-                lectureId: q.lectureId,
-                selectedOption: canonical,
-                correctOptionSnapshot: q.correctAnswer,
-                isCorrect: isCorr,
-                questionSnapshotJson: snapshotJson,
-                timeSpentSeconds: 0,
-              })
-              .onConflictDoNothing()
-              .catch(() => {});
-          }
-        }
-
-        if (s.status === 'in_progress' && orderItems.length > 0) {
-          const liveScorePct = Math.round((liveCorrect / orderItems.length) * 100);
-          if (
-            s.correctCount !== liveCorrect ||
-            s.incorrectCount !== liveIncorrect ||
-            s.unansweredCount !== liveUnanswered
-          ) {
-            s.correctCount = liveCorrect;
-            s.incorrectCount = liveIncorrect;
-            s.unansweredCount = liveUnanswered;
-            s.scorePercentage = liveScorePct;
-            db.update(examSessions)
-              .set({
-                correctCount: liveCorrect,
-                incorrectCount: liveIncorrect,
-                unansweredCount: liveUnanswered,
-                scorePercentage: liveScorePct,
-              })
-              .where(eq(examSessions.id, s.id))
-              .catch(() => {});
-          }
-        }
-      } catch {}
-    }
-
-    const combinedAttempts = [...userAttempts, ...synthesizedAttempts];
+    const combinedAttempts = [...userAttempts, ...synthesizedAttempts].sort((a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime());
     const answeredAttempts = combinedAttempts.filter((a) => a.selectedOption !== null);
 
     // Deduplicate by questionId (keeping the latest attempt per unique question)
@@ -4498,19 +4194,19 @@ export async function getStudentDashboardAnalytics(userUid: string) {
         : 0;
 
     const uniqueQuestionIds = new Set(
-      uniqueLatestAttempts.map((a) => a.questionId).filter((id): id is number => id !== null)
+      uniqueLatestAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
     );
     const uniqueLecturesAttempted = new Set(
-      uniqueLatestAttempts.map((a) => a.lectureId).filter((id): id is number => id !== null)
+      uniqueLatestAttempts.map((a: any) => a.lectureId).filter((id): id is number => id !== null)
     );
     const remainingUnansweredQuestions = Math.max(0, allQuestions.length - uniqueQuestionIds.size);
 
     // Subject & Lecture breakdown (reflecting every solved question immediately)
-    const subjectProgress = allSubjects.map((subj) => {
+    const subjectProgress = allSubjects.map((subj: any) => {
       const subjQuestions = allQuestions.filter((q) => q.subjectId === subj.id);
       const subjAttempts = uniqueLatestAttempts.filter((a) => a.subjectId === subj.id);
       const subjUniqueIds = new Set(
-        subjAttempts.map((a) => a.questionId).filter((id): id is number => id !== null)
+        subjAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
       );
       const subjCorrect = subjAttempts.filter((a) => a.isCorrect).length;
       const subjIncorrect = subjAttempts.length - subjCorrect;
@@ -4519,13 +4215,13 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       const latestAttempt = subjAttempts[0]?.answeredAt ?? null;
 
       const lectureBreakdown = allLectures
-        .filter((l) => l.subjectId === subj.id)
-        .sort((a, b) => a.lectureNumber - b.lectureNumber)
-        .map((lect) => {
+        .filter((l: any) => l.subjectId === subj.id)
+        .sort((a: any, b: any) => a.lectureNumber - b.lectureNumber)
+        .map((lect: any) => {
           const lectQuestions = subjQuestions.filter((q) => q.lectureId === lect.id);
           const lectAttempts = subjAttempts.filter((a) => a.lectureId === lect.id);
           const lectUniqueIds = new Set(
-            lectAttempts.map((a) => a.questionId).filter((id): id is number => id !== null)
+            lectAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
           );
           const lectCorrect = lectAttempts.filter((a) => a.isCorrect).length;
           const lectIncorrect = lectAttempts.length - lectCorrect;
@@ -4593,14 +4289,8 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       deduplicatedSessions.push(s);
     }
 
-    const history = deduplicatedSessions.map((s) => {
-      let answeredCount = 0;
-      try {
-        const items = JSON.parse(s.questionOrderJson || '[]');
-        answeredCount = items.filter((i: any) => i.submitted || i.selectedDisplayed).length;
-      } catch {
-        answeredCount = s.totalQuestions - s.unansweredCount;
-      }
+    const history = deduplicatedSessions.map((s: any) => {
+      const answeredCount = Math.max(0, s.totalQuestions - s.unansweredCount);
       const deadline = evaluateServerExamDeadline({
         mode: s.mode,
         startedAt: s.startedAt,
@@ -4729,8 +4419,8 @@ export async function getAdminDashboardData() {
         .limit(25),
     ]);
 
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
+    const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+    const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
     const mMap = new Map(allModules.map((m) => [m.id, `${m.code} - ${m.title}`]));
 
     return {
@@ -4739,7 +4429,7 @@ export async function getAdminDashboardData() {
         totalModules: allModules.length,
         publishedSubjects: allSubjects.filter((s) => s.status === 'published').length,
         totalSubjects: allSubjects.length,
-        publishedLectures: allLectures.filter((l) => l.status === 'published').length,
+        publishedLectures: allLectures.filter((l: any) => l.status === 'published').length,
         totalLectures: allLectures.length,
         publishedQuestions: allQuestions.filter((q) => q.status === 'published').length,
         totalQuestions: allQuestions.length,
@@ -4751,22 +4441,22 @@ export async function getAdminDashboardData() {
           ...m,
           subjects: modSubjects,
           subjectCount: modSubjects.length,
-          lectureCount: allLectures.filter((l) => modSubjects.some((s) => s.id === l.subjectId)).length,
+          lectureCount: allLectures.filter((l: any) => modSubjects.some((s) => s.id === l.subjectId)).length,
           questionCount: allQuestions.filter((q) => modSubjects.some((s) => s.id === q.subjectId)).length,
         };
       }),
-      subjects: allSubjects.map((s) => ({
+      subjects: allSubjects.map((s: any) => ({
         ...s,
         moduleName: s.moduleId ? mMap.get(s.moduleId) || 'Unassigned Module' : 'Unassigned Module',
-        lectureCount: allLectures.filter((l) => l.subjectId === s.id).length,
+        lectureCount: allLectures.filter((l: any) => l.subjectId === s.id).length,
         questionCount: allQuestions.filter((q) => q.subjectId === s.id).length,
       })),
-      lectures: allLectures.map((l) => ({
+      lectures: allLectures.map((l: any) => ({
         ...l,
         subjectTitle: sMap.get(l.subjectId) || 'Unknown Subject',
         questionCount: allQuestions.filter((q) => q.lectureId === l.id).length,
       })),
-      questionBanks: allBanks.map((b) => ({
+      questionBanks: allBanks.map((b: any) => ({
         ...b,
         subjectTitle: sMap.get(b.subjectId) || 'Unknown Subject',
         lectureTitle: b.lectureId ? lMap.get(b.lectureId) || 'Unknown Lecture' : 'All Lectures',
@@ -4994,6 +4684,10 @@ export async function upsertLectureAdmin(
       payload.pdfUrl && typeof payload.pdfUrl === 'string' && payload.pdfUrl.trim()
         ? payload.pdfUrl.trim()
         : null;
+    if (cleanPdfUrl && (!/^\/lectures\/[^/?#]+\.pdf$/.test(cleanPdfUrl) ||
+        !(await getPdfTelegramMetadataByUrl(cleanPdfUrl))?.telegramFileId)) {
+      throw new ClientSafeError('PDF must be uploaded to Telegram through the upload portal first.', 400);
+    }
 
     if (payload.id) {
       const [updated] = await db
@@ -5083,6 +4777,10 @@ export async function attachPdfToLectureAdmin(
       pdfUrl && typeof pdfUrl === 'string' && pdfUrl.trim()
         ? pdfUrl.trim()
         : null;
+    if (cleanPdfUrl && (!/^\/lectures\/[^/?#]+\.pdf$/.test(cleanPdfUrl) ||
+        !(await getPdfTelegramMetadataByUrl(cleanPdfUrl))?.telegramFileId)) {
+      throw new ClientSafeError('PDF must be uploaded to Telegram through the upload portal first.', 400);
+    }
 
     const [updated] = await db
       .update(lectures)
@@ -5118,7 +4816,7 @@ export async function attachPdfToLectureAdmin(
 }
 
 /**
- * Saves an uploaded PDF file and its binary base64 data to the PostgreSQL database `lecture_files` table.
+ * Saves Telegram PDF metadata only. Binary PDF contents never enter PostgreSQL.
  */
 export async function saveUploadedPdfFileAdmin(
   admin: { uid: string; email: string },
@@ -5133,13 +4831,14 @@ export async function saveUploadedPdfFileAdmin(
 ) {
   try {
     const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
+    if (!params.telegramFileId) throw new ClientSafeError('Upload to Telegram before saving PDF metadata.', 400);
     const [saved] = await db
       .insert(lectureFiles)
       .values({
         fileName: params.fileName,
         mimeType: params.mimeType || 'application/pdf',
         fileSize: Number(params.fileSize) || 0,
-        dataBase64: params.dataBase64,
+        dataBase64: '',
         url: params.url,
         telegramFileId: params.telegramFileId || null,
       })
@@ -5148,7 +4847,7 @@ export async function saveUploadedPdfFileAdmin(
         set: {
           fileName: params.fileName,
           fileSize: Number(params.fileSize) || 0,
-          dataBase64: params.dataBase64,
+          dataBase64: '',
           mimeType: params.mimeType || 'application/pdf',
           telegramFileId: params.telegramFileId || null,
         },
@@ -5220,31 +4919,11 @@ export async function getPdfTelegramMetadataByUrl(url: string) {
 /**
  * Retrieves a stored lecture PDF by its URL from the PostgreSQL database.
  */
+// Compatibility helper: metadata only. PDF bytes must never be read from PostgreSQL.
 export async function getUploadedPdfByUrl(url: string) {
-  try {
-    const rows = await db
-      .select()
-      .from(lectureFiles)
-      .where(eq(lectureFiles.url, url))
-      .limit(1);
-    const row = rows[0] || null;
-    if (row) {
-      pdfTelegramMetaCache.set(url, {
-        telegramFileId: row.telegramFileId || null,
-        mimeType: row.mimeType || 'application/pdf',
-        fileSize: row.fileSize || 0,
-      });
-    }
-    return row;
-  } catch (error) {
-    console.error('Error fetching uploaded PDF from database:', error);
-    return null;
-  }
+  return getPdfTelegramMetadataByUrl(url);
 }
 
-/**
- * Updates the telegram_file_id for an uploaded PDF file record.
- */
 export async function updateLectureFileTelegramId(url: string, telegramFileId: string) {
   try {
     await db
@@ -5857,7 +5536,7 @@ export async function resetLectureProgress(
         )
       );
 
-    const sessionIds = userLectSessions.map((s) => s.id);
+    const sessionIds = userLectSessions.map((s: any) => s.id);
 
     // 2. Find all questions belonging to this lecture
     const lectureQuestions = await db
@@ -6053,10 +5732,10 @@ export async function executeCsvImportAdmin(
       const allLectures = await tx.select().from(lectures);
 
       const subjectByTitle = new Map(
-        allSubjects.map((s) => [s.title.toLowerCase().trim(), s])
+        allSubjects.map((s: any) => [s.title.toLowerCase().trim(), s])
       );
       const lectureByKey = new Map(
-        allLectures.map((l) => [`${l.subjectId}:${l.title.toLowerCase().trim()}`, l])
+        allLectures.map((l: any) => [`${l.subjectId}:${l.title.toLowerCase().trim()}`, l])
       );
 
       const affectedLectureIds = new Set<number>();
@@ -6234,8 +5913,8 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
       .from(questions)
       .orderBy(asc(questions.subjectId), asc(questions.lectureId), asc(questions.id));
 
-    const sMap = new Map(allSubjects.map((s) => [s.id, s.title]));
-    const lMap = new Map(allLectures.map((l) => [l.id, l.title]));
+    const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
+    const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
 
     const escapeCsv = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
 

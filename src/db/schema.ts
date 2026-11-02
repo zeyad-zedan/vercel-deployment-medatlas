@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import {
   boolean,
   integer,
+  index,
   pgTable,
   serial,
   text,
@@ -181,7 +182,7 @@ export const examSessions = pgTable('exam_sessions', {
   questionOrderJson: text('question_order_json').notNull(),
   startedAt: timestamp('started_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
-});
+}, (table) => [index('idx_session_user_started').on(table.userUid, table.startedAt.desc())]);
 
 export const questionAttempts = pgTable(
   'question_attempts',
@@ -203,6 +204,8 @@ export const questionAttempts = pgTable(
   },
   (table) => [
     uniqueIndex('uq_session_question_attempt').on(table.sessionId, table.questionId),
+    index('idx_attempt_user_question_latest').on(table.userUid, table.questionId, table.answeredAt.desc(), table.id.desc()),
+    index('idx_attempt_answered_at').on(table.answeredAt),
   ]
 );
 

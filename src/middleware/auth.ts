@@ -652,7 +652,7 @@ export async function lookupUserSessionState(
 
   const tombstones = await withDbRetry(() =>
     db
-      .select()
+      .select({ uid: deletedAccounts.uid, firebaseUid: deletedAccounts.firebaseUid, deletedAt: deletedAccounts.deletedAt })
       .from(deletedAccounts)
       .where(or(...tombstoneConditions))
   );
@@ -670,7 +670,10 @@ export async function lookupUserSessionState(
 
   const matchedUsers = await withDbRetry(() =>
     db
-      .select()
+      .select({ uid: users.uid, firebaseUid: users.firebaseUid, email: users.email,
+        displayName: users.displayName, deletedAt: users.deletedAt, accountStatus: users.accountStatus,
+        createdAt: users.createdAt, sessionsRevokedAt: users.sessionsRevokedAt,
+        tokenVersion: users.tokenVersion, emailVerified: users.emailVerified })
       .from(users)
       .where(or(...userLookupConditions))
   );

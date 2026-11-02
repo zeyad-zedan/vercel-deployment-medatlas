@@ -235,11 +235,11 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
     const modulesRes = await client.query('SELECT * FROM public.modules ORDER BY id ASC');
     const subjectsRes = await client.query('SELECT * FROM public.subjects ORDER BY id ASC');
     const lecturesRes = await client.query('SELECT * FROM public.lectures ORDER BY id ASC');
-    // PDFs already stored on Telegram are backed up by reference only (data_base64 blanked server-side)
-    // so the nightly backup does not pull tens of MB of base64 out of Supabase (egress).
+    // All PDFs are backed up by Telegram reference only. Never read PDF bytes
+    // from PostgreSQL, including legacy rows without a Telegram reference.
     const lectureFilesRes = await client.query(
       `SELECT id, file_name, mime_type, file_size,
-              CASE WHEN telegram_file_id IS NOT NULL AND telegram_file_id <> '' THEN '' ELSE data_base64 END AS data_base64,
+              '' AS data_base64,
               url, telegram_file_id, created_at
        FROM public.lecture_files ORDER BY id ASC`
     );

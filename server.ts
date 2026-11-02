@@ -60,15 +60,12 @@ import {
   executeCsvImportAdmin,
   exportQuestionBankCsvAdmin,
   saveUploadedPdfFileAdmin,
-  getUploadedPdfByUrl,
   getPdfTelegramMetadataByUrl,
   attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
 import { pool, isDatabaseConfigured } from './src/db/index.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
-import { isR2Configured, getR2PublicUrl, uploadToR2 } from './src/lib/r2-storage.ts';
-import { uploadPdfToFirebaseStorage, isFirebaseStorageConfigured } from './src/lib/firebase-storage.ts';
 import {
   isTelegramConfigured,
   uploadPdfToTelegram,
@@ -136,98 +133,21 @@ function sendPdfBuffer(res: Response, buffer: Buffer, contentType: string, sourc
   return res.send(buffer);
 }
 
-// Dynamic resolver for uploaded lecture PDFs (must precede express.static so egress tracking is always active):
-// - If Plan B is active (monthly egress >= 85%), streams directly from Telegram CDN (0 Supabase egress)
-// - If Cloudflare R2 is configured, redirects directly to R2 CDN
-// - Otherwise serves from local cache / database and tracks monthly PDF egress
-app.get('/lectures/:filename', async (req: Request, res: Response, next: NextFunction) => {
+// Telegram-only PDF delivery. This route always responds, so static assets and
+// PostgreSQL binary blobs can never act as fallback PDF sources.
+app.get('/lectures/:filename', async (req: Request, res: Response) => {
+  const relativeUrl = `/lectures/${path.basename(req.params.filename)}`;
   try {
-    const safeFilename = path.basename(req.params.filename);
-    const relativeUrl = `/lectures/${safeFilename}`;
-
-    // 1. If Cloudflare R2 is configured with a public URL, redirect directly to Cloudflare CDN (zero egress fees!)
-    const r2DirectUrl = getR2PublicUrl(safeFilename);
-    if (r2DirectUrl) {
-      return res.redirect(302, r2DirectUrl);
-    }
-
-    // 2. Telegram-first delivery: whenever the PDF has a Telegram file id, serve it from Telegram
-    // (ZERO Supabase egress). The database copy is only a last-resort fallback.
-    if (!isTelegramConfigured()) {
-      res.setHeader('X-MedAtlas-Telegram-Skip', 'not-configured');
-    } else {
-      try {
-        const cachedPdf = pdfBufferCache.get(relativeUrl);
-        if (cachedPdf) {
-          sendPdfBuffer(
-            res,
-            cachedPdf.buffer,
-            cachedPdf.contentType,
-            isPlanBActive() ? 'telegram-plan-b' : 'telegram-memory-cache'
-          );
-          return;
-        }
-        const fileMeta = await getPdfTelegramMetadataByUrl(relativeUrl);
-        if (fileMeta?.telegramFileId) {
-          const tgStream = await fetchTelegramPdfBuffer(fileMeta.telegramFileId);
-          const contentType =
-            tgStream.contentType && tgStream.contentType.includes('pdf')
-              ? tgStream.contentType
-              : 'application/pdf';
-          cachePdfBuffer(relativeUrl, tgStream.buffer, contentType);
-          sendPdfBuffer(res, tgStream.buffer, contentType, isPlanBActive() ? 'telegram-plan-b' : 'telegram');
-          return;
-        }
-        res.setHeader('X-MedAtlas-Telegram-Skip', 'no-file-id');
-      } catch (tgErr: any) {
-        res.setHeader(
-          'X-MedAtlas-Telegram-Skip',
-          String(tgErr?.message || 'error').replace(/[^\x20-\x7E]/g, ' ').slice(0, 120).replace(/bot\d+:[\w-]+/g, 'bot***')
-        );
-        console.warn('[TELEGRAM_STREAM_FALLBACK_WARN] Failed streaming from Telegram, falling back to local/DB:', tgErr?.message || tgErr);
-      }
-    }
-
-    const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
-    const filePath = path.resolve(lecturesDir, safeFilename);
-
-    // Defensive path-containment validation against directory traversal
-    if (!filePath.startsWith(lecturesDir)) {
-      return res.status(400).json({ error: 'Invalid file path' });
-    }
-
-    if (fs.existsSync(filePath)) {
-      const stats = fs.statSync(filePath);
-      recordPdfEgress(stats.size);
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('X-MedAtlas-Source', 'local-cache');
-      return res.sendFile(filePath);
-    }
-
-    // If missing from local disk, fetch directly from PostgreSQL database `lecture_files` table
-    const fileRecord = await getUploadedPdfByUrl(relativeUrl);
-    if (fileRecord && fileRecord.dataBase64) {
-      const buf = Buffer.from(fileRecord.dataBase64, 'base64');
-      try {
-        const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
-        if (!fs.existsSync(lecturesDir)) {
-          fs.mkdirSync(lecturesDir, { recursive: true });
-        }
-        fs.writeFileSync(filePath, buf);
-      } catch {
-        // Disk write failure is non-fatal; we still serve from DB
-      }
-      recordPdfEgress(buf.length);
-      res.setHeader('Content-Type', fileRecord.mimeType || 'application/pdf');
-      res.setHeader('Content-Length', buf.length);
-      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('X-MedAtlas-Source', 'supabase-db');
-      return res.send(buf);
-    }
-    return next();
-  } catch (err) {
-    return next(err);
+    if (!isTelegramConfigured()) return res.status(503).json({ error: 'Telegram PDF storage is not configured.' });
+    const cached = pdfBufferCache.get(relativeUrl);
+    if (cached) return sendPdfBuffer(res, cached.buffer, cached.contentType, 'telegram-memory-cache');
+    const meta = await getPdfTelegramMetadataByUrl(relativeUrl);
+    if (!meta?.telegramFileId) return res.status(404).json({ error: 'PDF is not available on Telegram.' });
+    const pdf = await fetchTelegramPdfBuffer(meta.telegramFileId);
+    cachePdfBuffer(relativeUrl, pdf.buffer, 'application/pdf');
+    return sendPdfBuffer(res, pdf.buffer, 'application/pdf', 'telegram');
+  } catch {
+    return res.status(503).json({ error: 'Telegram PDF delivery is temporarily unavailable. Please retry.' });
   }
 });
 
@@ -1061,92 +981,14 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
     const uniqueFileName = `${Date.now()}-${safeBase}.pdf`;
     const relativeUrl = `/lectures/${uniqueFileName}`;
 
-    // 1. Save to disk in public/lectures/
-    const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
-    if (!fs.existsSync(lecturesDir)) {
-      fs.mkdirSync(lecturesDir, { recursive: true });
-    }
-    const targetFilePath = path.join(lecturesDir, uniqueFileName);
-    fs.writeFileSync(targetFilePath, buffer);
-
-    // 2. Upload to Telegram Channel (Plan B Emergency Fallback, 0 egress cost) if configured
-    let telegramFileId: string | null = null;
-    if (isTelegramConfigured()) {
-      try {
-        const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `📄 MedAtlas Lecture: ${fileName}`);
-        telegramFileId = tgResult.fileId;
-        console.log('✅ Uploaded lecture PDF backup to Telegram (Plan B CDN):', uniqueFileName, 'fileId:', telegramFileId);
-      } catch (tgErr: any) {
-        console.warn('[TELEGRAM_STORAGE_NOTICE] Telegram upload notice:', tgErr?.message || tgErr);
-      }
-    }
-
-    // 3. Save directly to PostgreSQL database `lecture_files` table with telegramFileId
+    if (!isTelegramConfigured()) throw new Error('Telegram PDF storage is required.');
+    const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `MedAtlas Lecture: ${fileName}`);
     const savedRecord = await saveUploadedPdfFileAdmin(
       { uid: req.user!.uid, email: req.user!.email },
-      {
-        fileName: uniqueFileName,
-        mimeType: mimeType || 'application/pdf',
-        fileSize: buffer.length,
-        dataBase64: base64Clean,
-        url: relativeUrl,
-        telegramFileId,
-      }
+      { fileName: uniqueFileName, mimeType: 'application/pdf', fileSize: buffer.length,
+        dataBase64: '', url: relativeUrl, telegramFileId: tgResult.fileId }
     );
-
-    // 3. Upload to Firebase Storage (Google Cloud CDN, no credit card required, 30GB/mo free egress)
-    let firebaseStorageUrl: string | null = null;
-    if (isFirebaseStorageConfigured()) {
-      try {
-        const fbResult = await uploadPdfToFirebaseStorage(uniqueFileName, buffer, mimeType || 'application/pdf');
-        firebaseStorageUrl = fbResult.url;
-        console.log('✅ Uploaded lecture PDF to Firebase Storage (no card required):', uniqueFileName);
-      } catch (fbErr: any) {
-        console.warn('[FIREBASE_STORAGE_NOTICE] Firebase Storage upload notice:', fbErr?.message || fbErr);
-      }
-    }
-
-    // 4. Upload to Cloudflare R2 (zero egress fees) if configured
-    let r2StorageUrl: string | null = null;
-    if (isR2Configured()) {
-      try {
-        const r2Result = await uploadToR2({
-          fileName: uniqueFileName,
-          data: buffer,
-          contentType: mimeType || 'application/pdf',
-        });
-        r2StorageUrl = r2Result.publicUrl;
-        console.log('✅ Uploaded lecture PDF to Cloudflare R2 (zero egress fees):', uniqueFileName);
-      } catch (r2Err: any) {
-        console.warn('[R2_STORAGE_NOTICE] Cloudflare R2 upload notice:', r2Err?.message || r2Err);
-      }
-    }
-
-    // 5. Upload directly to Supabase Storage bucket 'lecture-pdfs' as fallback
-    let supabaseStorageUrl: string | null = null;
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-      try {
-        const { createClient } = await import('@supabase/supabase-js');
-        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-        const { error: storageError } = await supabase.storage
-          .from('lecture-pdfs')
-          .upload(uniqueFileName, buffer, {
-            contentType: mimeType || 'application/pdf',
-            upsert: true,
-          });
-        if (!storageError) {
-          const { data: urlData } = supabase.storage.from('lecture-pdfs').getPublicUrl(uniqueFileName);
-          supabaseStorageUrl = urlData?.publicUrl || null;
-        } else {
-          console.warn('Supabase storage upload notice:', storageError.message);
-        }
-      } catch (err) {
-        console.warn('Supabase storage upload error:', err);
-      }
-    }
-
-    // Determine the optimal public PDF URL: Firebase Storage > Cloudflare R2 > relative URL
-    const effectivePdfUrl = firebaseStorageUrl || r2StorageUrl || relativeUrl;
+    const effectivePdfUrl = relativeUrl;
 
     // If lectureId is provided, automatically attach this uploaded PDF to the lecture
     let attachedLecture = null;
@@ -1164,9 +1006,6 @@ app.post('/api/admin/upload-pdf', requireAuth, requireAdmin, async (req: AuthReq
     return res.json({
       success: true,
       url: effectivePdfUrl,
-      firebaseStorageUrl,
-      r2StorageUrl,
-      supabaseStorageUrl,
       fileName: uniqueFileName,
       fileSize: buffer.length,
       id: savedRecord.id,
@@ -1231,49 +1070,13 @@ app.post('/api/admin/lectures/:id/attach-pdf', requireAuth, requireAdmin, async 
       const uniqueFileName = `${Date.now()}-${safeBase}.pdf`;
       const relativeUrl = `/lectures/${uniqueFileName}`;
 
-      const lecturesDir = path.resolve(process.cwd(), 'public', 'lectures');
-      if (!fs.existsSync(lecturesDir)) {
-        fs.mkdirSync(lecturesDir, { recursive: true });
-      }
-      fs.writeFileSync(path.join(lecturesDir, uniqueFileName), buffer);
-
-      let telegramFileId: string | null = null;
-      if (isTelegramConfigured()) {
-        try {
-          const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `📄 MedAtlas Lecture: ${fileName}`);
-          telegramFileId = tgResult.fileId;
-          console.log('✅ Uploaded lecture PDF backup to Telegram (Plan B CDN):', uniqueFileName, 'fileId:', telegramFileId);
-        } catch (tgErr: any) {
-          console.warn('[TELEGRAM_STORAGE_NOTICE] Telegram upload notice:', tgErr?.message || tgErr);
-        }
-      }
-
+      if (!isTelegramConfigured()) throw new Error('Telegram PDF storage is required.');
+      const tgResult = await uploadPdfToTelegram(uniqueFileName, buffer, `MedAtlas Lecture: ${fileName}`);
       await saveUploadedPdfFileAdmin(
         { uid: req.user!.uid, email: req.user!.email },
-        {
-          fileName: uniqueFileName,
-          mimeType: mimeType || 'application/pdf',
-          fileSize: buffer.length,
-          dataBase64: base64Clean,
-          url: relativeUrl,
-          telegramFileId,
-        }
+        { fileName: uniqueFileName, mimeType: 'application/pdf', fileSize: buffer.length,
+          dataBase64: '', url: relativeUrl, telegramFileId: tgResult.fileId }
       );
-
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-        try {
-          const { createClient } = await import('@supabase/supabase-js');
-          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-          await supabase.storage
-            .from('lecture-pdfs')
-            .upload(uniqueFileName, buffer, {
-              contentType: mimeType || 'application/pdf',
-              upsert: true,
-            });
-        } catch (err) {
-          console.warn('Supabase storage upload notice:', err);
-        }
-      }
 
       pdfUrlToAttach = relativeUrl;
       uploadDetails = {

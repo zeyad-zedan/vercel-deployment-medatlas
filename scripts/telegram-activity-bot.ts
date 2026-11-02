@@ -203,7 +203,10 @@ export async function sendActivityReport(chatId: string | number, hours: number)
  */
 async function startListener() {
   console.log('🤖 MedAtlas Telegram Activity Bot is running!');
-  console.log(`Bot username: @MedAtlas_pdf_bot`);
+  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10000) });
+  const identity = await response.json() as any;
+  if (!identity?.ok) throw new Error('Telegram bot credentials rejected.');
+  console.log(`Bot username: @${identity.result.username}`);
   console.log(`Send /report or /help to the bot on Telegram to receive live student updates.\n`);
 
   let offset = 0;
@@ -211,10 +214,11 @@ async function startListener() {
   while (true) {
     try {
       const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=20`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
       const data = (await res.json().catch(() => null)) as any;
 
-      if (data?.ok && Array.isArray(data.result)) {
+      if (!res.ok || !data?.ok) throw new Error(`Telegram polling failed (${res.status}): ${data?.description || 'unknown error'}`);
+      if (Array.isArray(data.result)) {
         for (const update of data.result) {
           offset = update.update_id + 1;
           const msg = update.message || update.channel_post;
