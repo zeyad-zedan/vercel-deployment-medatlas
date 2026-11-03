@@ -1,3 +1,11 @@
+import { QuestionImages } from './QuestionImages.tsx';
+import { AcademicProfileFields } from './AcademicProfileFields.tsx';
+import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
+import { groupLectureModules } from '../lib/lecture-modules.ts';
+import { ExamCompletionGate } from '../lib/exam-completion.ts';
+import { QuestionReportButton } from './QuestionReportButton.tsx';
+import { BookmarkButton } from './BookmarkButton.tsx';
+import { PageHeading } from './PageHeading.tsx';
 import React, { useState, useEffect } from 'react';
 import {
   BookOpen,
@@ -24,8 +32,12 @@ import {
   AlertCircle,
   Upload,
   Tag,
+  Search,
+  ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
-import { api, type UserProfile } from '../lib/api.ts';
+import { api, type UserProfile, type ReviewQuery } from '../lib/api.ts';
 import { parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
@@ -39,14 +51,14 @@ export const DashboardView: React.FC<{
   onStartQuickSession: (params: any) => void;
   onOpenSession: (sessionId: number) => void;
   onNavigateTab: (tab: string) => void;
-  onSelectModule?: (subjectId: number) => void;
+  onOpenSubject?: (subjectId: number) => void;
 }> = ({
   dashboardData,
   loading,
   onStartQuickSession,
   onOpenSession,
   onNavigateTab,
-  onSelectModule,
+  onOpenSubject,
 }) => {
   if (loading || !dashboardData) {
     return (
@@ -64,21 +76,16 @@ export const DashboardView: React.FC<{
     );
   }
 
-  const { summary, subjectProgress = [], topicPerformance = [], history = [] } =
-    dashboardData;
+  const { subjectProgress = [], history = [] } = dashboardData;
+  const summary = { totalPublishedQuestions: 0, totalPublishedLectures: 0, uniqueQuestionsAttempted: 0,
+    totalQuestionsAnswered: 0, totalCorrectAnswers: 0, totalIncorrectAnswers: 0,
+    overallAccuracy: 0, accuracyPercentage: 0, ...dashboardData.summary };
 
   return (
     <div className="space-y-8">
       {/* Header & Primary Action */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Academic Performance Dashboard
-          </h1>
-          <p className="text-sm text-slate-600 mt-0.5">
-            Live database statistics tracking unique questions completed, total answers submitted, and module mastery.
-          </p>
-        </div>
+      <PageHeading eyebrow="Your workspace" title="A little progress, every day."
+        description="Pick up where you left off, explore a lecture, or revisit a question.">
         <div className="flex flex-wrap items-center gap-3">
           {summary.totalIncorrectAnswers > 0 && (
             <button
@@ -105,32 +112,24 @@ export const DashboardView: React.FC<{
           </button>
           <button
             type="button"
-            onClick={() =>
-              onStartQuickSession({
-                mode: 'study',
-                title: 'Daily Mixed Medical Study Block',
-                requestedCount: 5,
-                shuffleQuestions: true,
-                avoidRecent: true,
-              })
-            }
-            className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            onClick={() => onNavigateTab('lectures')}
+            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Start 5-MCQ Study Block
+            start studying
           </button>
         </div>
-      </div>
+      </PageHeading>
 
       {/* Welcome / Empty State message when no questions have been attempted */}
       {summary.totalQuestionsAnswered === 0 && (
         <div className="p-5 bg-sky-50 border border-sky-200 rounded-xl flex items-start gap-3.5 text-xs text-sky-950">
-          <AlertCircle className="w-5 h-5 text-[#0284C7] shrink-0 mt-0.5" />
+          <AlertCircle className="w-5 h-5 text-[var(--ma-brand)] shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <p className="font-bold text-sm text-[#0284C7]">
+            <p className="font-bold text-sm text-[var(--ma-brand)]">
               Welcome to your Medical Curriculum &amp; Question Bank!
             </p>
             <p className="text-slate-600 leading-relaxed">
-              You haven't attempted any questions yet. Choose a module card below or start a quick study block to begin tracking your unique progress, accuracy, and review mistakes.
+              You haven't attempted any questions yet. Choose a module card below or select start studying to browse your lectures and begin tracking your progress.
             </p>
           </div>
         </div>
@@ -182,7 +181,7 @@ export const DashboardView: React.FC<{
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <p className="text-xs font-sans text-slate-500 font-medium">Accuracy</p>
-          <p className="text-2xl font-bold text-[#0284C7] mt-1">
+          <p className="text-2xl font-bold text-[var(--ma-brand)] mt-1">
             {summary.totalQuestionsAnswered > 0
               ? `${summary.accuracyPercentage ?? summary.overallAccuracy}%`
               : '—'}
@@ -209,18 +208,18 @@ export const DashboardView: React.FC<{
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <h2 className="text-lg font-bold text-slate-900">
-              Curriculum Modules
+              Your subjects
             </h2>
             <p className="text-xs text-slate-500">
-              Generated dynamically from your medical database. Click any module to view its lectures.
+              Choose a subject to browse its lectures and question banks.
             </p>
           </div>
           <button
             type="button"
-            onClick={() => onNavigateTab('subjects')}
-            className="text-xs font-semibold text-[#0284C7] hover:text-[#0369A1] inline-flex items-center gap-1 cursor-pointer"
+            onClick={() => onNavigateTab('lectures')}
+            className="text-xs font-semibold text-[var(--ma-brand)] hover:text-[var(--ma-brand-hover)] inline-flex items-center gap-1 cursor-pointer"
           >
-            <span>View All Modules &amp; Lectures</span>
+            <span>View all lectures</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -235,28 +234,30 @@ export const DashboardView: React.FC<{
                 : 0;
 
             return (
-              <div
+              <button
+                type="button"
                 key={subj.subjectId}
+                aria-label={`Browse ${subj.title} lectures`}
                 onClick={() => {
-                  if (onSelectModule) {
-                    onSelectModule(subj.subjectId);
+                  if (onOpenSubject) {
+                    onOpenSubject(subj.subjectId);
                   } else {
-                    onNavigateTab('subjects');
+                    onNavigateTab('lectures');
                   }
                 }}
-                className="bg-white rounded-xl border border-slate-200 hover:border-[#0284C7] hover:shadow-md p-5 flex flex-col justify-between transition-all cursor-pointer group"
+                className="bg-white rounded-xl border border-slate-200 hover:border-[var(--ma-brand)] p-5 flex flex-col justify-between transition-colors cursor-pointer group text-left"
               >
                 <div className="space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[#0284C7] bg-sky-50 px-2 py-0.5 rounded-md">
-                        Module
+                      <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[var(--ma-brand)] bg-sky-50 px-2 py-0.5 rounded-md">
+                        Subject
                       </span>
-                      <h3 className="text-base font-bold text-slate-900 mt-1.5 group-hover:text-[#0284C7] transition-colors">
+                      <h3 className="text-base font-bold text-slate-900 mt-1.5 group-hover:text-[var(--ma-brand)] transition-colors">
                         {subj.title}
                       </h3>
                     </div>
-                    <div className="w-8 h-8 rounded-lg bg-slate-50 group-hover:bg-sky-50 flex items-center justify-center text-slate-400 group-hover:text-[#0284C7] transition-colors shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-slate-50 group-hover:bg-sky-50 flex items-center justify-center text-slate-400 group-hover:text-[var(--ma-brand)] transition-colors shrink-0">
                       <ChevronRight className="w-4 h-4" />
                     </div>
                   </div>
@@ -290,7 +291,7 @@ export const DashboardView: React.FC<{
                     </div>
                     <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-[#0284C7] rounded-full transition-all duration-300"
+                        className="h-full bg-[var(--ma-brand)] rounded-full transition-all duration-300"
                         style={{ width: `${completionPct}%` }}
                       />
                     </div>
@@ -315,7 +316,7 @@ export const DashboardView: React.FC<{
                     </span>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -334,10 +335,10 @@ export const DashboardView: React.FC<{
           </div>
           <button
             type="button"
-            onClick={() => onNavigateTab('subjects')}
-            className="text-xs font-semibold text-[#0284C7] hover:text-[#0369A1] cursor-pointer"
+            onClick={() => onNavigateTab('lectures')}
+            className="text-xs font-semibold text-[var(--ma-brand)] hover:text-[var(--ma-brand-hover)] cursor-pointer"
           >
-            Browse All Subjects →
+            Browse Lectures →
           </button>
         </div>
 
@@ -382,7 +383,7 @@ export const DashboardView: React.FC<{
                             title: `${subj.title} — Subject Study`,
                           })
                         }
-                        className="text-[#0284C7] hover:underline font-semibold cursor-pointer"
+                        className="text-[var(--ma-brand)] hover:underline font-semibold cursor-pointer"
                       >
                         Practice Subject
                       </button>
@@ -426,59 +427,8 @@ export const DashboardView: React.FC<{
         </div>
       </div>
 
-      {/* Weak-Topic Analysis & Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-6 bg-white rounded-xl border border-slate-200 p-6 space-y-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Topic Performance &amp; Weak-Area Analysis
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Topics with fewer than 3 attempts are marked as Insufficient Sample to avoid premature weak-topic labeling.
-            </p>
-          </div>
-
-          {topicPerformance.length === 0 ? (
-            <div className="p-6 rounded-lg bg-slate-50 text-center text-xs text-slate-500">
-              Complete at least one practice or exam session to generate topic-level accuracy metrics.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {topicPerformance.slice(0, 8).map((item: any) => (
-                <div
-                  key={item.topic}
-                  className="p-3 rounded-lg border border-slate-200 flex items-center justify-between gap-4 text-xs"
-                >
-                  <div className="space-y-0.5">
-                    <p className="font-semibold text-slate-900">{item.topic}</p>
-                    <p className="text-slate-500 font-mono-tabular">
-                      {item.correctAttempts} / {item.totalAttempts} correct ({item.uniqueQuestionsAttempted} unique MCQs)
-                    </p>
-                  </div>
-                  <div className="text-right font-mono-tabular shrink-0">
-                    <p className="font-bold text-slate-900">{item.accuracyPercentage}%</p>
-                    <p
-                      className={`font-sans text-[11px] font-semibold ${
-                        item.classification === 'Needs Review'
-                          ? 'text-red-700'
-                          : item.classification === 'Strong'
-                          ? 'text-emerald-700'
-                          : item.classification === 'Developing'
-                          ? 'text-amber-700'
-                          : 'text-slate-500'
-                      }`}
-                    >
-                      {item.isSmallSample
-                        ? 'Insufficient Sample (<3)'
-                        : item.classification}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
+      {/* Recent activity remains full-width after removal of topic analysis. */}
+      <div className="space-y-6">
         {/* Recent Exam & Practice Sessions */}
         <div className="lg:col-span-6 bg-white rounded-xl border border-slate-200 p-6 space-y-4">
           <div className="flex items-center justify-between">
@@ -493,7 +443,7 @@ export const DashboardView: React.FC<{
             <button
               type="button"
               onClick={() => onNavigateTab('progress')}
-              className="text-xs font-semibold text-[#0284C7] hover:underline cursor-pointer"
+              className="text-xs font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
             >
               Full History →
             </button>
@@ -550,7 +500,6 @@ export const SubjectsAndLecturesView: React.FC<{
   catalog: any;
   dashboardData?: any;
   initialSelectedSubjectId?: number | 'all' | null;
-  onSelectSubjectId?: (id: number | 'all') => void;
   onStartSession: (params: any) => void;
   onRefresh?: () => void;
   isAdmin?: boolean;
@@ -558,15 +507,18 @@ export const SubjectsAndLecturesView: React.FC<{
   catalog,
   dashboardData,
   initialSelectedSubjectId,
-  onSelectSubjectId,
   onStartSession,
   onRefresh,
   isAdmin = false,
 }) => {
   const subjects = catalog?.subjects || [];
-  const [internalSelectedId, setInternalSelectedId] = useState<number | 'all'>(
-    initialSelectedSubjectId || 'all'
-  );
+  const [lectureSearch, setLectureSearch] = useState('');
+  const search = lectureSearch.trim().toLocaleLowerCase();
+  const modules = catalog?.modules || [];
+  const moduleOptions = groupLectureModules(modules);
+  const [selectedModuleId, setSelectedModuleId] = useState<number | 'all'>('all');
+  const [expandedSubjectIds, setExpandedSubjectIds] = useState<Set<number>>(() =>
+    new Set(typeof initialSelectedSubjectId === 'number' ? [initialSelectedSubjectId] : []));
   const [expandedNotesLectureId, setExpandedNotesLectureId] = useState<number | null>(null);
   const [activePdf, setActivePdf] = useState<{ url: string; title: string; initialPage?: number } | null>(null);
   const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
@@ -580,82 +532,60 @@ export const SubjectsAndLecturesView: React.FC<{
     pdfUrl?: string | null;
   } | null>(null);
 
-  // Sync with prop if it changes
-  React.useEffect(() => {
-    if (initialSelectedSubjectId !== undefined && initialSelectedSubjectId !== null) {
-      setInternalSelectedId(initialSelectedSubjectId);
+  // A Home card is an expansion request, never a filter hiding the other subjects.
+  useEffect(() => {
+    if (typeof initialSelectedSubjectId === 'number') {
+      setSelectedModuleId('all');
+      setLectureSearch('');
+      setExpandedSubjectIds(previous => new Set([...previous, initialSelectedSubjectId]));
     }
   }, [initialSelectedSubjectId]);
 
-  const handleSelectSubject = (id: number | 'all') => {
-    setInternalSelectedId(id);
-    onSelectSubjectId?.(id);
-  };
-
-  const visibleSubjects =
-    internalSelectedId === 'all'
-      ? subjects
-      : subjects.filter((s: any) => s.id === internalSelectedId);
+  const selectedModule = moduleOptions.find(module => module.id === selectedModuleId);
+  const moduleSubjects = selectedModuleId === 'all' ? subjects : subjects.filter((subject: any) => selectedModule?.moduleIds.includes(subject.moduleId));
+  const matchingSubjects = moduleSubjects.filter((s: any) => !search || s.title.toLocaleLowerCase().includes(search) ||
+    (s.lectures || []).some((l: any) => l.title.toLocaleLowerCase().includes(search)));
+  const lectureCount = moduleSubjects.reduce((n: number, subject: any) => n + (subject.lectures?.length || 0), 0);
+  const questionCount = moduleSubjects.reduce((n: number, subject: any) => n + (subject.questionCount || 0), 0);
 
   return (
-    <div className="space-y-6">
-      {/* Top Header & Subject Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="ma-library space-y-6">
+      <header className="ma-library-hero">
         <div>
-          <div className="flex items-center gap-2">
-            {internalSelectedId !== 'all' && (
-              <button
-                type="button"
-                onClick={() => handleSelectSubject('all')}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-[#0284C7] hover:underline cursor-pointer mr-1"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>All Modules</span>
-              </button>
-            )}
-            <h1 className="text-2xl font-bold text-slate-900">
-              {internalSelectedId === 'all'
-                ? 'Curriculum Modules &amp; Lectures'
-                : visibleSubjects[0]?.title || 'Module Lectures'}
-            </h1>
-          </div>
-          <p className="text-sm text-slate-600 mt-0.5">
-            {internalSelectedId === 'all'
-              ? 'Browse all medical modules, study lecture-specific question banks, review your mistakes, or open lecture PDF slides.'
-              : visibleSubjects[0]?.description || 'Select a lecture to study or review mistakes.'}
-          </p>
-        </div>
-
-        {/* Interactive Module Pills Filter */}
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 rounded-lg shrink-0">
-          <button
-            type="button"
-            onClick={() => handleSelectSubject('all')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
-              internalSelectedId === 'all'
-                ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            All Modules ({subjects.length})
-          </button>
-          {subjects.map((s: any) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => handleSelectSubject(s.id)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
-                internalSelectedId === s.id
-                  ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {s.title}
+          <span className="ma-eyebrow"><BookOpen size={14} /> Your learning library</span>
+          <h1>Lectures<span className="ma-title-dot">.</span></h1>
+          <p>A little focus. A clearer understanding.<br className="hidden sm:block" /> Find your subject and pick up where you left off.</p>
+          <div className="ma-library-actions">
+            <button type="button" onClick={() => setExpandedSubjectIds(new Set(matchingSubjects.map((subject: any) => subject.id)))} disabled={!matchingSubjects.length}>
+              <ChevronsUpDown size={16} aria-hidden="true" /> Expand all subjects
             </button>
-          ))}
+            <button type="button" onClick={() => { setLectureSearch(''); setExpandedSubjectIds(new Set()); }}>
+              <ChevronsDownUp size={16} aria-hidden="true" /> Collapse all
+            </button>
+          </div>
         </div>
+        <div className="ma-library-totals" aria-label="Curriculum totals">
+          <div><strong>{moduleSubjects.length}</strong><span>Subjects</span></div>
+          <div><strong>{lectureCount}</strong><span>Lectures</span></div>
+          <div><strong>{questionCount.toLocaleString()}</strong><span>MCQs</span></div>
+        </div>
+      </header>
+      <div className="ma-library-toolbar">
+        <label className="ma-search">
+          <Search size={18} aria-hidden="true" />
+          <span className="sr-only">Search subjects and lectures</span>
+          <input type="search" value={lectureSearch} onChange={(e) => setLectureSearch(e.target.value)} placeholder="Search subjects or lectures…" />
+        </label>
+        <label className="ma-module-filter">
+          <Layers size={17} aria-hidden="true" />
+          <span className="sr-only">Filter lectures by module</span>
+          <select value={selectedModuleId} onChange={event => setSelectedModuleId(event.target.value === 'all' ? 'all' : Number(event.target.value))}>
+            <option value="all">All modules</option>
+            {moduleOptions.map(module => <option key={module.id} value={module.id}>{module.label}</option>)}
+          </select>
+        </label>
       </div>
-
+      <p className="text-xs text-slate-500">Completed counts include study, custom practice, and submitted exams. Continue learning opens the first unanswered question.</p>
       {resetSuccessMessage && (
         <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between">
           <span>{resetSuccessMessage}</span>
@@ -669,42 +599,49 @@ export const SubjectsAndLecturesView: React.FC<{
         </div>
       )}
 
-      {visibleSubjects.length === 0 ? (
+      {matchingSubjects.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-600">
-          No published modules found.
+          No matching subjects or lectures found.
         </div>
       ) : (
         <div className="space-y-8">
-          {visibleSubjects.map((subject: any) => {
+          {matchingSubjects.map((subject: any, subjectIndex: number) => {
             // Find student metrics for this module
             const subjProgress = dashboardData?.subjectProgress?.find(
               (p: any) => p.subjectId === subject.id
             );
 
             // Sort lectures belonging to the selected module in their correct order
-            const sortedLectures = [...(subject.lectures || [])].sort(
+            const sortedLectures = [...(subject.lectures || [])].filter((l: any) => !search || subject.title.toLocaleLowerCase().includes(search) || l.title.toLocaleLowerCase().includes(search)).sort(
               (a: any, b: any) => (Number(a.lectureNumber) || 0) - (Number(b.lectureNumber) || 0)
             );
 
             return (
-              <div
-                key={subject.id}
-                className="bg-white rounded-xl border border-slate-200 p-6 space-y-6"
-              >
+              <details key={subject.id}
+                open={expandedSubjectIds.has(subject.id) || Boolean(search)}
+                onToggle={event => {
+                  if (search) return;
+                  const open = event.currentTarget.open;
+                  setExpandedSubjectIds(previous => {
+                    if (previous.has(subject.id) === open) return previous;
+                    const next = new Set(previous);
+                    if (open) next.add(subject.id); else next.delete(subject.id);
+                    return next;
+                  });
+                }}
+                className="ma-subject group">
+                <summary className="ma-subject-summary">
+                  <span className="ma-subject-icon" aria-hidden="true"><BookOpen size={22} strokeWidth={1.6} /></span>
+                  <span className="ma-subject-heading"><span className="ma-eyebrow">Subject {String(subjectIndex + 1).padStart(2, '0')}</span><span className="ma-subject-title">{subject.title}</span><span className="ma-subject-meta">{sortedLectures.length} lectures <span aria-hidden="true">·</span> {subject.questionCount || 0} MCQs</span></span>
+                  <span className="ma-subject-progress"><span>{Math.min(100, Math.round((subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100))}% completed</span><span className="ma-progress-track"><span style={{width: `${Math.min(100, (subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100)}%`}} /></span></span>
+                  <ChevronDown className="ma-subject-chevron" size={19} aria-hidden="true" />
+                </summary>
+                <div className="ma-subject-body">
                 {/* Module Summary Banner */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-                  <div className="space-y-1">
-                    <div className="text-xs text-slate-500 font-mono-tabular">
-                      Module · {sortedLectures.length} Lectures ·{' '}
-                      {subject.questionCount || subjProgress?.totalPublishedQuestions || 0} Questions
-                      {subjProgress && subjProgress.totalAnswersSubmitted > 0 && (
-                        <span> · {subjProgress.accuracyPercentage}% Accuracy</span>
-                      )}
-                    </div>
-                    <h2 className="text-xl font-bold text-slate-900">{subject.title}</h2>
-                    {subject.description && (
-                      <p className="text-sm text-slate-600">{subject.description}</p>
-                    )}
+                  <div className="space-y-1 min-w-0">
+                    <h2 className="ma-section-title">Your path through {subject.title}</h2>
+                    <p className="text-sm text-slate-500">{subject.description || 'Choose a lecture below, or practise the whole subject.'}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
@@ -716,9 +653,9 @@ export const SubjectsAndLecturesView: React.FC<{
                           title: `${subject.title} — Comprehensive Study`,
                         })
                       }
-                      className="px-3.5 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                      className="px-3.5 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
                     >
-                      Study Entire Module
+                      Study Entire Subject
                     </button>
                     <button
                       type="button"
@@ -733,7 +670,7 @@ export const SubjectsAndLecturesView: React.FC<{
                       }
                       className="px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     >
-                      Module Exam
+                      Subject Exam
                     </button>
                   </div>
                 </div>
@@ -741,7 +678,7 @@ export const SubjectsAndLecturesView: React.FC<{
                 {/* Lectures List in correct order */}
                 <div className="space-y-4">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Lectures in this Module ({sortedLectures.length})
+                    Lectures in this Subject ({sortedLectures.length})
                   </h3>
 
                   <div className="grid grid-cols-1 gap-4">
@@ -754,7 +691,6 @@ export const SubjectsAndLecturesView: React.FC<{
                       const totalQuestions =
                         lect.questionCount ?? lectProgress?.totalPublishedQuestions ?? 0;
                       const attemptedQuestions = lectProgress?.uniqueQuestionsAttempted ?? 0;
-                      const correctAnswers = lectProgress?.correctAnswers ?? 0;
                       const incorrectAnswers = lectProgress?.incorrectAnswers ?? 0;
                       const accuracy =
                         lectProgress && lectProgress.totalAnswersSubmitted > 0
@@ -765,12 +701,12 @@ export const SubjectsAndLecturesView: React.FC<{
                       return (
                         <div
                           key={lect.id}
-                          className="p-5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition-colors space-y-4"
+                          className="ma-lecture-card space-y-4"
                         >
                           {/* Lecture Title & Details */}
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[#0284C7] bg-sky-50 px-2 py-0.5 rounded">
+                              <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[var(--ma-brand)] bg-sky-50 px-2 py-0.5 rounded">
                                 Lecture {lect.lectureNumber}
                               </span>
                             </div>
@@ -784,54 +720,16 @@ export const SubjectsAndLecturesView: React.FC<{
                             )}
                           </div>
 
-                          {/* Metric stats: question count, attempted, correct, incorrect, accuracy */}
-                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 p-3 rounded-lg bg-slate-50 border border-slate-100 font-mono-tabular text-xs">
-                            <div>
-                              <span className="text-[11px] font-sans text-slate-500 block">
-                                Question Count
-                              </span>
-                              <span className="font-bold text-slate-900 text-sm">
-                                {totalQuestions}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[11px] font-sans text-slate-500 block">
-                                Attempted (Unique)
-                              </span>
-                              <span className="font-bold text-slate-900 text-sm">
-                                {attemptedQuestions}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[11px] font-sans text-slate-500 block">
-                                Correct Answers
-                              </span>
-                              <span className="font-bold text-emerald-600 text-sm">
-                                {correctAnswers}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[11px] font-sans text-slate-500 block">
-                                Incorrect Answers
-                              </span>
-                              <span className="font-bold text-rose-600 text-sm">
-                                {incorrectAnswers}
-                              </span>
-                            </div>
-                            <div className="col-span-2 sm:col-span-1">
-                              <span className="text-[11px] font-sans text-slate-500 block">
-                                Accuracy
-                              </span>
-                              <span
-                                className={`font-bold text-sm ${
-                                  attemptedQuestions > 0 ? 'text-[#0284C7]' : 'text-slate-400'
-                                }`}
-                              >
-                                {accuracy}
-                              </span>
-                            </div>
+                          <div className="ma-lecture-metrics grid grid-cols-3 gap-4 text-xs">
+                            <div><span className="ma-metric-label">Question bank</span><strong className="ma-metric-value">{totalQuestions} <small>MCQs</small></strong></div>
+                            <div><span className="ma-metric-label" title="Unique questions answered across study, custom practice, and submitted exams">Completed</span><strong className="ma-metric-value">{attemptedQuestions}<small> / {totalQuestions}</small></strong></div>
+                            <div><span className="ma-metric-label">Accuracy</span><strong className="ma-metric-value">{accuracy}</strong></div>
                           </div>
 
+                          <div className="ma-lecture-progress">
+                            <span>{attemptedQuestions === 0 ? 'Ready when you are' : `${attemptedQuestions} of ${totalQuestions} questions completed`}</span>
+                            <span className="ma-progress-track"><span style={{width: `${Math.min(100, attemptedQuestions / Math.max(1, totalQuestions) * 100)}%`}} /></span>
+                          </div>
                           {/* Action Buttons: Study, Review Mistakes, Open Lecture PDF */}
                           <div className="flex flex-wrap items-center gap-2 pt-1">
                             <button
@@ -843,10 +741,10 @@ export const SubjectsAndLecturesView: React.FC<{
                                   title: `${lect.title} — Study`,
                                 })
                               }
-                              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors cursor-pointer"
+                              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors cursor-pointer"
                             >
                               <Play className="w-3.5 h-3.5" />
-                              <span>Study ({totalQuestions})</span>
+                              <span>{attemptedQuestions > 0 && attemptedQuestions < totalQuestions ? 'Continue learning' : attemptedQuestions >= totalQuestions && totalQuestions > 0 ? 'Review lecture' : 'Start learning'} <ArrowRight className="inline w-3.5 h-3.5 ml-1" /></span>
                             </button>
 
                             <button
@@ -890,7 +788,7 @@ export const SubjectsAndLecturesView: React.FC<{
                                   }
                                   className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer"
                                 >
-                                  <FileText className="w-3.5 h-3.5 text-[#0284C7]" />
+                                  <FileText className="w-3.5 h-3.5 text-[var(--ma-brand)]" />
                                   <span>Open Lecture PDF</span>
                                 </button>
                                 {isAdmin && (
@@ -905,7 +803,7 @@ export const SubjectsAndLecturesView: React.FC<{
                                         pdfUrl: lect.pdfUrl,
                                       });
                                     }}
-                                    className="p-2 text-slate-400 hover:text-[#0284C7] hover:bg-sky-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                                    className="p-2 text-slate-400 hover:text-[var(--ma-brand)] hover:bg-sky-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
                                     title="Administrator: Replace lecture PDF"
                                   >
                                     <Upload className="w-3.5 h-3.5" />
@@ -924,7 +822,7 @@ export const SubjectsAndLecturesView: React.FC<{
                                     pdfUrl: null,
                                   });
                                 }}
-                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
                                 title="Administrator: Upload PDF slide deck to this lecture"
                               >
                                 <Upload className="w-3.5 h-3.5" />
@@ -987,7 +885,8 @@ export const SubjectsAndLecturesView: React.FC<{
                     })}
                   </div>
                 </div>
-              </div>
+                </div>
+              </details>
             );
           })}
         </div>
@@ -1034,22 +933,6 @@ export const SubjectsAndLecturesView: React.FC<{
                   try {
                     setIsResetting(true);
                     await api.resetLectureProgress(resetConfirmLecture.id);
-                    // Clear local draft/index caches
-                    try {
-                      const keysToRemove: string[] = [];
-                      for (let i = 0; i < localStorage.length; i++) {
-                        const key = localStorage.key(i);
-                        if (
-                          key &&
-                          (key.startsWith('medatlas_session_curr_idx_') ||
-                            key.startsWith('medatlas_session_draft_answers_') ||
-                            key === 'medatlas_active_session_id')
-                        ) {
-                          keysToRemove.push(key);
-                        }
-                      }
-                      keysToRemove.forEach((k) => localStorage.removeItem(k));
-                    } catch {}
                     setResetSuccessMessage(
                       `Progress for "${resetConfirmLecture.title}" has been reset. You can now start fresh!`
                     );
@@ -1166,14 +1049,8 @@ export const CustomPracticeView: React.FC<{
 
   return (
     <div className="max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Custom Practice &amp; Question Filter Builder
-        </h1>
-        <p className="text-sm text-slate-600 mt-0.5">
-          Configure a tailored question set across multiple subjects, lectures, difficulties, and shuffling rules.
-        </p>
-      </div>
+      <PageHeading eyebrow="Make it your own" title="Custom practice"
+        description="Build a question set around the subjects, lectures, and topics you want to study." />
 
       <form
         onSubmit={handleLaunchCustom}
@@ -1196,7 +1073,7 @@ export const CustomPracticeView: React.FC<{
                   }
                   className={`p-3 rounded-lg border text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
                     active
-                      ? 'border-[#0284C7] bg-sky-50/70 text-slate-900 font-semibold'
+                      ? 'border-[var(--ma-brand)] bg-sky-50/70 text-slate-900 font-semibold'
                       : 'border-slate-200 hover:border-slate-300 text-slate-700'
                   }`}
                 >
@@ -1227,7 +1104,7 @@ export const CustomPracticeView: React.FC<{
                   }
                   className={`p-2.5 rounded-lg border text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
                     active
-                      ? 'border-[#0284C7] bg-sky-50/70 text-slate-900 font-semibold'
+                      ? 'border-[var(--ma-brand)] bg-sky-50/70 text-slate-900 font-semibold'
                       : 'border-slate-200 hover:border-slate-300 text-slate-600'
                   }`}
                 >
@@ -1263,7 +1140,7 @@ export const CustomPracticeView: React.FC<{
                     }
                     className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                       active
-                        ? 'border-[#0284C7] bg-[#0284C7] text-white'
+                        ? 'border-[var(--ma-brand)] bg-[var(--ma-brand)] text-white'
                         : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                     }`}
                   >
@@ -1288,7 +1165,7 @@ export const CustomPracticeView: React.FC<{
               max={100}
               value={questionCount}
               onChange={(e) => setQuestionCount(Number(e.target.value))}
-              className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+              className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
             />
           </div>
 
@@ -1305,7 +1182,7 @@ export const CustomPracticeView: React.FC<{
               value={tagFilter}
               onChange={(e) => setTagFilter(e.target.value)}
               placeholder="e.g., Collagen, GFR, Necrosis"
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
             />
           </div>
         </div>
@@ -1320,7 +1197,7 @@ export const CustomPracticeView: React.FC<{
               <button
                 type="button"
                 onClick={() => setSelectedSpecialTags([])}
-                className="text-[11px] font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                className="text-[11px] font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
               >
                 Clear Special Tags (Include All)
               </button>
@@ -1375,7 +1252,7 @@ export const CustomPracticeView: React.FC<{
               type="checkbox"
               checked={shuffleQuestions}
               onChange={(e) => setShuffleQuestions(e.target.checked)}
-              className="rounded border-slate-300 text-[#0284C7]"
+              className="rounded border-slate-300 text-[var(--ma-brand)]"
             />
             <span className="font-medium text-slate-800">
               Shuffle question order randomly
@@ -1387,7 +1264,7 @@ export const CustomPracticeView: React.FC<{
               type="checkbox"
               checked={shuffleOptions}
               onChange={(e) => setShuffleOptions(e.target.checked)}
-              className="rounded border-slate-300 text-[#0284C7]"
+              className="rounded border-slate-300 text-[var(--ma-brand)]"
             />
             <span className="font-medium text-slate-800">
               Shuffle answer options (A–D) while preserving correct answer key
@@ -1399,7 +1276,7 @@ export const CustomPracticeView: React.FC<{
               type="checkbox"
               checked={avoidRecent}
               onChange={(e) => setAvoidRecent(e.target.checked)}
-              className="rounded border-slate-300 text-[#0284C7]"
+              className="rounded border-slate-300 text-[var(--ma-brand)]"
             />
             <span className="font-medium text-slate-800">
               Avoid recently answered questions when alternatives exist
@@ -1411,21 +1288,21 @@ export const CustomPracticeView: React.FC<{
               type="checkbox"
               checked={onlyMistakes}
               onChange={(e) => setOnlyMistakes(e.target.checked)}
-              className="rounded border-slate-300 text-[#0284C7]"
+              className="rounded border-slate-300 text-[var(--ma-brand)]"
             />
             <span className="font-medium text-rose-700">
               Review Mistakes Only (filter questions previously answered incorrectly)
             </span>
           </label>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
             <span className="font-semibold text-slate-800">Delivery Mode:</span>
             <button
               type="button"
               onClick={() => setSessionMode('custom')}
               className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
                 sessionMode === 'custom'
-                  ? 'bg-[#0284C7] text-white'
+                  ? 'bg-[var(--ma-brand)] text-white'
                   : 'bg-slate-100 text-slate-600'
               }`}
             >
@@ -1448,7 +1325,7 @@ export const CustomPracticeView: React.FC<{
         <div className="pt-2 flex justify-end">
           <button
             type="submit"
-            className="px-6 py-2.5 text-sm font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors cursor-pointer"
+            className="px-6 py-2.5 text-sm font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors cursor-pointer"
           >
             Launch Custom Question Set
           </button>
@@ -1477,6 +1354,14 @@ export const MockExamsView: React.FC<{
     (s: any) => s.status === 'in_progress' && s.mode === 'exam'
   );
   const activeExam = inProgressExams[0] || null;
+  const [completionGate] = useState(() => new ExamCompletionGate());
+  const [expiryError, setExpiryError] = useState<string | null>(null);
+  const finishExpiredExam = (id: number, retry = false) => {
+    const request = completionGate.run(id, () => api.completeSession(id), retry);
+    if (!request) return;
+    setExpiryError(null);
+    request.then(() => onRefresh?.()).catch(() => setExpiryError('Could not finish this exam. Your saved answers are preserved.'));
+  };
 
   const computeExamRemaining = (exam: any): number => {
     if (!exam) return 0;
@@ -1502,18 +1387,14 @@ export const MockExamsView: React.FC<{
       const rem = computeExamRemaining(activeExam);
       setActiveRemainingSecs(rem);
       if (rem <= 0) {
-        api
-          .completeSession(activeExam.id)
-          .then(() => {
-            onRefresh?.();
-          })
-          .catch(() => {});
+        clearInterval(timer);
+        finishExpiredExam(activeExam.id);
       }
     };
-    updateTimer();
     const timer = setInterval(updateTimer, 1000);
+    updateTimer();
     return () => clearInterval(timer);
-  }, [activeExam?.id, activeExam?.startedAt, activeExam?.timeLimitSeconds]);
+  }, [activeExam?.id, activeExam?.startedAt, activeExam?.timeLimitSeconds, completionGate]);
 
   const hasActiveRunningExam = Boolean(activeExam && activeRemainingSecs > 0);
   const formatCountdown = (secs: number) => {
@@ -1645,7 +1526,7 @@ export const MockExamsView: React.FC<{
 
   const handleLaunchMockExam = (e: React.FormEvent) => {
     e.preventDefault();
-    if (hasActiveRunningExam) return;
+    if (hasActiveRunningExam || totalAvailableInSelection <= 0) return;
     const count = Math.min(questionCount, Math.max(1, totalAvailableInSelection || 10));
     const tagSuffix =
       selectedSpecialTags.length > 0 ? ` [${selectedSpecialTags.join(', ')}]` : '';
@@ -1669,14 +1550,11 @@ export const MockExamsView: React.FC<{
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Timed Mock Examination Center
-        </h1>
-        <p className="text-sm text-slate-600 mt-0.5">
-          Authentic medical examination simulation with real university timing, question navigation grid, and comprehensive post-exam evaluation.
-        </p>
-      </div>
+      <PageHeading eyebrow="Prepare with purpose" title="Mock exams"
+        description="Choose your content and timing. Review your answers and explanations after submitting." />
+      {expiryError && activeExam && <div role="alert" className="ma-dashboard-panel text-sm text-red-700">
+        <p>{expiryError}</p><button type="button" onClick={() => finishExpiredExam(activeExam.id, true)} className="ma-text-button mt-3">Retry finishing exam</button>
+      </div>}
 
       {/* Active Running Mock Exam Lock & Resume Banner */}
       {hasActiveRunningExam && activeExam && (
@@ -1718,7 +1596,7 @@ export const MockExamsView: React.FC<{
             <button
               type="button"
               onClick={() => onOpenSession(activeExam.id)}
-              className="px-5 py-2.5 font-bold text-white bg-[#08a39d] hover:bg-[#078f8a] rounded-lg cursor-pointer transition-colors shadow-xs flex items-center justify-center gap-2"
+              className="px-5 py-2.5 font-bold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer transition-colors shadow-xs flex items-center justify-center gap-2"
             >
               <span>Return to Active Mock Exam</span>
               <span>&rarr;</span>
@@ -1738,7 +1616,7 @@ export const MockExamsView: React.FC<{
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">1</span>
+              <span className="w-5 h-5 rounded-full bg-[var(--ma-brand)] text-white flex items-center justify-center text-[10px]">1</span>
               <span>Select Academic Module</span>
             </label>
             <span className="text-[11px] text-slate-500 font-mono-tabular">
@@ -1756,12 +1634,12 @@ export const MockExamsView: React.FC<{
                   onClick={() => setSelectedModuleId(m.id)}
                   className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                     isSelected
-                      ? 'border-[#08a39d] bg-sky-50/60 ring-2 ring-[#08a39d]/20 shadow-xs'
+                      ? 'border-[var(--ma-brand)] bg-sky-50/60 ring-2 ring-[var(--ma-brand)]/20 shadow-xs'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
                   }`}
                 >
                   <div className="space-y-1">
-                    <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#08a39d]/15 text-[#08a39d]">
+                    <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--ma-brand)]/15 text-[var(--ma-brand)]">
                       {m.code}
                     </span>
                     <h3 className="font-bold text-slate-900 text-sm">{m.title}</h3>
@@ -1780,7 +1658,7 @@ export const MockExamsView: React.FC<{
               onClick={() => setSelectedModuleId('all')}
               className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                 selectedModuleId === 'all'
-                  ? 'border-[#08a39d] bg-sky-50/60 ring-2 ring-[#08a39d]/20 shadow-xs'
+                  ? 'border-[var(--ma-brand)] bg-sky-50/60 ring-2 ring-[var(--ma-brand)]/20 shadow-xs'
                   : 'border-slate-200 hover:border-slate-300 bg-white'
               }`}
             >
@@ -1802,14 +1680,14 @@ export const MockExamsView: React.FC<{
         <div className="space-y-3 pt-3 border-t border-slate-100">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">2</span>
+              <span className="w-5 h-5 rounded-full bg-[var(--ma-brand)] text-white flex items-center justify-center text-[10px]">2</span>
               <span>Choose Subjects (Select Any Number of Subjects)</span>
             </label>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSelectedSubjectIds(availableSubjects.map((s: any) => s.id))}
-                className="text-[11px] font-bold text-[#08a39d] hover:underline cursor-pointer"
+                className="text-[11px] font-bold text-[var(--ma-brand)] hover:underline cursor-pointer"
               >
                 Select All
               </button>
@@ -1833,7 +1711,7 @@ export const MockExamsView: React.FC<{
                   onClick={() => toggleSubject(s.id)}
                   className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
                     isSelected
-                      ? 'border-[#08a39d] bg-[#08a39d]/10 text-slate-900 font-bold shadow-2xs'
+                      ? 'border-[var(--ma-brand)] bg-[var(--ma-brand)]/10 text-slate-900 font-bold shadow-2xs'
                       : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                   }`}
                 >
@@ -1841,7 +1719,7 @@ export const MockExamsView: React.FC<{
                     <div
                       className={`w-4 h-4 rounded-xs border flex items-center justify-center shrink-0 ${
                         isSelected
-                          ? 'bg-[#08a39d] border-[#08a39d] text-white'
+                          ? 'bg-[var(--ma-brand)] border-[var(--ma-brand)] text-white'
                           : 'border-slate-400 bg-white'
                       }`}
                     >
@@ -1862,7 +1740,7 @@ export const MockExamsView: React.FC<{
         <div className="space-y-4 pt-3 border-t border-slate-100">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">3</span>
+              <span className="w-5 h-5 rounded-full bg-[var(--ma-brand)] text-white flex items-center justify-center text-[10px]">3</span>
               <span>Select Lectures for Selected Subjects</span>
             </label>
             <span className="text-xs font-mono-tabular text-slate-600 font-bold">
@@ -1900,8 +1778,8 @@ export const MockExamsView: React.FC<{
                         onClick={() => toggleAllLecturesForSubject(subj.id)}
                         className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                           allSelected
-                            ? 'bg-[#08a39d] text-white shadow-xs hover:bg-[#078f8a]'
-                            : 'bg-white text-[#08a39d] border border-[#08a39d] hover:bg-sky-50'
+                            ? 'bg-[var(--ma-brand)] text-white shadow-xs hover:bg-[var(--ma-brand-hover)]'
+                            : 'bg-white text-[var(--ma-brand)] border border-[var(--ma-brand)] hover:bg-sky-50'
                         }`}
                       >
                         <span>✓</span>
@@ -1923,7 +1801,7 @@ export const MockExamsView: React.FC<{
                             onClick={() => toggleLecture(lect.id)}
                             className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-all cursor-pointer ${
                               isChecked
-                                ? 'bg-white border-[#08a39d] shadow-2xs font-semibold text-slate-900'
+                                ? 'bg-white border-[var(--ma-brand)] shadow-2xs font-semibold text-slate-900'
                                 : 'bg-white/60 border-slate-200 hover:border-slate-300 text-slate-600'
                             }`}
                           >
@@ -1932,7 +1810,7 @@ export const MockExamsView: React.FC<{
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => toggleLecture(lect.id)}
-                                className="accent-[#08a39d] cursor-pointer"
+                                className="accent-[var(--ma-brand)] cursor-pointer"
                               />
                               <span className="truncate">{lect.title}</span>
                             </div>
@@ -1953,14 +1831,14 @@ export const MockExamsView: React.FC<{
         <div className="space-y-3 pt-3 border-t border-slate-100">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-5 h-5 rounded-full bg-[#08a39d] text-white flex items-center justify-center text-[10px]">4</span>
+              <span className="w-5 h-5 rounded-full bg-[var(--ma-brand)] text-white flex items-center justify-center text-[10px]">4</span>
               <span>Filter by Special Tags / Source Labels (Optional — e.g., Old Exam, كتاب القسم)</span>
             </label>
             {selectedSpecialTags.length > 0 && (
               <button
                 type="button"
                 onClick={() => setSelectedSpecialTags([])}
-                className="text-[11px] font-bold text-[#08a39d] hover:underline cursor-pointer"
+                className="text-[11px] font-bold text-[var(--ma-brand)] hover:underline cursor-pointer"
               >
                 Include All Questions
               </button>
@@ -1973,7 +1851,7 @@ export const MockExamsView: React.FC<{
               onClick={() => setSelectedSpecialTags([])}
               className={`px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
                 selectedSpecialTags.length === 0
-                  ? 'bg-[#08a39d] text-white border-[#08a39d] shadow-xs'
+                  ? 'bg-[var(--ma-brand)] text-white border-[var(--ma-brand)] shadow-xs'
                   : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
               }`}
             >
@@ -2022,7 +1900,7 @@ export const MockExamsView: React.FC<{
                   onClick={() => setQuestionCount(num)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
                     questionCount === num
-                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      ? 'bg-[var(--ma-brand)] text-white border-[var(--ma-brand)]'
                       : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
                 >
@@ -2035,7 +1913,7 @@ export const MockExamsView: React.FC<{
                   onClick={() => setQuestionCount(totalAvailableInSelection)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
                     questionCount === totalAvailableInSelection
-                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      ? 'bg-[var(--ma-brand)] text-white border-[var(--ma-brand)]'
                       : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
                 >
@@ -2057,7 +1935,7 @@ export const MockExamsView: React.FC<{
                   onClick={() => setTimeLimitMinutes(min)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono-tabular transition-colors cursor-pointer border ${
                     timeLimitMinutes === min
-                      ? 'bg-[#08a39d] text-white border-[#08a39d]'
+                      ? 'bg-[var(--ma-brand)] text-white border-[var(--ma-brand)]'
                       : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
                 >
@@ -2085,9 +1963,9 @@ export const MockExamsView: React.FC<{
             type="submit"
             disabled={
               hasActiveRunningExam ||
-              (totalAvailableInSelection === 0 && availableSubjects.length > 0)
+              totalAvailableInSelection === 0
             }
-            className="px-8 py-3 bg-[#08a39d] hover:bg-[#078f8a] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+            className="px-8 py-3 bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
           >
             {hasActiveRunningExam ? (
               <span>Locked Until Active Exam Submitted or Time Finishes</span>
@@ -2108,10 +1986,15 @@ export const MockExamsView: React.FC<{
 // 5. BOOKMARKS & ANSWERED QUESTION REVIEW VIEW
 // ============================================================================
 export const BookmarksView: React.FC<{
-  bookmarksData: { bookmarks: any[]; answeredQuestions: any[] } | null;
+  loading?: boolean;
+  error?: string | null;
+  bookmarksData: { bookmarks: any[]; answeredQuestions: any[]; answeredCount?: number; bookmarkCount?: number;
+    reviewPagination?: { page: number; pageSize: number; totalCount: number; hasMore: boolean } } | null;
   catalog: any;
   onRefresh: () => void;
-}> = ({ bookmarksData, catalog, onRefresh }) => {
+  onLoadReview?: (query: ReviewQuery) => void;
+  onLoadSaved?: () => void;
+}> = ({ bookmarksData, catalog, onRefresh, onLoadReview, onLoadSaved, loading = false, error }) => {
   const [subTab, setSubTab] = useState<'bookmarks' | 'review'>('bookmarks');
   const [subjectFilter, setSubjectFilter] = useState<number | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<
@@ -2133,51 +2016,47 @@ export const BookmarksView: React.FC<{
     return subjMatch && statusMatch;
   });
 
-  const handleRemoveBookmark = async (questionId: number) => {
-    await api.toggleBookmark(questionId);
-    onRefresh();
-  };
-
   const activeList = subTab === 'bookmarks' ? filteredBookmarks : filteredAnswered;
+  const pagination = bookmarksData?.reviewPagination;
+  const loadReview = (page = 1, subject = subjectFilter, status = statusFilter) =>
+    onLoadReview?.({ page, subjectId: subject === 'all' ? undefined : subject, status });
+
+  if (loading) return <div role="status" className="ma-dashboard-panel">Loading your saved bookmarks…</div>;
+  if (error) return <div role="alert" className="ma-dashboard-panel"><p>{error}</p><button type="button" onClick={onRefresh} className="ma-text-button mt-3">Retry loading bookmarks</button></div>;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Saved Bookmarks &amp; Question Review
-          </h1>
-          <p className="text-sm text-slate-600 mt-0.5">
-            Review your private bookmarked questions or filter previously answered questions by Correct, Incorrect, or Unanswered status.
-          </p>
-        </div>
+      <PageHeading eyebrow="Your revision collection" title="Bookmarks & review"
+        description="Keep useful questions close. Bookmarks save as soon as you select Save.">
 
         {/* Mode Switcher */}
-        <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg">
+        <div className="ma-segmented-control">
           <button
             type="button"
-            onClick={() => setSubTab('bookmarks')}
+            onClick={() => { setSubTab('bookmarks'); onLoadSaved?.(); }}
+            aria-pressed={subTab === 'bookmarks'}
             className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
               subTab === 'bookmarks'
                 ? 'bg-white text-slate-900 shadow-xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Bookmarked Questions ({bookmarks.length})
+            Saved ({bookmarksData?.bookmarkCount ?? bookmarks.length})
           </button>
           <button
             type="button"
-            onClick={() => setSubTab('review')}
+            onClick={() => { setSubTab('review'); loadReview(); }}
+            aria-pressed={subTab === 'review'}
             className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
               subTab === 'review'
                 ? 'bg-white text-slate-900 shadow-xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Previously Answered ({answered.length})
+            Answered ({bookmarksData?.answeredCount ?? answered.length})
           </button>
         </div>
-      </div>
+      </PageHeading>
 
       {/* Filter Bar */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
@@ -2186,11 +2065,11 @@ export const BookmarksView: React.FC<{
           <select
             aria-label="Filter by Subject"
             value={subjectFilter}
-            onChange={(e) =>
-              setSubjectFilter(
-                e.target.value === 'all' ? 'all' : Number(e.target.value)
-              )
-            }
+            onChange={(e) => {
+              const subject = e.target.value === 'all' ? 'all' : Number(e.target.value);
+              setSubjectFilter(subject);
+              if (subTab === 'review') loadReview(1, subject);
+            }}
             className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800"
           >
             <option value="all">All Subjects</option>
@@ -2208,7 +2087,7 @@ export const BookmarksView: React.FC<{
               <button
                 key={st}
                 type="button"
-                onClick={() => setStatusFilter(st)}
+                onClick={() => { setStatusFilter(st); loadReview(1, subjectFilter, st); }}
                 className={`px-3 py-1 rounded-md font-medium capitalize cursor-pointer ${
                   statusFilter === st
                     ? 'bg-white text-slate-900 shadow-xs font-semibold'
@@ -2223,10 +2102,12 @@ export const BookmarksView: React.FC<{
       </div>
 
       {activeList.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-600">
-          {subTab === 'bookmarks'
-            ? 'No bookmarked questions match the selected filter. Click "Bookmark" during any Study or Exam session to save questions here.'
-            : 'No previously answered questions match the selected filter.'}
+        <div className="ma-empty-state">
+          <Bookmark aria-hidden="true" />
+          <h3>{subTab === 'bookmarks' ? 'A place for questions worth keeping' : 'Your review collection starts here'}</h3>
+          <p>{subTab === 'bookmarks'
+            ? 'Select Save on a question during any study or exam session. Try another subject filter if a saved question is missing.'
+            : 'Your answered questions will appear here. Try another filter to find what you need.'}</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -2274,21 +2155,15 @@ export const BookmarksView: React.FC<{
                         Last Attempt: {item.status.toUpperCase()}
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveBookmark(item.questionId)}
-                      className="text-slate-600 hover:text-red-700 font-medium cursor-pointer"
-                    >
-                      {subTab === 'bookmarks' || item.isBookmarked
-                        ? 'Remove Bookmark'
-                        : 'Add Bookmark'}
-                    </button>
+                    <BookmarkButton questionId={item.questionId} saved={subTab === 'bookmarks' || Boolean(item.isBookmarked)}/>
+                    <QuestionReportButton questionId={item.questionId}/>
                   </div>
                 </div>
 
                 <p className="text-sm sm:text-base font-serif-academic text-slate-900 leading-relaxed">
                   {item.questionText}
                 </p>
+                <QuestionImages images={item.images}/>
 
                 {item.note && (
                   <p className="text-xs text-slate-600 italic bg-slate-50 p-2.5 rounded-lg border border-slate-200">
@@ -2302,7 +2177,7 @@ export const BookmarksView: React.FC<{
                     onClick={() =>
                       setExpandedQuestionId(isOpen ? null : item.questionId)
                     }
-                    className="text-xs font-semibold text-[#0284C7] hover:text-[#0369A1] cursor-pointer"
+                    className="text-xs font-semibold text-[var(--ma-brand)] hover:text-[var(--ma-brand-hover)] cursor-pointer"
                   >
                     {isOpen
                       ? 'Hide Options & Explanation'
@@ -2344,6 +2219,7 @@ export const BookmarksView: React.FC<{
                       <p className="text-slate-700 leading-relaxed">
                         {item.explanation}
                       </p>
+                      <QuestionImages images={item.explanationImages}/>
                     </div>
                   </div>
                 )}
@@ -2352,6 +2228,13 @@ export const BookmarksView: React.FC<{
           })}
         </div>
       )}
+      {subTab === 'review' && pagination && <nav aria-label="Answered history pages" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <span className="text-slate-500">Page {pagination.page} of {Math.max(1, Math.ceil(pagination.totalCount / pagination.pageSize))} · {pagination.totalCount} questions</span>
+        <div className="flex gap-2">
+          <button type="button" disabled={pagination.page <= 1} onClick={() => loadReview(pagination.page - 1)} className="rounded-lg border border-slate-200 px-4 py-2 disabled:opacity-40">Previous</button>
+          <button type="button" disabled={!pagination.hasMore} onClick={() => loadReview(pagination.page + 1)} className="rounded-lg border border-slate-200 px-4 py-2 disabled:opacity-40">Next</button>
+        </div>
+      </nav>}
     </div>
   );
 };
@@ -2363,91 +2246,44 @@ export const ProgressHistoryView: React.FC<{
   dashboardData: any;
   onOpenSession: (sessionId: number) => void;
 }> = ({ dashboardData, onOpenSession }) => {
+  const [filter, setFilter] = useState<'all' | 'in_progress' | 'completed'>('all');
   const history = dashboardData?.history || [];
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Lecture Progress &amp; Attempt History
-        </h1>
-        <p className="text-sm text-slate-600 mt-0.5">
-          Each lecture maintains a single, continuous progress record so you can resume your MCQs anytime right where you left off.
-        </p>
+  const visible = history.filter((s: any) => filter === 'all' || s.status === filter);
+  const activeCount = history.filter((s: any) => s.status === 'in_progress').length;
+  const completedCount = history.filter((s: any) => s.status === 'completed').length;
+  return <div className="space-y-6">
+    <header className="ma-library-hero">
+      <div><span className="ma-eyebrow"><TrendingUp size={14}/> Your study, at a glance</span>
+        <h1>Dashboard<span className="ma-title-dot">.</span></h1>
+        <p>Every lecture and practice session, organized in one place.</p></div>
+      <div className="ma-library-totals">
+        <div><strong>{history.length}</strong><span>Sessions</span></div>
+        <div><strong>{activeCount}</strong><span>In progress</span></div>
+        <div><strong>{completedCount}</strong><span>Completed</span></div>
       </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {history.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-600">
-            You have not started any practice or examination sessions yet.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-                  <th className="py-3 px-4 font-semibold">Last Active</th>
-                  <th className="py-3 px-4 font-semibold">Session &amp; Lecture</th>
-                  <th className="py-3 px-4 font-semibold">Mode</th>
-                  <th className="py-3 px-4 font-semibold text-right">Total MCQs</th>
-                  <th className="py-3 px-4 font-semibold text-right">Status / Score</th>
-                  <th className="py-3 px-4 font-semibold text-right">Time Taken</th>
-                  <th className="py-3 px-4 font-semibold text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {history.map((sess: any) => (
-                  <tr key={sess.id} className="hover:bg-slate-50/70 text-slate-700">
-                    <td className="py-3 px-4 font-mono-tabular whitespace-nowrap">
-                      {new Date(sess.startedAt).toLocaleString()}
-                    </td>
-                    <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-900">{sess.title}</p>
-                      <p className="text-slate-500">
-                        {sess.subjectTitle} · {sess.lectureTitle}
-                      </p>
-                    </td>
-                    <td className="py-3 px-4 uppercase font-mono-tabular">
-                      {sess.mode}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono-tabular">
-                      {sess.totalQuestions}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono-tabular">
-                      {sess.status === 'completed' ? (
-                        <span className="font-bold text-slate-900">
-                          {sess.scorePercentage}% ({sess.correctCount}/{sess.totalQuestions})
-                        </span>
-                      ) : (
-                        <span className="font-semibold text-amber-700">
-                          {sess.answeredCount || 0}/{sess.totalQuestions} Solved
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono-tabular">
-                      {Math.floor((sess.elapsedSeconds || 0) / 60)}m{' '}
-                      {(sess.elapsedSeconds || 0) % 60}s
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onOpenSession(sess.id)}
-                        className="px-3 py-1.5 font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors cursor-pointer"
-                      >
-                        {sess.status === 'completed'
-                          ? 'Review Answers'
-                          : 'Continue MCQ'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+    </header>
+    <section className="space-y-4" aria-labelledby="session-cards-title">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="session-cards-title" className="text-lg font-bold">Your sessions</h2>
+        <div className="flex flex-wrap gap-2">{([{id:'all',label:'All sessions'},{id:'in_progress',label:'In progress'},{id:'completed',label:'Completed'}] as const).map((item)=><button key={item.id} type="button" aria-pressed={filter===item.id} onClick={()=>setFilter(item.id)} className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${filter===item.id?'border-sky-200 bg-sky-50 text-sky-800':'border-slate-200 bg-white text-slate-500'}`}>{item.label}</button>)}</div>
       </div>
-    </div>
-  );
+      {visible.length === 0 ? <div className="ma-dashboard-panel py-10 text-center"><BookOpen className="mx-auto mb-3 text-slate-400"/><h3>{history.length ? 'No sessions match this filter' : 'Your next chapter starts here'}</h3><p>{history.length ? 'Choose another filter to see your sessions.' : 'Start a lecture or practice session to see it on your dashboard.'}</p></div> :
+        <div className="grid gap-4 md:grid-cols-2">{visible.map((session: any)=>{
+          const completed = session.status === 'completed';
+          const active = session.status === 'in_progress';
+          const answered = Math.min(session.totalQuestions || 0, Math.max(0, session.answeredCount ?? ((session.totalQuestions || 0)-(session.unansweredCount ?? session.totalQuestions ?? 0))));
+          const percent = session.totalQuestions ? Math.round(answered/session.totalQuestions*100):0;
+          return <article key={session.id} className="ma-session-card">
+            <div className="flex items-center justify-between gap-3"><span className="ma-eyebrow">{session.mode === 'exam' ? 'Mock exam' : session.mode === 'custom' ? 'Custom practice' : 'Lecture study'}</span><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${completed?'bg-emerald-50 text-emerald-800':'bg-slate-100 text-slate-600'}`}>{completed?'Completed':active?'In progress':'Archived'}</span></div>
+            <div><h3 className="mt-4 text-base font-bold leading-relaxed">{session.title}</h3><p className="mt-1 text-xs text-slate-500">{session.subjectTitle} · {session.lectureTitle}</p></div>
+            <div className="my-5"><div className="mb-2 flex justify-between text-xs text-slate-500"><span>{answered} / {session.totalQuestions} MCQs solved</span><span>{percent}%</span></div><span className="ma-progress-track"><span style={{width:`${percent}%`}}/></span></div>
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <span className="text-xs text-slate-500">{completed ? `Score: ${session.scorePercentage}%` : `${Math.floor((session.elapsedSeconds || 0)/60)} min studied`}</span>
+              <button type="button" onClick={()=>onOpenSession(session.id)} className="inline-flex items-center gap-2 rounded-lg bg-[var(--ma-brand)] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[var(--ma-brand-hover)]">{completed?'Review answers':active?'Continue learning':'View session'}<ArrowRight size={14}/></button>
+            </div>
+          </article>;
+        })}</div>}
+    </section>
+  </div>;
 };
 
 // ============================================================================
@@ -2459,6 +2295,7 @@ export const ProfileSettingsView: React.FC<{
   onAccountDeleted: () => void;
 }> = ({ user, onUserUpdated, onAccountDeleted }) => {
   const [displayName, setDisplayName] = useState(user.displayName);
+  const [faculty, setFaculty] = useState(user.faculty || DEFAULT_FACULTY);
   const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -2473,9 +2310,9 @@ export const ProfileSettingsView: React.FC<{
     setStatusMsg(null);
     setErrorMsg(null);
     try {
-      const res = await api.updateProfile(displayName);
+      const res = await api.updateProfile(displayName, undefined, faculty);
       onUserUpdated(res.user);
-      setStatusMsg('Profile display name updated successfully.');
+      setStatusMsg('Username and faculty saved successfully.');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to update profile.');
     } finally {
@@ -2518,14 +2355,8 @@ export const ProfileSettingsView: React.FC<{
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Student Profile &amp; Account Settings
-        </h1>
-        <p className="text-sm text-slate-600 mt-0.5">
-          Manage your display name, inspect your account security metadata, and review your trial access entitlements.
-        </p>
-      </div>
+      <PageHeading eyebrow="Your account" title="Profile & settings"
+        description="Manage your profile, study preferences, and account access." />
 
       {statusMsg && (
         <div
@@ -2553,23 +2384,7 @@ export const ProfileSettingsView: React.FC<{
         <h2 className="text-base font-bold text-slate-900">Account Identity</h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-          <div>
-            <label
-              htmlFor="profile-display-name"
-              className="block font-semibold text-slate-700 mb-1"
-            >
-              Editable Display Name
-            </label>
-            <input
-              id="profile-display-name"
-              type="text"
-              required
-              minLength={2}
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
-            />
-          </div>
+          <AcademicProfileFields idPrefix="profile" username={displayName} faculty={faculty} onUsernameChange={setDisplayName} onFacultyChange={setFaculty} disabled={saving} />
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
@@ -2607,9 +2422,9 @@ export const ProfileSettingsView: React.FC<{
           <button
             type="submit"
             disabled={saving}
-            className="px-5 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+            className="px-5 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
           >
-            {saving ? 'Saving...' : 'Save Display Name'}
+            {saving ? 'Saving...' : 'Save Profile'}
           </button>
         </div>
       </form>
@@ -2649,7 +2464,7 @@ export const ProfileSettingsView: React.FC<{
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
               />
             </div>
           )}
@@ -2670,7 +2485,7 @@ export const ProfileSettingsView: React.FC<{
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
             />
           </div>
         </div>

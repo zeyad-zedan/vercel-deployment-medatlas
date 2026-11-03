@@ -12,7 +12,10 @@ import {
   X,
 } from 'lucide-react';
 import { api, type UserProfile } from '../lib/api.ts';
+import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
+import { AcademicProfileFields } from './AcademicProfileFields.tsx';
 import { warmUpFirebaseAuth } from '../lib/firebase.ts';
+import { useDialogFocus } from '../lib/use-dialog-focus.ts';
 
 interface PublicLandingProps {
   catalog: {
@@ -37,10 +40,13 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   const [authModalOpen, setAuthModalOpen] = useState(Boolean(initialAuthError));
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [legalModal, setLegalModal] = useState<LegalModalType>(null);
+  const authDialogRef = useDialogFocus(authModalOpen, () => setAuthModalOpen(false));
+  const legalDialogRef = useDialogFocus(Boolean(legalModal), () => setLegalModal(null));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [faculty, setFaculty] = useState<string>(DEFAULT_FACULTY);
   const [recoveryToken, setRecoveryToken] = useState('');
   const [resetStep, setResetStep] = useState<'request' | 'confirm'>('request');
   const [authLoading, setAuthLoading] = useState(false);
@@ -124,7 +130,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
     setAuthLoading(true);
     try {
       if (authTab === 'register') {
-        const user = await api.registerWithEmail(email, password, displayName);
+        const user = await api.registerWithEmail(email, password, displayName, faculty);
         setAuthModalOpen(false);
         onAuthenticated(user, 'dashboard');
       } else if (authTab === 'login') {
@@ -230,9 +236,9 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   const totalQuestions = catalog?.totalPublishedQuestions || 0;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]">
+    <div className="ma-landing min-h-screen flex flex-col">
       {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 lg:px-12 py-4 bg-white/95 backdrop-blur border-b border-slate-200">
+      <header className="sticky top-0 z-30 flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 lg:gap-6 px-5 lg:px-12 py-3 bg-white/95 backdrop-blur border-b border-slate-200">
         {/* Zone 1: Brand Title Wordmark (single element) */}
         <a
           href="#top"
@@ -244,19 +250,19 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}
         <nav
           aria-label="Primary Navigation"
-          className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600"
+          className="order-last lg:order-none flex w-full lg:w-auto items-center gap-5 overflow-x-auto text-xs lg:text-sm font-medium text-slate-600"
         >
           <a
             href="#subjects"
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
           >
-            Subjects
+            Lectures
           </a>
           <a
             href="#lectures"
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
           >
-            Lectures
+            Practical
           </a>
           <a
             href="#practice-modes"
@@ -277,7 +283,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
           <button
             type="button"
             onClick={() => openAuth('login')}
-            className="px-4 py-2 text-sm font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-4 py-2 text-sm font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Sign In / Register
           </button>
@@ -286,18 +292,18 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
 
       <main id="top" className="flex-1">
         {/* Hero Section */}
-        <section className="max-w-7xl mx-auto px-6 lg:px-12 pt-14 pb-16 border-b border-slate-200">
+        <section className="ma-landing-hero max-w-7xl mx-auto px-6 lg:px-12 pt-14 pb-16 border-b border-slate-200">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-stretch">
             <div className="lg:col-span-7 flex flex-col justify-between space-y-6">
               <div className="space-y-4">
-                <p className="text-xs font-medium text-[#0284C7] tracking-wide">
-                  Open Academic Trial Release · Full Curriculum Access · Zero Paywalls
+                <p className="text-xs font-medium text-[var(--ma-brand)] tracking-wide">
+                  YOUR MEDICAL STUDY COMPANION
                 </p>
                 <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-slate-900 leading-[1.15]">
-                  Lecture-aligned medical multiple-choice mastery built for clinical reasoning.
+                  A clearer path from lecture to understanding.
                 </h1>
                 <p className="text-base sm:text-lg text-slate-600 leading-relaxed max-w-2xl">
-                  Organize foundational and organ-system study by subject and lecture. Practice with immediate option-by-option explanations in Study Mode, simulate timed assessments in Exam Mode, and track longitudinal accuracy across every medical topic.
+                  Study one lecture at a time, understand every answer, and return to what matters. Your questions, bookmarks, and progress, together in one calm workspace.
                 </p>
               </div>
 
@@ -305,7 +311,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                 <button
                   type="button"
                   onClick={() => openAuth('register')}
-                  className="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Create Student Account
                   <ArrowRight className="w-4 h-4" />
@@ -350,7 +356,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
             </div>
 
             {/* Interactive Academic Specimen Preview Card */}
-            <div className="lg:col-span-5 flex flex-col justify-between bg-white rounded-xl border border-slate-200 p-6 space-y-5">
+            <div className="ma-landing-specimen lg:col-span-5 flex flex-col justify-between bg-white rounded-xl border border-slate-200 p-6 space-y-5">
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>Histology &amp; Cell Biology · Lecture 1</span>
@@ -399,12 +405,12 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
           </div>
         </section>
 
-        {/* Overview of Available Medical Subjects */}
+        {/* Overview of Browse Lectures by Subject */}
         <section id="subjects" className="max-w-7xl mx-auto px-6 lg:px-12 py-14 border-b border-slate-200">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
             <div>
               <h2 className="text-2xl font-bold text-slate-900">
-                Available Medical Subjects
+                Browse Lectures by Subject
               </h2>
               <p className="text-sm text-slate-600 mt-1">
                 Hierarchical curriculum organized into Subjects → Lectures → Question Banks.
@@ -413,7 +419,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
             <button
               type="button"
               onClick={() => openAuth('login')}
-              className="text-sm font-semibold text-[#0284C7] hover:text-[#0369A1] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="text-sm font-semibold text-[var(--ma-brand)] hover:text-[var(--ma-brand-hover)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               Sign in to begin solving questions
               <ArrowRight className="w-4 h-4" />
@@ -465,7 +471,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                     <button
                       type="button"
                       onClick={() => openAuth('login')}
-                      className="font-semibold text-[#0284C7] hover:text-[#0369A1] whitespace-nowrap shrink-0 cursor-pointer"
+                      className="font-semibold text-[var(--ma-brand)] hover:text-[var(--ma-brand-hover)] whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       Open Subject →
                     </button>
@@ -478,62 +484,8 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
 
         {/* Featured & Recently Added Lectures */}
         <section id="lectures" className="max-w-7xl mx-auto px-6 lg:px-12 py-14 border-b border-slate-200">
-          <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-900">
-              Featured &amp; Recently Added Lectures
-            </h2>
-            <p className="text-sm text-slate-600 mt-1">
-              Every lecture includes high-yield summary notes, formative practice questions, and timed mock assessments.
-            </p>
-          </div>
-
-          {loadingCatalog ? (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {[1, 2, 3].map((n) => (
-                <div
-                  key={n}
-                  className="h-36 rounded-xl border border-slate-200 bg-white p-5 animate-pulse"
-                />
-              ))}
-            </div>
-          ) : lectures.length === 0 ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
-              No published lectures available yet.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {lectures.slice(0, 6).map((lect) => (
-                <div
-                  key={lect.id}
-                  className="rounded-xl border border-slate-200 bg-white p-5 flex flex-col justify-between"
-                >
-                  <div className="space-y-2">
-                    <p className="text-xs text-slate-500">
-                      {lect.subjectTitle} · Lecture {lect.lectureNumber}
-                    </p>
-                    <h3 className="text-base font-bold text-slate-900 leading-snug">
-                      {lect.title}
-                    </h3>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      {lect.description}
-                    </p>
-                  </div>
-                  <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-mono-tabular">
-                    <span>
-                      {lect.questionCount} MCQs · ~{lect.estimatedMinutes} min
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => openAuth('login')}
-                      className="font-sans font-semibold text-[#0284C7] hover:text-[#0369A1] cursor-pointer"
-                    >
-                      Practice
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <h2 className="text-2xl font-bold text-slate-900">Practical</h2>
+          <p className="mt-3 text-sm text-slate-500">No practical content has been added yet.</p>
         </section>
 
         {/* Practice & Examination Features */}
@@ -549,7 +501,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-3">
-              <div className="w-9 h-9 rounded-lg bg-sky-50 text-[#0284C7] flex items-center justify-center">
+              <div className="w-9 h-9 rounded-lg bg-sky-50 text-[var(--ma-brand)] flex items-center justify-center">
                 <BookOpen className="w-5 h-5" />
               </div>
               <h3 className="text-base font-bold text-slate-900">
@@ -590,7 +542,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
         <section id="analytics" className="max-w-7xl mx-auto px-6 lg:px-12 py-14">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
             <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white p-6 space-y-4">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[#0284C7]">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ma-brand)]">
                 <TrendingUp className="w-4 h-4" />
                 <span>Transparent Academic Analytics</span>
               </div>
@@ -603,10 +555,10 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 text-xs text-slate-700">
                 <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
                   <p className="font-semibold text-slate-900">
-                    Small-Sample Guarded Topic Analysis
+                    Progress by Subject and Lecture
                   </p>
                   <p className="text-slate-600">
-                    Topics with fewer than 3 attempts are explicitly labeled as Insufficient Sample rather than prematurely flagging a weak area.
+                    See what you have completed, find your next lecture, and resume your study from one organized workspace.
                   </p>
                 </div>
                 <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
@@ -688,11 +640,12 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
       {authModalOpen && (
         <div
           role="dialog"
+          ref={authDialogRef}
           aria-modal="true"
           aria-labelledby="auth-dialog-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto"
         >
-          <div className="w-full max-w-md rounded-xl bg-white border border-slate-200 shadow-lg p-6 space-y-5">
+          <div className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-lg p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h2 id="auth-dialog-title" className="text-lg font-bold text-slate-900">
                 {authTab === 'login'
@@ -787,23 +740,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
 
             <form onSubmit={handleEmailAuth} className="space-y-4">
               {authTab === 'register' && (
-                <div>
-                  <label
-                    htmlFor="auth-display-name"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
-                  >
-                    Full Name / Display Name
-                  </label>
-                  <input
-                    id="auth-display-name"
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="e.g., Maya Lin, MS2"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
-                  />
-                </div>
+                <AcademicProfileFields idPrefix="auth" username={displayName} faculty={faculty} onUsernameChange={setDisplayName} onFacultyChange={setFaculty} disabled={authLoading} />
               )}
 
               {(authTab !== 'reset' || resetStep === 'request') && (
@@ -821,7 +758,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="student@medschool.edu"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                   />
                 </div>
               )}
@@ -842,7 +779,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                     value={recoveryToken}
                     onChange={(e) => setRecoveryToken(e.target.value)}
                     placeholder="Paste your password reset link or oobCode"
-                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                   />
                 </div>
               )}
@@ -864,7 +801,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                   />
                 </div>
               )}
@@ -872,7 +809,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
               <button
                 type="submit"
                 disabled={authLoading}
-                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
               >
                 {authLoading
                   ? 'Processing...'
@@ -894,7 +831,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                         setResetStep('confirm');
                         setAuthError(null);
                       }}
-                      className="text-[#0284C7] hover:underline font-medium cursor-pointer"
+                      className="text-[var(--ma-brand)] hover:underline uppercase tracking-wider cursor-pointer"
                     >
                       Already have a recovery token? Enter it here →
                     </button>
@@ -947,7 +884,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
                   type="button"
                   onClick={handleGoogleRedirectLogin}
                   disabled={authLoading}
-                  className="text-[11px] text-slate-500 hover:text-[#0284C7] underline cursor-pointer"
+                  className="text-[11px] text-slate-500 hover:text-[var(--ma-brand)] underline cursor-pointer"
                 >
                   Popup blocked or on mobile? Sign in via page redirect →
                 </button>
@@ -961,12 +898,14 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
       {legalModal && (
         <div
           role="dialog"
+          ref={legalDialogRef}
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+          aria-labelledby="legal-dialog-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto"
         >
-          <div className="w-full max-w-lg rounded-xl bg-white border border-slate-200 shadow-lg p-6 space-y-4">
+          <div className="w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-white border border-slate-200 shadow-lg p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-slate-900">
+              <h2 id="legal-dialog-title" className="text-lg font-bold text-slate-900">
                 {legalModal === 'about' && 'About MedAtlas MCQ'}
                 {legalModal === 'contact' && 'Contact & Curriculum Support'}
                 {legalModal === 'privacy' && 'Privacy Policy & Student Data Protection'}

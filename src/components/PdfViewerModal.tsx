@@ -1,41 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  ChevronLeft,
-  ChevronRight,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  ExternalLink,
-  FileText,
-  X,
-  AlertCircle,
-  Maximize2,
-  Presentation,
-  Loader2,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCcw, FileText, X, AlertCircle, Maximize2, Presentation, Loader2 } from 'lucide-react';
+import { getAuthToken } from '../lib/api.ts';
 
-/* -------------------------------------------------------------------------- */
-/* Document Cache (Prevents re-downloading/re-parsing on page turns/re-render)*/
-/* -------------------------------------------------------------------------- */
-const pdfDocPromiseCache = new Map<string, Promise<any>>();
-
-function getCachedPdfDocument(pdfUrl: string, pdfjs: any): Promise<any> {
-  const existing = pdfDocPromiseCache.get(pdfUrl);
-  if (existing) return existing;
-
-  const promise = pdfjs.getDocument({
-    url: pdfUrl,
-    cMapPacked: true,
-  }).promise;
-
-  pdfDocPromiseCache.set(pdfUrl, promise);
-  return promise;
-}
-
-/* -------------------------------------------------------------------------- */
-/* High-Performance Native Canvas PDF Renderer (PDF.js)                      */
-/* Fixes Android/iOS/Tablet browser issue where <iframe> opens external app   */
-/* -------------------------------------------------------------------------- */
 interface PdfCanvasViewerProps {
   pdfUrl: string;
   pageNumber: number;
@@ -44,212 +10,88 @@ interface PdfCanvasViewerProps {
   className?: string;
 }
 
-export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
-  pdfUrl,
-  pageNumber,
-  zoomPercent,
-  onTotalPagesResolved,
-  className = '',
-}) => {
+// This client only receives watermarked images. Original PDF bytes, PDF.js,
+// Telegram credentials, and source file URLs stay on the server.
+export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({pdfUrl, pageNumber, zoomPercent, onTotalPagesResolved, className = ''}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [pdfDoc, setPdfDoc] = useState<any>(null);
-  const [loadingDoc, setLoadingDoc] = useState<boolean>(true);
-  const [renderingPage, setRenderingPage] = useState<boolean>(false);
+  const totalCallback = useRef(onTotalPagesResolved);
+  const [totalPages, setTotalPages] = useState<number | null>(null);
+  const [resolvedReference, setResolvedReference] = useState<string | null>(null);
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const renderTaskRef = useRef<any>(null);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => { totalCallback.current = onTotalPagesResolved; }, [onTotalPagesResolved]);
 
-  // Keep latest callback in a ref to decouple effect dependency
-  const onTotalPagesResolvedRef = useRef(onTotalPagesResolved);
-  useEffect(() => {
-    onTotalPagesResolvedRef.current = onTotalPagesResolved;
-  });
-
-  // Helper to ensure PDF.js script is loaded
-  const getPdfJs = async (): Promise<any> => {
-    if (typeof window === 'undefined') return null;
-    if ((window as any).pdfjsLib) return (window as any).pdfjsLib;
-
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector('script[src*="pdf.min.js"]');
-      if (existing) {
-        existing.addEventListener('load', () => resolve((window as any).pdfjsLib));
-        existing.addEventListener('error', reject);
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = '/vendor/pdfjs/pdf.min.js';
-      script.onload = () => resolve((window as any).pdfjsLib);
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-  };
-
-  // 1. Fetch & parse PDF document (Runs ONLY when pdfUrl changes)
-  useEffect(() => {
-    let isCancelled = false;
-    setLoadingDoc(true);
-    setError(null);
-
-    const loadDocument = async () => {
-      try {
-        const pdfjs = await getPdfJs();
-        if (!pdfjs) {
-          throw new Error('PDF rendering library could not be initialized.');
-        }
-        pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.js';
-
-        const doc = await getCachedPdfDocument(pdfUrl, pdfjs);
-        if (!isCancelled) {
-          setPdfDoc(doc);
-          setLoadingDoc(false);
-          onTotalPagesResolvedRef.current?.(doc.numPages);
-        }
-      } catch (err: any) {
-        if (!isCancelled) {
-          console.error('Error loading PDF document:', err);
-          setError(err?.message || 'Could not load lecture PDF.');
-          setLoadingDoc(false);
-        }
-      }
-    };
-
-    loadDocument();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [pdfUrl]);
-
-  // 2. Render Page onto Canvas
-  const renderCurrentPage = useCallback(async () => {
-    if (!pdfDoc || !canvasRef.current || !containerRef.current) return;
-
-    if (renderTaskRef.current) {
-      try {
-        renderTaskRef.current.cancel();
-      } catch {
-        // ignore cancel error
-      }
-      renderTaskRef.current = null;
+  const documentRequest = useCallback(async (url: string, signal: AbortSignal) => {
+    const token = getAuthToken();
+    if (!token) throw new Error('Please sign in to view this lecture.');
+    if (!/^\/api\/documents\/[A-Za-z0-9_-]+(?:\/pages\/[1-9]\d*)?$/.test(url)) {
+      throw new Error('Reopen this lecture from the Lectures page to load its protected viewer.');
     }
-
-    setRenderingPage(true);
-    try {
-      const targetPageNum = Math.min(Math.max(1, pageNumber), pdfDoc.numPages);
-      const page = await pdfDoc.getPage(targetPageNum);
-      const canvas = canvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container) return;
-
-      const unscaledViewport = page.getViewport({ scale: 1 });
-      const containerWidth = container.clientWidth || 700;
-
-      // Fit to container width with comfortable margin
-      const availableWidth = Math.max(280, containerWidth - 32);
-      const baseScale = availableWidth / unscaledViewport.width;
-      const effectiveScale = Math.max(0.2, baseScale * (zoomPercent / 100));
-
-      const viewport = page.getViewport({ scale: effectiveScale });
-      const pixelRatio = window.devicePixelRatio || 1;
-
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-
-      const renderTask = page.render({
-        canvasContext: ctx,
-        viewport,
-      });
-      renderTaskRef.current = renderTask;
-      await renderTask.promise;
-      renderTaskRef.current = null;
-    } catch (err: any) {
-      if (err?.name !== 'RenderingCancelledException') {
-        console.warn('Page render warning:', err);
-      }
-    } finally {
-      setRenderingPage(false);
+    const response = await fetch(url, {signal, cache:'no-store', credentials:'same-origin', headers:{Authorization:`Bearer ${token}`}});
+    if (!response.ok) {
+      const body = await response.json().catch(()=>null);
+      throw new Error(body?.error || 'This page could not be loaded. Please retry.');
     }
-  }, [pdfDoc, pageNumber, zoomPercent]);
+    return response;
+  }, []);
 
   useEffect(() => {
-    renderCurrentPage();
-  }, [renderCurrentPage]);
+    const abort = new AbortController();
+    setTotalPages(null); setResolvedReference(null); setError(null); setLoading(true); setImage(null);
+    documentRequest(pdfUrl, abort.signal).then(r=>r.json()).then(meta=>{
+      if (!Number.isInteger(meta.totalPages) || meta.totalPages < 1) throw new Error('Document information is unavailable.');
+      if (!abort.signal.aborted) { setTotalPages(meta.totalPages); setResolvedReference(pdfUrl); totalCallback.current?.(meta.totalPages); }
+    }).catch(err=>{if (!abort.signal.aborted) {setError(err.message);setLoading(false);}});
+    return ()=>abort.abort();
+  }, [pdfUrl, documentRequest, retry]);
 
-  // Responsive re-fit on resize or orientation change (debounced)
   useEffect(() => {
-    let timeoutId: any;
-    const handleResize = () => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        renderCurrentPage();
-      }, 150);
-    };
-    window.addEventListener('resize', handleResize);
-    return () => {
-      clearTimeout(timeoutId);
-      window.removeEventListener('resize', handleResize);
-    };
-  }, [renderCurrentPage]);
+    if (!totalPages || resolvedReference !== pdfUrl) return;
+    const abort = new AbortController();
+    let objectUrl: string | undefined;
+    const targetPage = Math.min(Math.max(1, pageNumber), totalPages);
+    setLoading(true); setError(null); setImage(null);
+    documentRequest(`${pdfUrl}/pages/${targetPage}`, abort.signal).then(async response=>{
+      if (response.headers.get('content-type')?.split(';')[0] !== 'image/webp') throw new Error('Invalid page preview.');
+      const blob = await response.blob();
+      if (abort.signal.aborted) return;
+      objectUrl = URL.createObjectURL(blob);
+      const preview = new Image();
+      preview.onload=()=>{if (!abort.signal.aborted) {setImage(preview);setLoading(false);} if(objectUrl)URL.revokeObjectURL(objectUrl);};
+      preview.onerror=()=>{if (!abort.signal.aborted) {setError('Page preview could not be displayed.');setLoading(false);} if(objectUrl)URL.revokeObjectURL(objectUrl);};
+      preview.src=objectUrl;
+    }).catch(err=>{if (!abort.signal.aborted) {setError(err.message);setLoading(false);}});
+    return ()=>{abort.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};
+  }, [pdfUrl, pageNumber, totalPages, resolvedReference, documentRequest]);
 
-  return (
-    <div
-      ref={containerRef}
-      className={`w-full h-full relative overflow-auto bg-slate-950 flex flex-col items-center justify-start p-3 sm:p-4 select-none touch-pan-x touch-pan-y ${className}`}
-    >
-      {/* Initial load overlay: Only displayed when first loading the document */}
-      {loadingDoc && !pdfDoc && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-xs z-10 space-y-3">
-          <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
-          <p className="text-xs font-semibold text-slate-300">
-            Loading Lecture Slide Deck...
-          </p>
-        </div>
-      )}
+  useEffect(() => {
+    const container=containerRef.current;
+    const canvas=canvasRef.current;
+    if(!container||!canvas||!image)return;
+    const draw=()=>{
+      const width=Math.max(240, container.clientWidth-32)*(zoomPercent/100);
+      const height=width*image.naturalHeight/image.naturalWidth;
+      const ratio=Math.min(window.devicePixelRatio||1,2);
+      canvas.width=Math.round(width*ratio); canvas.height=Math.round(height*ratio);
+      canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;
+      const context=canvas.getContext('2d');
+      if(context){context.setTransform(ratio,0,0,ratio,0,0);context.drawImage(image,0,0,width,height);}
+    };
+    draw();
+    const observer=new ResizeObserver(draw);observer.observe(container);
+    return ()=>observer.disconnect();
+  },[image,zoomPercent]);
 
-      {error ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3 max-w-md my-auto">
-          <AlertCircle className="w-10 h-10 text-rose-500" />
-          <h4 className="text-sm font-bold text-white">Slide Load Failed</h4>
-          <p className="text-xs text-slate-400">{error}</p>
-          <a
-            href={pdfUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-2"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open Raw PDF Document
-          </a>
-        </div>
-      ) : (
-        <div className="relative my-auto flex items-center justify-center">
-          <canvas
-            ref={canvasRef}
-            className="rounded-lg shadow-2xl bg-white max-w-none transition-shadow duration-200"
-          />
-          {renderingPage && canvasRef.current?.width && (
-            <div className="absolute top-3 right-3 bg-slate-900/80 text-amber-300 text-[10px] font-mono px-2 py-1 rounded backdrop-blur border border-amber-500/30 flex items-center gap-1.5 shadow-lg">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span>Rendering...</span>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  return <div ref={containerRef} className={`ma-document-surface w-full h-full min-h-0 relative overflow-auto bg-slate-950 flex flex-col items-center p-3 sm:p-4 select-none ${className}`} onContextMenu={event=>event.preventDefault()}>
+    {error?<div role="alert" className="my-auto max-w-md p-8 text-center space-y-4"><AlertCircle className="mx-auto w-9 h-9 text-rose-400"/><h4 className="text-sm font-bold text-white">Page unavailable</h4><p className="text-xs text-slate-300">{error}</p><button type="button" onClick={()=>setRetry(value=>value+1)} className="rounded-lg bg-white px-4 py-2 text-xs font-semibold text-slate-900">Retry page</button></div>:
+      loading?<div role="status" className="my-auto p-8 text-center space-y-3"><Loader2 className="mx-auto w-8 h-8 text-emerald-300 animate-spin"/><p className="text-xs text-slate-300">Preparing your protected page…</p></div>:
+      <canvas ref={canvasRef} role="img" aria-label={`Lecture page ${pageNumber} of ${totalPages}. Personal study preview.`} onDragStart={event=>event.preventDefault()} className="my-auto shrink-0 rounded-lg bg-white shadow-2xl"/>}
+  </div>;
 };
 
-/* -------------------------------------------------------------------------- */
-/* Fullscreen PDF Viewer Modal                                                */
-/* -------------------------------------------------------------------------- */
 interface PdfViewerModalProps {
   isOpen?: boolean;
   onClose: () => void;
@@ -445,15 +287,7 @@ export const PdfViewerModal: React.FC<PdfViewerModalProps> = ({
               </div>
 
               {/* Open in New Tab Link */}
-              <a
-                href={cleanPdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-                title="Open PDF in new browser tab"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
+
             </div>
           )}
 
@@ -695,15 +529,7 @@ export const PdfSlideViewer: React.FC<PdfSlideViewerProps> = ({
               )}
 
               {/* Open in New Tab */}
-              <a
-                href={cleanPdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-                title="Open PDF in new browser tab"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
+
             </>
           )}
 

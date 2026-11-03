@@ -57,6 +57,7 @@ export async function uploadPdfToTelegram(
 
   const formData = new FormData();
   formData.append('chat_id', channelId);
+  formData.append('protect_content', 'true');
   formData.append(
     'caption',
     caption || `📄 MedAtlas Lecture: ${fileName}\n📅 ${new Date().toISOString()}`
@@ -104,7 +105,7 @@ export async function getTelegramFileDownloadUrl(fileId: string): Promise<string
   }
 
   const endpoint = `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`;
-  const response = await fetch(endpoint);
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(15000) });
   const data = await response.json().catch(() => null);
 
   if (!response.ok || !data?.ok || !data.result?.file_path) {

@@ -1,4 +1,9 @@
-import React, { useState } from 'react';
+import { getSampleJsonTemplate } from '../lib/json-import.ts';
+import { MAX_QUESTION_IMAGE_BYTES, MAX_IMPORT_IMAGES, validImageFileName, type QuestionImage } from '../lib/question-images.ts';
+import { ImportImageThumbnail } from './ImportImageThumbnail.tsx';
+import { QuestionReportsPanel } from './QuestionReportsPanel.tsx';
+import React, { useState, useRef, useEffect } from 'react';
+import { PageHeading } from './PageHeading.tsx';
 import {
   Download,
   Eye,
@@ -18,7 +23,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { api } from '../lib/api.ts';
-import { getSampleCsvTemplate, parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
+import { parseAllQuestionTags, parseSpecialTags } from '../lib/mcq-engine.ts';
 import { PdfViewerModal } from './PdfViewerModal.tsx';
 import { UploadPdfModal } from './UploadPdfModal.tsx';
 
@@ -26,6 +31,7 @@ interface AdminConsoleProps {
   adminData: any;
   loading: boolean;
   onRefresh: () => void;
+  onDocumentSecurityUpdated?: (settings: {watermarksEnabled:boolean}) => void;
 }
 
 type AdminSection =
@@ -34,16 +40,36 @@ type AdminSection =
   | 'modules'
   | 'lectures'
   | 'questions'
-  | 'import';
+  | 'import'
+  | 'reports';
 
 export const AdminConsole: React.FC<AdminConsoleProps> = ({
   adminData,
   loading,
   onRefresh,
+  onDocumentSecurityUpdated,
 }) => {
   const [section, setSection] = useState<AdminSection>('overview');
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [watermarksEnabled, setWatermarksEnabled] = useState(adminData?.documentSecurity?.watermarksEnabled === true);
+  const [savingWatermarks, setSavingWatermarks] = useState(false);
+  useEffect(() => {
+    setWatermarksEnabled(adminData?.documentSecurity?.watermarksEnabled === true);
+  }, [adminData?.documentSecurity?.watermarksEnabled]);
+
+  const handleWatermarkToggle = async () => {
+    if (savingWatermarks) return;
+    setSavingWatermarks(true); setErrorMsg(null); setFeedbackMsg(null);
+    try {
+      const result = await api.setDocumentWatermarks(!watermarksEnabled);
+      setWatermarksEnabled(result.documentSecurity.watermarksEnabled);
+      setFeedbackMsg(`PDF security watermarks ${result.documentSecurity.watermarksEnabled ? 'enabled' : 'disabled'}. Newly loaded pages will use this setting.`);
+      onDocumentSecurityUpdated?.(result.documentSecurity);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : 'Could not save watermark settings. Please retry.');
+    } finally { setSavingWatermarks(false); }
+  };
 
   // Module form state
   const [editingModule, setEditingModule] = useState<any | null>(null);
@@ -142,17 +168,31 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     'published'
   );
 
-  // CSV Bulk Import state
-  const [csvFileName, setCsvFileName] = useState('sample_medical_import.csv');
-  const [csvContent, setCsvContent] = useState('');
-  const [csvPreviewReport, setCsvPreviewReport] = useState<any | null>(null);
-  const [csvImportResult, setCsvImportResult] = useState<any | null>(null);
-  const [validatingCsv, setValidatingCsv] = useState(false);
-  const [importingCsv, setImportingCsv] = useState(false);
+  // JSON Bulk Import state
+  const [jsonFileName, setJsonFileName] = useState('questions.json');
+  const [jsonContent, setJsonContent] = useState('');
+  const [jsonPreviewReport, setJsonPreviewReport] = useState<any | null>(null);
+  const [jsonImportResult, setJsonImportResult] = useState<any | null>(null);
+  const [validatingJson, setValidatingJson] = useState(false);
+  const [importingJson, setImportingJson] = useState(false);
   const [importTargetLectureId, setImportTargetLectureId] = useState<number | 'auto'>('auto');
   const [rowTagOverrides, setRowTagOverrides] = useState<Record<number, string>>({});
   const [rowCustomTagInput, setRowCustomTagInput] = useState<Record<number, string>>({});
   const [bulkAddTagInput, setBulkAddTagInput] = useState('');
+
+  const [imageFiles,setImageFiles]=useState<Array<{file:File;id:string}>>([]);
+  const [readingFiles,setReadingFiles]=useState(false);
+  const [previewLimit,setPreviewLimit]=useState(50);
+  const [imageUploadProgress,setImageUploadProgress]=useState('');
+  const uploadedImageRefs=useRef(new Map<string,QuestionImage>());
+  const fileReadVersion=useRef(0);
+  const imageManifest=imageFiles.map(({file,id})=>({name:file.name,id}));
+  const jsonSourceRef = useRef('');
+  jsonSourceRef.current = JSON.stringify([jsonContent, importTargetLectureId, imageManifest]);
+  useEffect(() => {
+    setJsonPreviewReport(null); setJsonImportResult(null);setPreviewLimit(50);
+    setRowTagOverrides({}); setRowCustomTagInput({});
+  }, [jsonContent, importTargetLectureId, imageFiles]);
 
   if (loading || !adminData) {
     return (
@@ -175,7 +215,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     recentImports = [],
     auditLogs = [],
     egressStatus,
-    isTelegramConfigured = true,
+    isTelegramConfigured = false,
   } = adminData;
 
   const clearAlerts = () => {
@@ -538,14 +578,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  // CSV Import & Export Handlers
+  // JSON Import & Export Handlers
   const handleDownloadSampleTemplate = () => {
-    const csv = getSampleCsvTemplate();
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const json = getSampleJsonTemplate();
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'medatlas_mcq_template.csv';
+    a.download = 'medatlas_mcq_template.json';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -561,36 +601,41 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       a.download = 'medatlas_question_bank_backup.csv';
       a.click();
       URL.revokeObjectURL(url);
-      setFeedbackMsg('Exported full question bank backup CSV.');
+      setFeedbackMsg('Exported question text as CSV. Full database backups preserve Telegram image references.');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to export question bank.');
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected=Array.from(e.target.files || []);e.target.value='';
+    if(!selected.length)return;
     clearAlerts();
-    setRowTagOverrides({});
-    setRowCustomTagInput({});
-    setBulkAddTagInput('');
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      setErrorMsg('Invalid file format. Please upload a .csv file.');
-      return;
-    }
-    if (file.size > 4 * 1024 * 1024) {
-      setErrorMsg('File exceeds the 4 MB size limit.');
-      return;
-    }
-    setCsvFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = String(ev.target?.result || '');
-      setCsvContent(text);
-      setCsvPreviewReport(null);
-      setCsvImportResult(null);
-    };
-    reader.readAsText(file);
+    const version=++fileReadVersion.current;
+    setReadingFiles(true);
+    try {
+      const jsons=selected.filter(f=>f.name.toLowerCase().endsWith('.json'));
+      if(jsons.length>1)throw new Error('Choose one JSON file per import.');
+      const pictures=selected.filter(f=>!f.name.toLowerCase().endsWith('.json'));
+      if(pictures.some(f=>!validImageFileName(f.name)))throw new Error('Choose a .json file and PNG, JPEG, or WebP images.');
+      if(pictures.some(f=>f.size>MAX_QUESTION_IMAGE_BYTES))throw new Error('Each image must be no larger than 2 MB.');
+      if(jsons[0]?.size>4*1024*1024)throw new Error('JSON file exceeds the 4 MB limit.');
+      if(new Set(pictures.map(f=>f.name)).size!==pictures.length)throw new Error('Two selected images have the same filename. Rename one and update the JSON.');
+      const additions=[];
+      for(const file of pictures){
+        const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+        additions.push({file,id:Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('')});
+      }
+      const text=jsons[0] ? await jsons[0].text() : null;
+      if(version!==fileReadVersion.current)return;
+      const next=new Map(imageFiles.map(i=>[i.file.name,i]));
+      for(const entry of additions)next.set(entry.file.name,entry);
+      if(next.size>MAX_IMPORT_IMAGES)throw new Error(`Select at most ${MAX_IMPORT_IMAGES} image files per batch.`);
+      setImageFiles([...next.values()]);
+      if(text!==null){setJsonFileName(jsons[0].name);setJsonContent(text);}
+      setJsonPreviewReport(null);setJsonImportResult(null);
+    } catch(error:any){setErrorMsg(error.message || 'Could not read these files.');}
+    finally{if(version===fileReadVersion.current)setReadingFiles(false);}
   };
 
   const handleLoadSampleIntoEditor = () => {
@@ -598,44 +643,45 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     setRowTagOverrides({});
     setRowCustomTagInput({});
     setBulkAddTagInput('');
-    setCsvFileName('sample_batch_import.csv');
-    setCsvContent(getSampleCsvTemplate());
-    setCsvPreviewReport(null);
-    setCsvImportResult(null);
+    setJsonFileName('sample_questions.json');
+    setJsonContent(getSampleJsonTemplate());
+    setJsonPreviewReport(null);
+    setJsonImportResult(null);
   };
 
-  const handleValidateCsv = async () => {
+  const handleValidateJson = async () => {
     clearAlerts();
     setRowTagOverrides({});
     setRowCustomTagInput({});
     setBulkAddTagInput('');
-    if (!csvContent.trim()) {
-      setErrorMsg('Please upload a CSV file or load the sample CSV template first.');
+    if (!jsonContent.trim()) {
+      setErrorMsg('Please upload a JSON file or load the sample JSON template first.');
       return;
     }
-    setValidatingCsv(true);
+    setValidatingJson(true);
+    const validatedSource = jsonSourceRef.current;
     try {
       const targetId = importTargetLectureId !== 'auto' ? Number(importTargetLectureId) : undefined;
-      const report = await api.previewCsvImport(csvContent, targetId);
-      setCsvPreviewReport(report);
+      const report = await api.previewJsonImport(jsonContent, targetId, imageManifest);
+      if (jsonSourceRef.current === validatedSource) setJsonPreviewReport(report);
     } catch (err: any) {
-      setErrorMsg(err.message || 'CSV validation failed.');
+      setErrorMsg(err.message || 'JSON validation failed.');
     } finally {
-      setValidatingCsv(false);
+      setValidatingJson(false);
     }
   };
 
   const handleAddTagToRow = (rowNumber: number, tagToAdd: string) => {
-    const trimmed = tagToAdd.trim();
+    const trimmed = parseSpecialTags(tagToAdd).join(', ');
     if (!trimmed) return;
-    const originalRow = csvPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
+    const originalRow = jsonPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
     const curr =
       rowTagOverrides[rowNumber] !== undefined
         ? rowTagOverrides[rowNumber]
         : (originalRow?.specialTags || '');
     const existingList = parseSpecialTags(curr);
     if (!existingList.some((t) => t.toLowerCase() === trimmed.toLowerCase())) {
-      const updated = [...existingList, trimmed].join(', ');
+      const updated = parseSpecialTags([...existingList, trimmed].join(', ')).join(', ');
       setRowTagOverrides((prev) => ({
         ...prev,
         [rowNumber]: updated,
@@ -644,7 +690,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   };
 
   const handleRemoveTagFromRow = (rowNumber: number, tagToRemove: string) => {
-    const originalRow = csvPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
+    const originalRow = jsonPreviewReport?.rows?.find((r: any) => r.rowNumber === rowNumber);
     const curr =
       rowTagOverrides[rowNumber] !== undefined
         ? rowTagOverrides[rowNumber]
@@ -660,26 +706,28 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   };
 
   const handleAddTagToAllRows = (tagToAdd: string) => {
-    const trimmed = tagToAdd.trim();
-    if (!trimmed || !csvPreviewReport?.rows) return;
+    const trimmed = parseSpecialTags(tagToAdd).join(', ');
+    if (!trimmed || !jsonPreviewReport?.rows) return;
     setRowTagOverrides((prev) => {
       const next = { ...prev };
-      for (const r of csvPreviewReport.rows) {
+      for (const r of jsonPreviewReport.rows) {
         if (!r.isValid) continue;
         const curr = next[r.rowNumber] !== undefined ? next[r.rowNumber] : (r.specialTags || '');
         const existingList = parseSpecialTags(curr);
         const allTags = parseAllQuestionTags(r.tags, curr);
         if (!allTags.some((t) => t.label.toLowerCase() === trimmed.toLowerCase())) {
-          next[r.rowNumber] = [...existingList, trimmed].join(', ');
+          next[r.rowNumber] = parseSpecialTags([...existingList, trimmed].join(', ')).join(', ');
         }
       }
       return next;
     });
   };
 
-  const handleConfirmCsvImport = async () => {
+  const handleConfirmJsonImport = async () => {
+    if (importingJson || readingFiles || !jsonPreviewReport?.validCount || jsonPreviewReport.invalidCount || jsonImportResult) return;
     clearAlerts();
-    setImportingCsv(true);
+    setImportingJson(true);
+    const importingSource=jsonSourceRef.current;
     try {
       const targetId = importTargetLectureId !== 'auto' ? Number(importTargetLectureId) : undefined;
       const formattedOverrides: Record<number, { specialTags: string }> = {};
@@ -687,22 +735,31 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         const rowNum = Number(rowNumStr);
         formattedOverrides[rowNum] = { specialTags: specTags };
       }
-      const res = await api.executeCsvImport(
-        csvFileName,
-        csvContent,
-        targetId,
-        Object.keys(formattedOverrides).length > 0 ? formattedOverrides : undefined
-      );
-      setCsvImportResult(res);
+      const needed=new Set<string>(jsonPreviewReport.rows.filter((r:any)=>r.isValid).flatMap((r:any)=>[...(r.imageFiles||[]),...(r.explanationImageFiles||[])].map((i:any)=>i.file)));
+      const uploadedImages:Record<string,QuestionImage>={};
+      let done=0;
+      for(const name of needed){
+        if(jsonSourceRef.current!==importingSource)throw new Error('The import changed. Validate it again before importing.');
+        const asset=imageFiles.find(i=>i.file.name===name);
+        if(!asset)throw new Error(`Missing image: ${name}`);
+        setImageUploadProgress(`Storing image ${++done} of ${needed.size}: ${name}`);
+        let reference=uploadedImageRefs.current.get(asset.id);
+        if(!reference){reference=await api.uploadQuestionImage(asset.file);if(reference.id!==asset.id)throw new Error(`Image integrity check failed: ${name}`);uploadedImageRefs.current.set(asset.id,reference);}
+        uploadedImages[name]=reference;
+      }
+      if(jsonSourceRef.current!==importingSource)throw new Error('The import changed. Validate it again before importing.');
+      setImageUploadProgress('Saving questions…');
+      const res=await api.executeJsonImport(jsonFileName,jsonContent,targetId,Object.keys(formattedOverrides).length?formattedOverrides:undefined,imageManifest,uploadedImages);
+      setJsonImportResult(res);
       const affectedCount = res.affectedLectures?.length || 1;
       setFeedbackMsg(
         `Bulk import completed: ${res.batch.importedCount} question(s) successfully added across ${affectedCount} lecture(s). You can now upload or attach PDF slide decks below.`
       );
       onRefresh();
     } catch (err: any) {
-      setErrorMsg(err.message || 'CSV import failed.');
+      setErrorMsg(err.message || 'JSON import failed.');
     } finally {
-      setImportingCsv(false);
+      setImportingJson(false);setImageUploadProgress('');
     }
   };
 
@@ -722,19 +779,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     <div className="space-y-6">
       {/* Admin Top Header & Navigation Tabs */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[#0284C7]">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Verified Administrator Console · Server-Enforced RBAC</span>
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              Curriculum &amp; Question Bank Administration
-            </h1>
-          </div>
-        </div>
+        <PageHeading eyebrow="Administration" title="Manage your curriculum"
+          description="Organize subjects and lectures, refine questions, and publish with confidence." />
 
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg overflow-x-auto">
+        <nav aria-label="Administration sections" className="ma-admin-tabs flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg overflow-x-auto">
           {(
             [
               { id: 'overview', label: 'Overview & Logs' },
@@ -742,12 +790,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               { id: 'modules', label: `Modules & Subjects (${modulesList.length} / ${subjects.length})` },
               { id: 'lectures', label: `Lectures (${lectures.length})` },
               { id: 'questions', label: `Question Bank (${questions.length})` },
-              { id: 'import', label: 'Bulk CSV Import & Export' },
+              { id: 'import', label: 'Bulk JSON Import & Export' },
+              { id: 'reports', label: 'Question reports' },
             ] as const
           ).map((tab) => (
             <button
               key={tab.id}
               type="button"
+              aria-current={section === tab.id ? 'page' : undefined}
               onClick={() => {
                 setSection(tab.id);
                 clearAlerts();
@@ -761,7 +811,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               {tab.label}
             </button>
           ))}
-        </div>
+        </nav>
       </div>
 
       {feedbackMsg && (
@@ -785,6 +835,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ====================================================================
           SECTION 1: ADMIN OVERVIEW & AUDIT LOGS
       ==================================================================== */}
+      {section === 'reports' && <QuestionReportsPanel onEditQuestion={id => {
+        const question = questions.find((item: any) => item.id === id);
+        if (!question) { setErrorMsg('This question is no longer in the question bank. Refresh the console and try again.'); return; }
+        setSection('questions'); startEditQuestion(question);
+      }}/>}
+
       {section === 'overview' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 font-mono-tabular">
@@ -808,7 +864,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             </div>
             <div className="bg-white rounded-xl border border-slate-200 p-5">
               <p className="text-xs font-sans text-slate-500">Published Questions</p>
-              <p className="text-2xl font-bold text-[#0284C7] mt-1">
+              <p className="text-2xl font-bold text-[var(--ma-brand)] mt-1">
                 {metrics.publishedQuestions} / {metrics.totalQuestions}
               </p>
             </div>
@@ -825,7 +881,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     }`}
                   />
                   <h3 className="font-bold text-slate-900 text-sm">
-                    Telegram Cloud CDN &amp; Bandwidth Protection
+                    PDF Delivery &amp; Database Usage
                   </h3>
                   <span
                     className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
@@ -834,11 +890,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         : 'bg-rose-50 text-rose-700 border border-rose-200'
                     }`}
                   >
-                    {isTelegramConfigured ? 'Active & Protected' : 'Not Configured'}
+                    {isTelegramConfigured ? 'Configured' : 'Not Configured'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500">
-                  Lecture PDFs stream directly from Telegram servers at 0 egress cost, protecting your 5.0 GB monthly database quota.
+                  PDF contents are retrieved from Telegram. MCQ queries and progress reads still consume Supabase database egress.
                 </p>
               </div>
 
@@ -856,50 +912,42 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-slate-500 font-medium block">Monthly Database Egress</span>
-                <div className="text-lg font-bold text-slate-900 font-mono-tabular">
-                  {egressStatus?.currentMb || '0.00'} MB{' '}
-                  <span className="text-xs text-slate-500 font-normal">
-                    / {egressStatus?.quotaGb || '5.0'} GB
-                  </span>
-                </div>
-                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-1.5">
-                  <div
-                    className="bg-emerald-500 h-full rounded-full transition-all"
-                    style={{ width: `${Math.min(100, egressStatus?.percentUsed || 0)}%` }}
-                  />
-                </div>
-                <span className="text-[11px] text-slate-500 font-mono-tabular block mt-1">
-                  {egressStatus?.percentUsed || 0}% of 5.0 GB used
-                </span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2">
+                <h4 className="font-bold">Supabase Egress</h4>
+                <p className="text-slate-600">Usage is not measured by this website. Check the Supabase Usage dashboard for actual database, shared pooler, and storage traffic.</p>
               </div>
-
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-slate-500 font-medium block">Streaming Mode</span>
-                <div className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Telegram-First Direct CDN</span>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                  18 / 18 lecture PDFs synced. Zero database bandwidth consumed when students view documents.
-                </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2">
+                <h4 className="font-bold">Telegram-only PDFs</h4>
+                <p className="text-slate-600">Uploads save file references in PostgreSQL. PDF contents are never downloaded from Supabase.</p>
               </div>
-
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-slate-500 font-medium block">Emergency Plan B Threshold</span>
-                <div className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <span className="px-1.5 py-0.5 bg-sky-100 text-sky-800 rounded font-mono text-[11px] font-bold">
-                    85% (4.25 GB)
-                  </span>
-                  <span className="text-[11px] text-slate-600">Auto-lock active</span>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                  If Supabase egress ever crosses 85%, all fallback traffic is strictly locked to Telegram to avoid overage.
-                </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2">
+                <h4 className="font-bold">Unavailable Documents</h4>
+                <p className="text-slate-600">If a Telegram file cannot be loaded, students see a PDF error and can retry. No database download fallback is used.</p>
               </div>
             </div>
           </div>
+
+          <section className="bg-white rounded-xl border border-slate-200 p-6 space-y-4" aria-labelledby="document-watermarks-title">
+            <div className="flex flex-wrap items-center justify-between gap-5">
+              <div className="max-w-xl">
+                <p className="ma-eyebrow mb-2">Document viewing</p>
+                <h2 id="document-watermarks-title" className="font-bold text-base">PDF security watermarks</h2>
+                <p id="document-watermarks-description" className="mt-2 text-sm text-slate-500 leading-relaxed">
+                  Add an account watermark and viewer footer to lecture pages. Off by default. Sign-in checks and original PDF download protection stay enabled.
+                </p>
+              </div>
+              <button type="button" role="switch" aria-checked={watermarksEnabled}
+                aria-label="PDF security watermarks" aria-describedby="document-watermarks-description"
+                disabled={savingWatermarks} onClick={handleWatermarkToggle}
+                className="inline-flex min-h-11 items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold disabled:opacity-60">
+                <span>{savingWatermarks ? 'Saving…' : watermarksEnabled ? 'On' : 'Off'}</span>
+                <span aria-hidden="true" className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${watermarksEnabled ? 'bg-[var(--ma-brand)]' : 'bg-slate-300'}`}>
+                  <span className={`absolute h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${watermarksEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                </span>
+              </button>
+            </div>
+            <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">Applies to all students when a page is next loaded. Only administrators can change this setting.</p>
+          </section>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-6 bg-white rounded-xl border border-slate-200 p-6 space-y-4">
@@ -1036,7 +1084,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         <td className="py-3 px-4 font-semibold text-slate-900">
                           {u.displayName}
                           {u.isOwner && (
-                            <span className="ml-2 text-[11px] font-mono-tabular text-[#0284C7]">
+                            <span className="ml-2 text-[11px] font-mono-tabular text-[var(--ma-brand)]">
                               (Primary Owner)
                             </span>
                           )}
@@ -1048,7 +1096,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                           <span
                             className={
                               u.role === 'admin'
-                                ? 'text-[#0284C7]'
+                                ? 'text-[var(--ma-brand)]'
                                 : 'text-slate-600'
                             }
                           >
@@ -1073,7 +1121,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                                   onClick={() =>
                                     handleToggleUserRole(u.uid, 'admin')
                                   }
-                                  className="px-3 py-1 font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded cursor-pointer"
+                                  className="px-3 py-1 font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded cursor-pointer"
                                 >
                                   Make Admin
                                 </button>
@@ -1172,7 +1220,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <button
                   type="button"
                   onClick={() => startEditModule()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#08a39d] hover:bg-[#06847f] rounded-lg cursor-pointer shadow-xs transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[#06847f] rounded-lg cursor-pointer shadow-xs transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                   New Module
@@ -1187,7 +1235,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               >
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                   <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#08a39d]" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-[var(--ma-brand)]" />
                     {editingModule.id ? `Edit Module (${modCode})` : 'Create New Academic Module'}
                   </h3>
                   <button
@@ -1275,7 +1323,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 text-xs font-semibold text-white bg-[#08a39d] hover:bg-[#06847f] rounded-lg cursor-pointer"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[#06847f] rounded-lg cursor-pointer"
                   >
                     Save Module
                   </button>
@@ -1415,7 +1463,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <button
                   type="button"
                   onClick={() => startEditSubject()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   New Subject
@@ -1520,7 +1568,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
                   >
                     Save Subject
                   </button>
@@ -1531,7 +1579,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               {subjects.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-500">
-                  No subjects exist in the database. Click &ldquo;New Subject&rdquo; above or import via CSV to add your subjects.
+                  No subjects exist in the database. Click &ldquo;New Subject&rdquo; above or import via JSON to add your subjects.
                 </div>
               ) : (
                 <table className="w-full text-left border-collapse text-xs">
@@ -1577,7 +1625,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                               <button
                                 type="button"
                                 onClick={() => startEditSubject(s)}
-                                className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                                className="font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
                               >
                                 Edit
                               </button>
@@ -1652,13 +1700,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 }}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors shadow-xs"
               >
-                <Upload className="w-4 h-4 text-[#0284C7]" />
+                <Upload className="w-4 h-4 text-[var(--ma-brand)]" />
                 <span>Upload PDF to Lecture</span>
               </button>
               <button
                 type="button"
                 onClick={() => startEditLecture()}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 <span>New Lecture</span>
@@ -1767,20 +1815,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                             title: lectTitle || 'Lecture PDF Preview',
                           })
                         }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Preview PDF</span>
                       </button>
-                      <a
-                        href={lectPdfUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Open in New Tab</span>
-                      </a>
+
                     </div>
                   )}
                 </div>
@@ -1799,7 +1839,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     />
                   </label>
                   <span className="text-xs text-slate-400">
-                    PDF files up to 50MB are stored persistently in the database
+                    PDF contents are stored on Telegram; only attachment references are stored in the database
                   </span>
                 </div>
 
@@ -1821,7 +1861,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                       setLectPdfUrl(e.target.value);
                       setUploadedPdfSuccess(null);
                     }}
-                    placeholder="e.g. /lectures/cardiology-acs.pdf"
+                    placeholder="Protected document reference (or upload a PDF above)"
                     className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-300 bg-white"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
@@ -1852,7 +1892,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-semibold text-white bg-[#0284C7] rounded-lg cursor-pointer"
+                  className="px-4 py-2 font-semibold text-white bg-[var(--ma-brand)] rounded-lg cursor-pointer"
                 >
                   Save Lecture
                 </button>
@@ -1898,7 +1938,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setPreviewPdfModal({ url: l.pdfUrl, title: l.title })}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-sky-50 text-[#0284C7] hover:bg-sky-100 transition-colors cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-sky-50 text-[var(--ma-brand)] hover:bg-sky-100 transition-colors cursor-pointer"
                                 title="View attached lecture PDF"
                               >
                                 <FileText className="w-3.5 h-3.5" />
@@ -1925,7 +1965,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                                 setUploadPdfTargetLecture(l);
                                 setShowUploadPdfModal(true);
                               }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 transition-colors cursor-pointer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 border border-sky-200 transition-colors cursor-pointer"
                               title="Upload PDF slide deck to this lecture"
                             >
                               <Upload className="w-3 h-3" />
@@ -1947,7 +1987,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                               setUploadPdfTargetLecture(l);
                               setShowUploadPdfModal(true);
                             }}
-                            className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                            className="font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
                           >
                             {l.pdfUrl ? 'Update PDF' : 'Upload PDF'}
                           </button>
@@ -2140,7 +2180,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               <button
                 type="button"
                 onClick={() => startEditQuestion()}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 Create Question Manually
@@ -2461,7 +2501,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 font-semibold text-white bg-[#0284C7] rounded-lg cursor-pointer"
+                  className="px-5 py-2 font-semibold text-white bg-[var(--ma-brand)] rounded-lg cursor-pointer"
                 >
                   Save Question
                 </button>
@@ -2509,7 +2549,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     <button
                       type="button"
                       onClick={() => startEditQuestion(q)}
-                      className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                      className="font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
                     >
                       Edit
                     </button>
@@ -2561,18 +2601,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       )}
 
       {/* ====================================================================
-          SECTION 5: BULK CSV QUESTION IMPORT & EXPORT
+          SECTION 5: BULK JSON QUESTION IMPORT & EXPORT
       ==================================================================== */}
       {section === 'import' && (
         <div className="space-y-6">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-5">
+          <fieldset disabled={importingJson || readingFiles} className="min-w-0 bg-white rounded-xl border border-slate-200 p-6 space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">
-                  Bulk CSV Question Bank Import &amp; Backup Export
+                  Import &amp; export questions
                 </h2>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Download the official 16-column CSV template, validate your rows before importing, or export the entire question bank as a backup.
+                  Select a JSON file and its images, preview your questions, add tags, and import in one workflow.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2582,22 +2622,23 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  1. Download CSV Template
+                  Download JSON Template
                 </button>
                 <button
                   type="button"
                   onClick={handleLoadSampleIntoEditor}
-                  className="px-3.5 py-2 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 rounded-lg cursor-pointer"
+                  className="px-3.5 py-2 text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 rounded-lg cursor-pointer"
                 >
-                  Load Sample CSV Rows
+                  Load Text Sample
                 </button>
+                <a href="/templates/mcq-image-example.zip" download className="rounded-lg bg-sky-50 px-3.5 py-2 text-xs font-semibold text-sky-800">Download image example</a>
                 <button
                   type="button"
                   onClick={handleExportFullQuestionBank}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
-                  Export Full Question Bank CSV
+                  Export Text-only CSV
                 </button>
               </div>
             </div>
@@ -2610,7 +2651,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     Step 1: Choose Target Lecture (Recommended)
                   </label>
                   <p className="text-[11px] text-slate-600">
-                    Select a lecture to automatically route and attach all imported MCQs into it. Columns &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; in your CSV will be optional.
+                    Select a lecture to automatically route and attach all imported MCQs into it. The JSON fields &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; will be optional.
                   </p>
                 </div>
                 {importTargetLectureId !== 'auto' && (
@@ -2618,7 +2659,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     type="button"
                     onClick={() => {
                       setImportTargetLectureId('auto');
-                      setCsvPreviewReport(null);
+                      setJsonPreviewReport(null);
                     }}
                     className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 underline self-start sm:self-auto cursor-pointer"
                   >
@@ -2629,17 +2670,17 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                 <select
-                  id="import-target-lecture"
+                  id="import-target-lecture" disabled={importingJson}
                   value={importTargetLectureId}
                   onChange={(e) => {
                     const val = e.target.value === 'auto' ? 'auto' : Number(e.target.value);
                     setImportTargetLectureId(val);
-                    setCsvPreviewReport(null);
+                    setJsonPreviewReport(null);
                   }}
-                  className="w-full text-xs p-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0284C7] font-medium text-slate-800 cursor-pointer"
+                  className="w-full text-xs p-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)] font-medium text-slate-800 cursor-pointer"
                 >
                   <option value="auto">
-                    -- Auto-detect from CSV &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; columns --
+                    -- Auto-detect from JSON &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; fields --
                   </option>
                   {lectures.map((l: any) => (
                     <option key={l.id} value={l.id}>
@@ -2652,7 +2693,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   const targetLec = lectures.find((l: any) => l.id === importTargetLectureId);
                   if (!targetLec) return (
                     <div className="text-[11px] text-slate-500 italic p-2.5 bg-white border border-slate-200 rounded-lg">
-                      Importing in auto-detect mode: CSV must specify &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; matching existing names.
+                      Importing in auto-detect mode: JSON must specify &lsquo;subject&rsquo; and &lsquo;lecture&rsquo; to identify the import destination. New subjects and lectures will be created if needed.
                     </div>
                   );
                   return (
@@ -2669,7 +2710,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         <button
                           type="button"
                           onClick={() => setPreviewPdfModal({ url: targetLec.pdfUrl, title: targetLec.title })}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold bg-sky-100 text-[#0284C7] hover:bg-sky-200 transition-colors shrink-0 cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold bg-sky-100 text-[var(--ma-brand)] hover:bg-sky-200 transition-colors shrink-0 cursor-pointer"
                           title="View attached lecture PDF"
                         >
                           <FileText className="w-3 h-3" />
@@ -2687,53 +2728,59 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-5 space-y-3 text-xs">
                 <label className="block font-bold text-slate-900">
-                  Step 2: Upload CSV File (.csv, max 4 MB)
+                  Step 2: Select JSON + images
                 </label>
                 <input
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".json,application/json,.png,.jpg,.jpeg,.webp" multiple disabled={readingFiles || importingJson}
                   onChange={handleFileUpload}
-                  className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#0284C7] file:text-white hover:file:bg-[#0369A1] cursor-pointer"
+                  className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[var(--ma-brand)] file:text-white hover:file:bg-[var(--ma-brand-hover)] cursor-pointer"
                 />
-                <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5 text-slate-600">
-                  <p className="font-semibold text-slate-900">
-                    Documented CSV Columns:
-                  </p>
-                  <p className="font-mono-tabular text-[11px] leading-relaxed">
-                    subject, lecture, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, explanation_a, explanation_b, explanation_c, explanation_d, difficulty, tags, &quot;old exams&quot;, &quot;كتاب القسم&quot;, &quot;important&quot;, page_number, status
-                  </p>
-                  <p className="text-[11px] text-amber-800 pt-0.5">
-                    <strong>New Tag System (0 or 1):</strong> Add columns named <code className="font-mono bg-amber-100 px-1 rounded">&quot;old exams&quot;</code>, <code className="font-mono bg-amber-100 px-1 rounded">&quot;كتاب القسم&quot;</code>, and <code className="font-mono bg-amber-100 px-1 rounded">&quot;important&quot;</code> with values <code className="font-mono font-bold">1</code> or <code className="font-mono font-bold">0</code> to tag questions with student notification badges.
-                  </p>
+                <div className="rounded-xl border border-sky-100 bg-sky-50 p-4 space-y-2 text-slate-600">
+                  <p className="font-semibold text-slate-900">One question object, four answers, optional images.</p>
+                  <p>Use <code>options: {`{A, B, C, D}`}</code>, <code>correct_answer</code>, and <code>explanation</code>. Tags are simple arrays, such as <code>["Important", "كتاب القسم"]</code>.</p>
+                  <p>For figures, add <code>images: ["cell-diagram.png"]</code> and select that file. Use <code>explanation_images</code> for figures shown after answering. No image links or base64 needed.</p>
+                  <p>JSON: up to 4 MB / 2,000 questions. PNG, JPEG, WebP: up to 2 MB each / 100 files. Only referenced images are uploaded to Telegram.</p>
+                  <button type="button" disabled={importingJson} className="font-semibold text-sky-800 underline" onClick={()=>{setJsonFileName('questions_with_image.json');setJsonContent(getSampleJsonTemplate(true));}}>Load sample with an image</button>
                 </div>
+                <label className="block font-semibold text-slate-800">Add image files (optional)
+                  <input type="file" multiple accept=".png,.jpg,.jpeg,.webp" onChange={handleFileUpload} disabled={readingFiles || importingJson} className="mt-2 block w-full text-xs"/>
+                </label>
+                {readingFiles && <p role="status">Reading files and checking image fingerprints…</p>}
+                {imageFiles.length>0 && <div className="space-y-2">
+                  <div className="flex justify-between"><span>{imageFiles.length} image files selected</span><button type="button" disabled={importingJson} onClick={()=>setImageFiles([])} className="underline">Clear images</button></div>
+                  <div className="grid max-h-64 grid-cols-2 gap-2 overflow-auto">{imageFiles.map(({file,id})=><ImportImageThumbnail key={file.name+id} file={file} disabled={importingJson} onRemove={()=>setImageFiles(old=>old.filter(i=>i.file.name!==file.name))}/>)}</div>
+                </div>}
+                {imageUploadProgress && <p role="status" className="font-semibold text-sky-800">{imageUploadProgress}</p>}
+
               </div>
 
               <div className="lg:col-span-7 space-y-3 text-xs">
                 <label
-                  htmlFor="csv-textarea"
+                  htmlFor="json-textarea"
                   className="block font-bold text-slate-900"
                 >
-                  CSV Payload Inspector / Editor ({csvFileName})
+                  JSON Payload Inspector / Editor ({jsonFileName})
                 </label>
                 <textarea
-                  id="csv-textarea"
+                  id="json-textarea"
                   rows={6}
-                  value={csvContent}
+                  value={jsonContent}
                   onChange={(e) => {
-                    setCsvContent(e.target.value);
-                    setCsvPreviewReport(null);
+                    setJsonContent(e.target.value);
+                    setJsonPreviewReport(null);
                   }}
-                  placeholder="Paste CSV rows here or click 'Load Sample CSV Rows' above..."
-                  className="w-full p-3 font-mono-tabular text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                  placeholder="Paste JSON rows here or click 'Load Text Sample' above..."
+                  className="w-full p-3 font-mono-tabular text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                 />
                 <div className="flex justify-end gap-3">
                   <button
                     type="button"
-                    onClick={handleValidateCsv}
-                    disabled={validatingCsv}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                    onClick={handleValidateJson}
+                    disabled={validatingJson || readingFiles || importingJson}
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
                   >
-                    {validatingCsv
+                    {validatingJson
                       ? 'Validating...'
                       : 'Step 3: Validate & Preview Import'}
                   </button>
@@ -2742,7 +2789,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             </div>
 
             {/* Validation Preview Report */}
-            {csvPreviewReport && (
+            {jsonPreviewReport && (
               <div className="pt-5 border-t border-slate-200 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="space-y-0.5">
@@ -2750,56 +2797,56 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                       Validation Preview Report
                     </h3>
                     <p className="text-xs text-slate-600 font-mono-tabular">
-                      Total Rows: {csvPreviewReport.totalRows} · Valid:{' '}
+                      Total questions: {jsonPreviewReport.totalRows} · Valid:{' '}
                       <span className="text-emerald-700 font-bold">
-                        {csvPreviewReport.validCount}
+                        {jsonPreviewReport.validCount}
                       </span>{' '}
                       · Duplicates:{' '}
                       <span className="text-amber-700 font-bold">
-                        {csvPreviewReport.duplicateCount}
+                        {jsonPreviewReport.duplicateCount}
                       </span>{' '}
                       · Invalid:{' '}
                       <span className="text-red-700 font-bold">
-                        {csvPreviewReport.invalidCount}
+                        {jsonPreviewReport.invalidCount}
                       </span>
                     </p>
                   </div>
 
-                  {csvPreviewReport.validCount > 0 && (
+                  {jsonPreviewReport.validCount > 0 && !jsonImportResult && (
                     <button
                       type="button"
-                      onClick={handleConfirmCsvImport}
-                      disabled={importingCsv}
+                      onClick={handleConfirmJsonImport}
+                      disabled={importingJson || readingFiles || Boolean(jsonImportResult) || jsonPreviewReport.invalidCount > 0}
                       className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
                     >
-                      {importingCsv
-                        ? 'Importing...'
-                        : `Step 4: Confirm Import of ${csvPreviewReport.validCount} Valid Record(s)`}
+                      {importingJson
+                        ? imageUploadProgress || 'Importing...'
+                        : `Step 4: Confirm Import of ${jsonPreviewReport.validCount} Valid Record(s)`}
                     </button>
                   )}
                 </div>
 
-                {csvPreviewReport.targetLectureContext && (
+                {jsonPreviewReport.targetLectureContext && (
                   <div className="p-3 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 flex items-center justify-between">
                     <span>
-                      <strong className="font-semibold">Import Destination:</strong> {csvPreviewReport.targetLectureContext.subjectTitle} &rarr; {csvPreviewReport.targetLectureContext.lectureTitle} (ID #{csvPreviewReport.targetLectureContext.lectureId})
+                      <strong className="font-semibold">Import Destination:</strong> {jsonPreviewReport.targetLectureContext.subjectTitle} &rarr; {jsonPreviewReport.targetLectureContext.lectureTitle} (ID #{jsonPreviewReport.targetLectureContext.lectureId})
                     </span>
                     <span className="text-[11px] text-sky-700 font-medium">All MCQs attach directly to this lecture</span>
                   </div>
                 )}
 
-                {csvPreviewReport.headerErrors?.length > 0 && (
+                {jsonPreviewReport.headerErrors?.length > 0 && (
                   <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
-                    {csvPreviewReport.headerErrors.join(' ')}
+                    {jsonPreviewReport.headerErrors.join(' ')}
                   </div>
                 )}
 
                 {/* Bulk Tag All Valid Questions Toolbar */}
-                {csvPreviewReport.validCount > 0 && (
+                {jsonPreviewReport.validCount > 0 && !jsonImportResult && (
                   <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-bold text-slate-800">
-                        Tag All Valid Questions ({csvPreviewReport.validCount}):
+                        Tag All Valid Questions ({jsonPreviewReport.validCount}):
                       </span>
                       <button
                         type="button"
@@ -2860,8 +2907,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   </div>
                 )}
 
+                {jsonPreviewReport.unusedImages?.length>0 && <p className="text-xs text-slate-500">Unused images will be skipped: {jsonPreviewReport.unusedImages.join(', ')}</p>}
+                {jsonPreviewReport.invalidCount>0 && <p role="alert" className="text-xs font-semibold text-red-700">Fix all invalid questions and missing files before importing. Duplicates are skipped automatically.</p>}
                 <div className="space-y-2.5 max-h-96 overflow-y-auto">
-                  {(csvPreviewReport.rows || []).map((r: any) => {
+                  {(jsonPreviewReport.rows || []).slice(0, previewLimit).map((r: any) => {
                     const effectiveSpecialTags =
                       rowTagOverrides[r.rowNumber] !== undefined
                         ? rowTagOverrides[r.rowNumber]
@@ -2902,9 +2951,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         <div className="flex flex-wrap items-center justify-between gap-2 font-mono-tabular">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="font-bold text-slate-900">
-                              CSV Row #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
+                              Question #{r.rowNumber} · {r.subject || 'Missing Subject'} →{' '}
                               {r.lecture || 'Missing Lecture'}
                             </span>
+                            {(r.imageFiles || []).length>0 && <span className="rounded-full bg-sky-100 px-2 py-1 text-sky-800">{r.imageFiles.length} figure(s)</span>}
                             {allTags.map((tagItem) => (
                               <span
                                 key={tagItem.label}
@@ -2957,6 +3007,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         <p className="text-slate-800 font-serif-academic mt-1.5 text-xs sm:text-sm">
                           {r.questionText || '(Empty question stem)'}
                         </p>
+                        <details className="mt-2 rounded-lg border border-slate-200 bg-white p-2">
+                          <summary className="cursor-pointer font-semibold text-slate-600">Preview answers, explanation &amp; images</summary>
+                          <div className="mt-2 space-y-1">{(['A','B','C','D'] as const).map(k=><p key={k} className={r.correctAnswer===k?'font-semibold text-emerald-800':''}>{k}. {r[`option${k}`]} {r.correctAnswer===k?'✓':''}</p>)}</div>
+                          <p className="mt-2 text-slate-600">{r.explanation}</p>
+                          <div className="mt-2 grid grid-cols-2 gap-2">{[...(r.imageFiles||[]),...(r.explanationImageFiles||[])].map((ref:any,index:number)=>{
+                            const asset=imageFiles.find(i=>i.file.name===ref.file);
+                            return asset?<ImportImageThumbnail key={ref.file+index} file={asset.file}/>:<p key={ref.file+index} className="text-red-700">Missing: {ref.file}</p>;
+                          })}</div>
+                        </details>
                         {r.errors?.length > 0 && (
                           <ul className="mt-1.5 text-red-700 list-disc list-inside space-y-0.5">
                             {r.errors.map((err: string, i: number) => (
@@ -3064,13 +3123,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             )}
 
             {/* Post-Import Generated Lectures & PDF Setup */}
-            {csvImportResult && (
+            {jsonPreviewReport?.rows?.length>previewLimit && <button type="button" className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold" onClick={()=>setPreviewLimit(n=>n+50)}>Show 50 more questions ({Math.min(previewLimit,jsonPreviewReport.rows.length)} of {jsonPreviewReport.rows.length} shown)</button>}
+            {jsonImportResult && (
               <div className="pt-6 border-t border-slate-200 space-y-4">
                 <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 space-y-1">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                     <h3 className="text-sm font-bold text-emerald-950">
-                      Import Complete: {csvImportResult.batch?.importedCount || 0} Questions Added!
+                      Import Complete: {jsonImportResult.batch?.importedCount || 0} Questions Added!
                     </h3>
                   </div>
                   <p className="text-xs text-emerald-800 leading-relaxed">
@@ -3083,7 +3143,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <div className="space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Generated &amp; Updated Lectures ({csvImportResult.affectedLectures?.length || (importTargetLectureId !== 'auto' ? 1 : 0)})
+                      Generated &amp; Updated Lectures ({jsonImportResult.affectedLectures?.length || (importTargetLectureId !== 'auto' ? 1 : 0)})
                     </h4>
                     <span className="text-[11px] text-slate-500">
                       Upload PDFs to make slide decks instantly viewable by students
@@ -3093,8 +3153,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <div className="grid grid-cols-1 gap-3">
                     {(() => {
                       const affected =
-                        csvImportResult.affectedLectures && csvImportResult.affectedLectures.length > 0
-                          ? csvImportResult.affectedLectures
+                        jsonImportResult.affectedLectures && jsonImportResult.affectedLectures.length > 0
+                          ? jsonImportResult.affectedLectures
                           : lectures.filter((l: any) => l.id === importTargetLectureId);
 
                       if (affected.length === 0) {
@@ -3131,7 +3191,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                               <p className="text-xs text-slate-500">
                                 {currentLect.questionCount ?? currentLect.questionsCount ?? 'Includes new'} MCQs attached ·{' '}
                                 {hasPdf ? (
-                                  <span className="text-emerald-700 font-medium">✓ PDF attached ({currentLect.pdfUrl})</span>
+                                  <span className="text-emerald-700 font-medium">✓ Protected document attached</span>
                                 ) : (
                                   <span className="text-amber-700 font-medium">⚠ No PDF slide deck attached yet</span>
                                 )}
@@ -3143,7 +3203,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => setPreviewPdfModal({ url: currentLect.pdfUrl, title: currentLect.title })}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
                                   <span>Preview PDF</span>
@@ -3159,7 +3219,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                                 className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer shadow-xs ${
                                   hasPdf
                                     ? 'text-slate-700 bg-slate-100 hover:bg-slate-200'
-                                    : 'text-white bg-[#0284C7] hover:bg-[#0369A1]'
+                                    : 'text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)]'
                                 }`}
                               >
                                 <Upload className="w-3.5 h-3.5" />
@@ -3177,13 +3237,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setCsvImportResult(null);
-                      setCsvPreviewReport(null);
-                      setCsvContent('');
+                      setJsonImportResult(null);
+                      setJsonPreviewReport(null);
+                      setJsonContent('');
                     }}
                     className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                   >
-                    ← Import Another CSV File
+                    ← Import Another JSON File
                   </button>
                   <button
                     type="button"
@@ -3199,7 +3259,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </div>
               </div>
             )}
-          </div>
+          </fieldset>
         </div>
       )}
 

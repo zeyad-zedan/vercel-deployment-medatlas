@@ -1,0 +1,6 @@
+private/
+tools/
+backups/
+*.log
+.env*
+public/**/*.pdf

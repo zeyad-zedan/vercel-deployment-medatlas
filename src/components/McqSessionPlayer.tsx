@@ -1,3 +1,8 @@
+import { useSessionImagePrefetch } from './QuestionImages.tsx';
+import { useSessionBatches } from '../lib/use-session-batches.ts';
+import { mergeCompletedStudy } from '../lib/session-batches.ts';
+import { QuestionBatchStatus } from './QuestionBatchStatus.tsx';
+import { QuestionImageProvider, QuestionImages } from './QuestionImages.tsx';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft,
@@ -27,6 +32,11 @@ import {
 import { api } from '../lib/api.ts';
 import { OPTION_KEYS, OptionKey, parseAllQuestionTags, parseSpecialTags, sanitizeSvgDiagram } from '../lib/mcq-engine.ts';
 import { PdfViewerModal, PdfSlideViewer } from './PdfViewerModal.tsx';
+import { QuestionReportButton } from './QuestionReportButton.tsx';
+import { BookmarkButton } from './BookmarkButton.tsx';
+import { AnswerSaveStatus } from './AnswerSaveStatus.tsx';
+import { useAnswerSaving } from '../lib/use-answer-saving.ts';
+import { getResumeQuestionIndex, rememberSessionQuestion } from '../lib/session-progress.ts';
 import { UniversityExamPlayer } from './UniversityExamPlayer.tsx';
 
 interface McqSessionPlayerProps {
@@ -37,68 +47,34 @@ interface McqSessionPlayerProps {
   onQuestionAnswered?: (updatedSession: any) => void;
 }
 
-export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
-  initialSession,
-  shortfallNotice,
-  onExit,
-  onSessionCompleted,
-  onQuestionAnswered,
+export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = (props) => {
+  if (props.initialSession?.mode === 'exam') {
+    return <QuestionImageProvider key={props.initialSession.id} questions={props.initialSession.questions}><UniversityExamPlayer session={props.initialSession}
+      onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={api}/></QuestionImageProvider>;
+  }
+  return <QuestionImageProvider key={props.initialSession.id} questions={props.initialSession.questions}><StudySessionPlayer {...props}/></QuestionImageProvider>;
+};
+
+const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
+  initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered,
 }) => {
   const [session, setSession] = useState<any>(initialSession);
-
-  if (session?.mode === 'exam') {
-    return (
-      <UniversityExamPlayer
-        session={session}
-        onExit={onExit}
-        onSessionCompleted={onSessionCompleted}
-        onQuestionAnswered={onQuestionAnswered}
-        api={api}
-      />
-    );
-  }
-
-  // Resume question index: continuing from next unsolved question or last active question
-  const [currentIndex, setCurrentIndex] = useState<number>(() => {
-    const qs = initialSession?.questions || [];
-    if (!qs.length || initialSession?.status === 'completed') return 0;
-
-    const firstUnsolvedIdx = qs.findIndex(
-      (q: any) => !q.submitted && !q.selectedDisplayed
-    );
-
-    // 1. Check if user had a saved question index in localStorage for this specific session
-    if (typeof window !== 'undefined' && initialSession?.id) {
-      try {
-        const savedIdxStr = localStorage.getItem(`medatlas_session_curr_idx_${initialSession.id}`);
-        if (savedIdxStr !== null) {
-          const parsed = parseInt(savedIdxStr, 10);
-          if (!isNaN(parsed) && parsed >= 0 && parsed < qs.length) {
-            // If the saved question was already submitted, but there are unsubmitted questions, resume at first unsolved
-            if (qs[parsed]?.submitted && firstUnsolvedIdx !== -1) {
-              return firstUnsolvedIdx;
-            }
-            return parsed;
-          }
-        }
-      } catch {}
-    }
-
-    // 2. Otherwise find the first question that is unsolved (no answer selected/submitted)
-    if (firstUnsolvedIdx !== -1) {
-      return firstUnsolvedIdx;
-    }
-
-    return Math.max(0, qs.length - 1);
+  useSessionImagePrefetch(session.questions);
+  const saves = useAnswerSaving(session, (result, answer) => {
+    mergeSessionUpdate(result.session, answer.questionId, answer.selectedOption, answer.lockAnswer);
+    onQuestionAnswered?.(result.session);
   });
+
+  const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
+  const batches = useSessionBatches(session, setSession, currentIndex, api);
 
   const [localSelections, setLocalSelections] = useState<Record<number, OptionKey | null>>(
     () => {
       const map: Record<number, OptionKey | null> = {};
       for (const q of initialSession?.questions || []) {
-        map[q.id] = q.selectedDisplayed || null;
+        if (q.selectedDisplayed) map[q.id] = q.selectedDisplayed;
       }
-      return map;
+      return { ...map, ...saves.drafts };
     }
   );
   const [flaggedIds, setFlaggedIds] = useState<Set<number>>(new Set());
@@ -216,7 +192,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
       ) {
         return;
       }
-      if (confirmSubmitModal || pdfModalOpen) return;
+      if (confirmSubmitModal || pdfModalOpen || target?.closest('[role="dialog"][aria-modal="true"]')) return;
 
       if (e.key === 'ArrowLeft') {
         if (currentIndex > 0) {
@@ -365,34 +341,12 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
     setLocalSelections((prev) => {
       const next = { ...prev, [currentQ.id]: opt };
-      if (session?.id) {
-        try {
-          localStorage.setItem(
-            `medatlas_session_draft_answers_${session.id}`,
-            JSON.stringify(next)
-          );
-        } catch {}
-      }
       return next;
     });
     setErrorMsg(null);
 
     if (isExamMode) {
-      // Exam Mode: save draft selection quietly in the background without blocking UI
-      api.submitQuestionAnswer(
-        session.id,
-        currentQ.id,
-        opt,
-        false,
-        elapsedSeconds
-      )
-        .then((res) => {
-          mergeSessionUpdate(res.session, currentQ.id, opt, false);
-          onQuestionAnswered?.(res.session);
-        })
-        .catch((err: any) => {
-          setErrorMsg(err.message || 'Failed to save choice.');
-        });
+      saves.save(currentQ.id, opt, elapsedSeconds);
     } else {
       // Study Mode: OPTIMISTIC 0ms INSTANT SUBMISSION
       // 1. Immediately mark the question as submitted in local state
@@ -419,66 +373,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         setSidePdfOpen(true);
       }
 
-      // 2. Persist the answer to the server in the background (with keepalive: true so it finishes even if user exits)
-      api.submitQuestionAnswer(
-        session.id,
-        currentQ.id,
-        opt,
-        true,
-        elapsedSeconds
-      )
-        .then((res) => {
-          mergeSessionUpdate(res.session, currentQ.id, opt, true);
-          onQuestionAnswered?.(res.session);
-        })
-        .catch((err: any) => {
-          console.error('Failed to sync answer to server:', err);
-          setErrorMsg('Warning: Answer was not saved to server. Check your connection.');
-        });
-    }
-  };
-
-  // Replay any locally cached draft answers that might not have synced if user closed browser abruptly
-  useEffect(() => {
-    if (!session?.id || isCompleted) return;
-    try {
-      const savedDraftsStr = localStorage.getItem(`medatlas_session_draft_answers_${session.id}`);
-      if (!savedDraftsStr) return;
-      const savedDrafts = JSON.parse(savedDraftsStr) as Record<string, OptionKey | null>;
-      const qs = session.questions || [];
-      for (const q of qs) {
-        const draftOpt = savedDrafts[q.id];
-        if (draftOpt && !q.submitted && !q.selectedDisplayed) {
-          setLocalSelections((prev) => ({ ...prev, [q.id]: draftOpt }));
-          api
-            .submitQuestionAnswer(
-              session.id,
-              q.id,
-              draftOpt,
-              !isExamMode,
-              elapsedSeconds
-            )
-            .then((res) => {
-              mergeSessionUpdate(res.session, q.id, draftOpt, !isExamMode);
-              onQuestionAnswered?.(res.session);
-            })
-            .catch(() => {});
-        }
-      }
-    } catch {}
-  }, [session?.id]);
-
-  const handleToggleBookmark = async (questionId: number) => {
-    try {
-      const res = await api.toggleBookmark(questionId);
-      setSession((prev: any) => ({
-        ...prev,
-        questions: prev.questions.map((q: any) =>
-          q.id === questionId ? { ...q, isBookmarked: res.bookmarked } : q
-        ),
-      }));
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to update bookmark.');
+      saves.save(currentQ.id, opt, elapsedSeconds);
     }
   };
 
@@ -504,14 +399,9 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
     latestIsCompletedRef.current = isCompleted;
   }, [session?.id, currentIndex, elapsedSeconds, isCompleted]);
 
-  // Automatically save current question index in localStorage for seamless resume
   useEffect(() => {
-    if (session?.id && !isCompleted) {
-      try {
-        localStorage.setItem(`medatlas_session_curr_idx_${session.id}`, String(currentIndex));
-      } catch {}
-    }
-  }, [currentIndex, session?.id, isCompleted]);
+    if (session?.id && currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
+  }, [currentIndex, session?.id, currentQ?.id]);
 
   // Guarantee progress is saved on refresh, tab close, browser restart, tab switch, or component unmount
   useEffect(() => {
@@ -589,10 +479,11 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
     setCompletingSession(true);
     setErrorMsg(null);
     try {
+      await saves.flush();
       const res = await api.completeSession(session.id, localSelections, elapsedSeconds);
-      setSession(res.session);
+      saves.finish();
+      setSession((previous: any) => mergeCompletedStudy(previous, res.session));
       try {
-        localStorage.removeItem(`medatlas_session_curr_idx_${session.id}`);
         localStorage.removeItem('medatlas_active_session_id');
       } catch {}
       onSessionCompleted(res.session);
@@ -611,6 +502,15 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
     setPdfModalOpen(true);
   };
 
+  if (currentQ?.contentLoaded === false) {
+    return <div className="ma-dashboard-panel my-6 space-y-4">
+      <h2 className="font-semibold">Question {currentIndex + 1} of {questions.length}</h2>
+      <QuestionBatchStatus error={batches.error} retry={batches.retry}/>
+      <button type="button" className="mr-4 font-semibold underline" onClick={() => setCurrentIndex(Math.max(0, questions.findIndex((q: any) => q.contentLoaded !== false)))}>Back to loaded questions</button>
+      <button type="button" className="font-semibold underline" onClick={handleSafeExit}>Return to Workspace</button>
+    </div>;
+  }
+
   if (!currentQ) {
     return (
       <div className="max-w-2xl mx-auto p-8 bg-white rounded-2xl border border-slate-200 text-center space-y-4 my-8">
@@ -620,7 +520,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         <button
           type="button"
           onClick={handleSafeExit}
-          className="px-5 py-2.5 text-sm font-semibold text-white bg-[#0284C7] rounded-xl hover:bg-[#0369A1] transition-colors cursor-pointer"
+          className="px-5 py-2.5 text-sm font-semibold text-white bg-[var(--ma-brand)] rounded-xl hover:bg-[var(--ma-brand-hover)] transition-colors cursor-pointer"
         >
           Return to Workspace
         </button>
@@ -633,18 +533,19 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const correctOpt = currentQ.correctDisplayedOption as OptionKey | undefined;
   const isSelectedCorrect = showFeedback && selectedOpt && selectedOpt === correctOpt;
   const answeredCount = questions.filter(
-    (q: any) => Boolean(localSelections[q.id] || q.selectedDisplayed || q.submitted)
+    (q: any) => Boolean(localSelections[q.id] || q.selectedDisplayed)
   ).length;
 
   const progressPercentage = Math.round(((currentIndex + 1) / questions.length) * 100);
   const showSlidePreview = sidePdfOpen && Boolean(pdfTargetUrl);
 
   return (
-    <div className="w-full space-y-3 pb-8">
+    <div className="ma-study-player w-full space-y-3 pb-8">
+      {batches.error && <QuestionBatchStatus error={batches.error} retry={batches.retry}/>}
       {/* 1. HIGH-EFFICIENCY STICKY COMMAND BAR (Header + Navigator Unified) */}
       <div
         ref={panelAndMcqRef}
-        className="sticky top-[60px] z-20 scroll-mt-20 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-xs px-3 py-2 sm:px-4 sm:py-2.5 space-y-2 transition-all"
+        className="ma-study-command sticky z-20 scroll-mt-24 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-xs px-3 py-2 sm:px-4 sm:py-2.5 space-y-2 transition-all"
       >
         {/* Top Control Line */}
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -702,26 +603,10 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               </span>
             </button>
 
-            {/* Bookmark Button */}
-            <button
-              type="button"
-              onClick={() => handleToggleBookmark(currentQ.id)}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
-                currentQ.isBookmarked
-                  ? 'bg-sky-100 border-sky-300 text-sky-800 font-bold'
-                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-              title={currentQ.isBookmarked ? 'Bookmarked' : 'Save question'}
-            >
-              <Bookmark
-                className={`w-3.5 h-3.5 ${
-                  currentQ.isBookmarked ? 'fill-[#0284C7] text-[#0284C7]' : ''
-                }`}
-              />
-              <span className="hidden md:inline">
-                {currentQ.isBookmarked ? 'Saved' : 'Save'}
-              </span>
-            </button>
+            <BookmarkButton key={currentQ.id} questionId={currentQ.id} saved={Boolean(currentQ.isBookmarked)}
+              onSaved={(saved) => setSession((prev: any) => ({...prev, questions: prev.questions.map((q: any) => q.id === currentQ.id ? {...q, isBookmarked:saved} : q)}))}/>
+
+            <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>
 
             {/* Slide Reference Toggle Button */}
             {currentQ.lecturePdfUrl && (
@@ -862,7 +747,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 }
 
                 const currentRing = isCurrent
-                  ? 'ring-2 ring-[#0284C7] ring-offset-1 scale-105 font-black shadow-xs'
+                  ? 'ring-2 ring-[var(--ma-brand)] ring-offset-1 scale-105 font-black shadow-xs'
                   : 'hover:scale-105';
 
                 return (
@@ -915,6 +800,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         </div>
       )}
 
+      <AnswerSaveStatus status={saves.status} unsavedCount={saves.unsavedCount} retry={saves.retry}/>
       {errorMsg && (
         <div
           role="alert"
@@ -936,7 +822,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
         <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="space-y-0.5">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-[#0284C7]">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ma-brand)]">
                 <Award className="w-4 h-4" />
                 <span>Session Completed</span>
               </div>
@@ -973,7 +859,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               <button
                 type="button"
                 onClick={handleSafeExit}
-                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl transition-colors cursor-pointer"
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-xl transition-colors cursor-pointer"
               >
                 Back to Workspace
               </button>
@@ -1012,7 +898,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
           disabled={currentIndex === 0}
           aria-label="Previous Question"
           title="Previous Question (Keyboard: ←)"
-          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[#0284C7] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
+          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[var(--ma-brand)] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
         >
           <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
         </button>
@@ -1028,7 +914,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
           >
             {/* COLUMN 1: Question Stem, Diagram, Options & Feedback */}
             <div
-              className={`bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 space-y-4 shadow-xs ${
+              className={`ma-question-card bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 space-y-4 shadow-xs ${
                 showSlidePreview ? 'lg:col-span-6 xl:col-span-6' : ''
               }`}
             >
@@ -1066,11 +952,12 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
               {/* Question Text Vignette */}
               <div className="space-y-3">
-                <p className="text-[15px] sm:text-[16px] font-serif-academic text-slate-900 leading-relaxed">
+                <p className="ma-question-stem font-serif-academic text-slate-900">
                   {currentQ.questionText}
                 </p>
 
                 {/* Optional Scientific Diagram */}
+                <QuestionImages images={currentQ.images}/>
                 {currentQ.diagramSvg && (
                   <div
                     className="max-h-52 overflow-hidden mx-auto rounded-xl border border-slate-100 p-2 bg-slate-50/50 flex items-center justify-center"
@@ -1106,8 +993,8 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                       borderStyle = 'border-slate-200 bg-slate-50/40 text-slate-500 opacity-75';
                     }
                   } else if (isSelected) {
-                    borderStyle = 'border-[#0284C7] bg-sky-50/70 text-slate-950 ring-2 ring-[#0284C7] font-medium';
-                    indicatorStyle = 'bg-[#0284C7] text-white font-bold';
+                    borderStyle = 'border-[var(--ma-brand)] bg-sky-50/70 text-slate-950 ring-2 ring-[var(--ma-brand)] font-medium';
+                    indicatorStyle = 'bg-[var(--ma-brand)] text-white font-bold';
                   }
 
                   return (
@@ -1229,6 +1116,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                       <p className="text-slate-700 leading-relaxed font-sans text-xs sm:text-sm">
                         {currentQ.explanation}
                       </p>
+                      <QuestionImages images={currentQ.explanationImages}/>
                     </div>
                   )}
 
@@ -1299,7 +1187,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
                     <button
                       type="button"
                       onClick={handleSafeExit}
-                      className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl shadow-xs transition-colors cursor-pointer"
+                      className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-xl shadow-xs transition-colors cursor-pointer"
                     >
                       Finish Review
                     </button>
@@ -1351,7 +1239,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               ? 'Finish Session'
               : 'Finish Review'
           }
-          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[#0284C7] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
+          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[var(--ma-brand)] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
         >
           <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
         </button>
@@ -1385,7 +1273,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = ({
               <button
                 type="button"
                 onClick={() => handleFinishSession(true)}
-                className="px-4 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
               >
                 Confirm &amp; Submit
               </button>

@@ -20,8 +20,9 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { api, subscribeToAuthChanges, type UserProfile } from './lib/api.ts';
+import { api, subscribeToAuthChanges, subscribeToBookmarkChanges, type UserProfile, type ReviewQuery } from './lib/api.ts';
 import { PublicLanding } from './components/PublicLanding.tsx';
+import { CompleteProfile } from './components/CompleteProfile.tsx';
 import { McqSessionPlayer } from './components/McqSessionPlayer.tsx';
 import {
   DashboardView,
@@ -38,6 +39,7 @@ const VALID_TABS = [
   'dashboard',
   'subjects',
   'lectures',
+  'practical',
   'practice',
   'exams',
   'bookmarks',
@@ -56,18 +58,18 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
 
   // Check query params: ?session=8 or ?tab=progress
   const querySession = searchParams.get('session');
-  if (querySession) {
+  if (querySession && /^\d+$/.test(querySession)) {
     const id = parseInt(querySession, 10);
     if (!isNaN(id) && id > 0) return { tab: 'dashboard', sessionId: id };
   }
 
   const queryTab = searchParams.get('tab');
   if (queryTab && VALID_TABS.includes(queryTab as any)) {
-    return { tab: queryTab, sessionId: null };
+    return { tab: queryTab === 'subjects' ? 'lectures' : queryTab, sessionId: null };
   }
 
   // Check path: /session/8
-  const sessionMatch = pathname.match(/^session\/(\d+)/i);
+  const sessionMatch = pathname.match(/^session\/(\d+)$/i);
   if (sessionMatch) {
     const id = parseInt(sessionMatch[1], 10);
     if (!isNaN(id) && id > 0) return { tab: 'dashboard', sessionId: id };
@@ -76,7 +78,7 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
   // Check path: /subjects, /lectures, /progress, etc.
   const firstSegment = pathname.split('/')[0]?.toLowerCase();
   if (firstSegment && VALID_TABS.includes(firstSegment as any)) {
-    return { tab: firstSegment, sessionId: null };
+    return { tab: firstSegment === 'subjects' ? 'lectures' : firstSegment, sessionId: null };
   }
 
   return { tab: 'dashboard', sessionId: null };
@@ -93,7 +95,7 @@ function updateBrowserUrl(tab: string, session: any | null, replace = false) {
     targetTitle = `${session.title || 'MCQ Session'} · MedAtlas MCQ`;
   } else if (tab && tab !== 'dashboard') {
     targetUrl = `/${tab}`;
-    const capitalized = tab.charAt(0).toUpperCase() + tab.slice(1);
+    const capitalized = tab === 'progress' ? 'Dashboard' : tab.charAt(0).toUpperCase() + tab.slice(1);
     targetTitle = `${capitalized} · MedAtlas MCQ`;
   }
 
@@ -115,7 +117,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>(() => parseCurrentRoute().tab);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sidebar_open');
+      let saved: string | null = null;
+      try { saved = localStorage.getItem('sidebar_open'); } catch {}
       if (saved !== null) return saved === 'true';
       return window.innerWidth >= 1024;
     }
@@ -146,6 +149,8 @@ export default function App() {
   const [sessionShortfall, setSessionShortfall] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
+  const [authConnectionError, setAuthConnectionError] = useState<string | null>(null);
+  const [authRetryVersion, setAuthRetryVersion] = useState(0);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
 
   const catalogLoadedRef = useRef(false);
@@ -176,16 +181,14 @@ export default function App() {
   }, []);
 
   const [loadingBookmarks, setLoadingBookmarks] = useState(false);
-  const loadBookmarksData = useCallback(async () => {
-    setLoadingBookmarks(true);
-    try {
-      const bkm = await api.getBookmarks();
-      setBookmarksData(bkm);
-    } catch (err: any) {
-      console.error('Error loading bookmarks:', err);
-    } finally {
-      setLoadingBookmarks(false);
-    }
+  const [bookmarksError, setBookmarksError] = useState<string | null>(null);
+  const [includeBookmarkReview, setIncludeBookmarkReview] = useState(false);
+  const [reviewQuery, setReviewQuery] = useState<ReviewQuery>({ page: 1, status: 'all' });
+  const reviewQueryKey = JSON.stringify(reviewQuery);
+  const [bookmarkRevision, setBookmarkRevision] = useState(0);
+  const invalidateBookmarks = useCallback(() => {
+    setBookmarksData(null);
+    setBookmarkRevision(revision => revision + 1);
   }, []);
 
   const loadAdminData = useCallback(async () => {
@@ -210,39 +213,64 @@ export default function App() {
           setActiveTab(route.tab || 'dashboard');
         }
         setUser(resolvedUser);
+        setAuthConnectionError(null);
         setInitializingAuth(false);
       },
       (error) => {
         setAuthRedirectError(error.message || 'Google sign-in via redirect could not be completed.');
         setInitializingAuth(false);
-      }
+      },
+      error => { setAuthConnectionError(error.message); setInitializingAuth(false); }
     );
     return () => unsubscribe();
-  }, [loadCatalog]);
+  }, [loadCatalog, authRetryVersion]);
 
   useEffect(() => {
-    if (user) {
+    if (user && user.profileCompleted !== false) {
       loadStudentWorkspaceData();
     }
   }, [user, loadStudentWorkspaceData]);
 
-  // Lazy-load bookmarks only when the Bookmarks tab is active
+  useEffect(() => subscribeToBookmarkChanges(invalidateBookmarks), [invalidateBookmarks]);
   useEffect(() => {
-    if (user && activeTab === 'bookmarks' && !bookmarksData) {
-      loadBookmarksData();
-    }
-  }, [user, activeTab, bookmarksData, loadBookmarksData]);
+    if (activeTab !== 'bookmarks') setIncludeBookmarkReview(false);
+  }, [activeTab]);
+
+  const bookmarkOwner = user?.profileCompleted === false ? undefined : user?.uid;
+  const bookmarksVisible = activeTab === 'bookmarks' && !activeSession;
+  const hasBookmarkData = bookmarksData?.owner === bookmarkOwner && bookmarksData != null &&
+    (includeBookmarkReview ? bookmarksData.reviewKey === reviewQueryKey : bookmarksData.savedLoaded);
+  useEffect(() => {
+    if (!bookmarkOwner || !bookmarksVisible || hasBookmarkData) return;
+    let current = true;
+    setLoadingBookmarks(true);
+    setBookmarksError(null);
+    api.getBookmarks(!includeBookmarkReview, includeBookmarkReview ? reviewQuery : undefined).then(data => {
+      if (current) setBookmarksData((previous: any) => {
+        const retained = previous?.owner === bookmarkOwner ? previous : {};
+        return includeBookmarkReview ? { ...retained, ...data, bookmarks: retained.bookmarks || [],
+          savedLoaded: retained.savedLoaded === true, owner: bookmarkOwner, reviewKey: reviewQueryKey } :
+          { ...retained, ...data, answeredQuestions: retained.answeredQuestions || [], reviewPagination: retained.reviewPagination,
+            owner: bookmarkOwner, savedLoaded: true };
+      });
+    }).catch(error => {
+      if (current) setBookmarksError(error.message || 'Could not load bookmarks. Please retry.');
+    }).finally(() => {
+      if (current) setLoadingBookmarks(false);
+    });
+    return () => { current = false; };
+  }, [bookmarkOwner, bookmarksVisible, hasBookmarkData, includeBookmarkReview, bookmarkRevision, reviewQueryKey]);
 
   // Lazy-load full admin console only when the Admin tab is active
   useEffect(() => {
-    if (user?.role === 'admin' && activeTab === 'admin' && !adminData) {
+    if (user?.role === 'admin' && user.profileCompleted !== false && activeTab === 'admin' && !adminData) {
       loadAdminData();
     }
   }, [user, activeTab, adminData, loadAdminData]);
 
   // Restore active session directly from URL path (/session/:id) or localStorage
   useEffect(() => {
-    if (!user || activeSession) return;
+    if (!user || user.profileCompleted === false || activeSession) return;
     try {
       const route = parseCurrentRoute();
       let targetSessionId = route.sessionId;
@@ -280,13 +308,14 @@ export default function App() {
 
   // Keep the browser address bar and history in sync with active tab and active session
   useEffect(() => {
-    if (!user || initializingAuth) return;
+    if (!user || user.profileCompleted === false || initializingAuth) return;
     updateBrowserUrl(activeTab, activeSession);
   }, [activeTab, activeSession, user, initializingAuth]);
 
   // Handle browser native Back and Forward navigation buttons
   useEffect(() => {
     const handlePopState = () => {
+      if (!user || user.profileCompleted === false) return;
       const route = parseCurrentRoute();
       if (route.sessionId) {
         api.getSession(route.sessionId)
@@ -309,7 +338,7 @@ export default function App() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [loadStudentWorkspaceData]);
+  }, [loadStudentWorkspaceData, user]);
 
   const handleAuthenticated = (loggedInUser: UserProfile, initialTab?: string) => {
     setUser(loggedInUser);
@@ -355,6 +384,15 @@ export default function App() {
     }
   };
 
+  if (authConnectionError) {
+    return <main className="ma-workspace min-h-screen flex items-center justify-center p-6">
+      <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-md space-y-4">
+        <h1 className="text-xl font-bold">Connection unavailable</h1>
+        <p role="alert" className="text-sm text-slate-600">{authConnectionError}</p>
+        <button type="button" onClick={() => { setAuthConnectionError(null); setInitializingAuth(true); setAuthRetryVersion(version => version + 1); }} className="bg-[var(--ma-brand)] text-white px-4 py-2 rounded-lg text-sm font-semibold">Retry connection</button>
+      </div>
+    </main>;
+  }
   if (initializingAuth) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] text-slate-600 text-sm">
@@ -374,14 +412,18 @@ export default function App() {
     );
   }
 
+  if (user.profileCompleted === false) {
+    return <CompleteProfile onCompleted={setUser} onLogout={handleLogout} />;
+  }
+
   const navItems = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
-    { id: 'subjects', label: 'Subjects', icon: BookOpen },
-    { id: 'lectures', label: 'Lectures', icon: GraduationCap },
+    { id: 'lectures', label: 'Lectures', icon: BookOpen },
+    { id: 'practical', label: 'Practical', icon: GraduationCap },
     { id: 'practice', label: 'Practice MCQs', icon: SlidersHorizontal },
     { id: 'exams', label: 'Mock Exams', icon: Clock },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
-    { id: 'progress', label: 'My Progress', icon: History },
+    { id: 'progress', label: 'Dashboard', icon: History },
     { id: 'profile', label: 'Profile & Settings', icon: User },
   ];
 
@@ -390,7 +432,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex bg-[#F8FAFC] text-[#0F172A] relative">
+    <div className="ma-workspace min-h-screen flex text-slate-900 relative">
+      <a href="#workspace-content" className="ma-skip-link">Skip to content</a>
       {/* Mobile Backdrop Overlay when side panel is open */}
       {sidebarOpen && (
         <div
@@ -402,6 +445,8 @@ export default function App() {
 
       {/* Side Panel Navigation (Collapsible on all screen sizes) */}
       <aside
+        id="workspace-navigation"
+        inert={!sidebarOpen}
         className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out shadow-xl lg:shadow-none ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
@@ -446,7 +491,7 @@ export default function App() {
                   }
                   setActiveSession(null);
                   setActiveTab(item.id);
-                  if (item.id === 'subjects') {
+                  if (item.id === 'lectures') {
                     setSelectedSubjectId('all');
                   }
                   setGlobalError(null);
@@ -454,14 +499,15 @@ export default function App() {
                     setSidebarOpen(false);
                   }
                 }}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                aria-current={isActive ? 'page' : undefined}
+                className={`ma-nav-item w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
                   isActive
-                    ? 'bg-sky-50 text-[#0284C7] font-semibold'
+                    ? 'bg-sky-50 text-[var(--ma-brand)] font-semibold'
                     : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
                 <Icon className="w-4 h-4 shrink-0" />
-                <span>{item.label}</span>
+                <span>{item.label}</span>{isActive && <span className="ma-nav-indicator" aria-hidden="true" />}
               </button>
             );
           })}
@@ -500,6 +546,8 @@ export default function App() {
             <button
               type="button"
               aria-label={sidebarOpen ? 'Close side panel' : 'Open side panel'}
+              aria-expanded={sidebarOpen}
+              aria-controls="workspace-navigation"
               title={sidebarOpen ? 'Close side panel' : 'Open side panel'}
               onClick={toggleSidebar}
               className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center justify-center"
@@ -539,7 +587,7 @@ export default function App() {
         </header>
 
         {/* Workspace Viewport */}
-        <main className={`flex-1 w-full mx-auto ${activeSession ? 'max-w-[1536px] px-2 sm:px-4 py-2 sm:py-3' : 'max-w-6xl px-4 sm:px-6 lg:px-8 py-8'}`}>
+        <main id="workspace-content" tabIndex={-1} className={`ma-workspace-main flex-1 w-full mx-auto ${activeSession ? 'ma-session-main max-w-[1536px] px-2 sm:px-4 py-2 sm:py-3' : 'max-w-6xl px-4 sm:px-6 lg:px-8 py-8'}`}>
           {globalError && (
             <div
               role="alert"
@@ -558,6 +606,7 @@ export default function App() {
 
           {activeSession ? (
             <McqSessionPlayer
+              key={activeSession.id}
               initialSession={activeSession}
               shortfallNotice={sessionShortfall}
               onExit={() => {
@@ -566,7 +615,7 @@ export default function App() {
               }}
               onSessionCompleted={(completed) => {
                 setActiveSession(completed);
-                loadStudentWorkspaceData(true);
+                invalidateBookmarks();
               }}
             />
           ) : (
@@ -578,19 +627,18 @@ export default function App() {
                   onStartQuickSession={handleStartSession}
                   onOpenSession={handleOpenExistingSession}
                   onNavigateTab={setActiveTab}
-                  onSelectModule={(subjectId) => {
+                  onOpenSubject={(subjectId) => {
                     setSelectedSubjectId(subjectId);
-                    setActiveTab('subjects');
+                    setActiveTab('lectures');
                   }}
                 />
               )}
 
-              {(activeTab === 'subjects' || activeTab === 'lectures') && (
+              {activeTab === 'lectures' && (
                 <SubjectsAndLecturesView
                   catalog={catalog}
                   dashboardData={dashboardData}
                   initialSelectedSubjectId={selectedSubjectId}
-                  onSelectSubjectId={setSelectedSubjectId}
                   onStartSession={handleStartSession}
                   onRefresh={() => {
                     loadStudentWorkspaceData();
@@ -598,6 +646,14 @@ export default function App() {
                   }}
                   isAdmin={user?.role === 'admin'}
                 />
+              )}
+
+              {activeTab === 'practical' && (
+                <section className="ma-empty-state">
+                  <GraduationCap aria-hidden="true" />
+                  <h1>Practical</h1>
+                  <p>No practical content has been added yet.</p>
+                </section>
               )}
 
               {activeTab === 'practice' && (
@@ -619,9 +675,13 @@ export default function App() {
 
               {activeTab === 'bookmarks' && (
                 <BookmarksView
-                  bookmarksData={bookmarksData}
+                  loading={!hasBookmarkData && (loadingBookmarks || !bookmarksError)}
+                  error={hasBookmarkData ? null : bookmarksError}
+                  bookmarksData={bookmarksData?.owner === bookmarkOwner ? bookmarksData : null}
                   catalog={catalog}
-                  onRefresh={loadBookmarksData}
+                  onRefresh={invalidateBookmarks}
+                  onLoadReview={query => { setReviewQuery(query); setIncludeBookmarkReview(true); }}
+                  onLoadSaved={() => setIncludeBookmarkReview(false)}
                 />
               )}
 
@@ -644,9 +704,10 @@ export default function App() {
                 <AdminConsole
                   adminData={adminData}
                   loading={loadingAdmin}
+                  onDocumentSecurityUpdated={(documentSecurity) => setAdminData((previous: any) => previous ? {...previous, documentSecurity} : previous)}
                   onRefresh={() => {
                     loadAdminData();
-                    loadCatalog();
+                    loadCatalog(true);
                   }}
                 />
               )}

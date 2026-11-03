@@ -1,9 +1,72 @@
 # MedAtlas MCQ — Medical Education & Examination Platform
 
+## Interface design system
+
+The shared visual contract lives in `src/styles/design-system.css`, imported by `src/index.css`.
+Use its `--ma-*` tokens and `.ma-*` primitives for new screens: evergreen primary actions,
+ink text, muted neutral backgrounds, 16px cards, 10px controls, and a 4px spacing scale.
+Use one prominent action per group, tabular numerals for statistics, and readable proportional
+text for descriptions. Keep success/error colours for outcomes. Subject dropdowns remain native,
+keyboard-accessible `details` elements; mobile layouts stack controls and honour reduced motion.
+Do not introduce new literal brand colours inside components. The shared Tailwind neutral and
+accent palettes also keep existing account, admin, practice, and assessment screens consistent.
+Use `PageHeading` for standard workspace pages, `.ma-library-hero` for the library and
+session dashboard, and `.ma-empty-state` for empty collections. Standard fields are at least
+44px high; phone fields use 16px text to prevent automatic zoom. Dialogs must fit within the
+dynamic viewport and scroll internally. Keep study navigation below the 76px workspace header.
+The exam timer stays visible in the phone header, and question text has no decorative overlays.
+Design changes must not introduce polling or additional database reads.
+
+New accounts choose a username and faculty. Benha University is currently the only option.
+Email registration collects these fields immediately; new Google accounts complete their
+profile before entering the workspace. Existing accounts retain their display names and are
+assigned Benha University by `supabase/migrations/20261103190330_user_academic_profiles.sql`.
+The username uses the existing display-name field; sign-in remains email/password or Google.
+Run `npm run test:profiles` against an isolated local database to verify this flow.
+
+Lecture completion counts unique published questions answered across study, custom practice,
+and submitted exams. Opening a full lecture restores those answers and selects its first
+unanswered question; this question number may differ from the number completed. Filtered
+practice stays separate. Reopening never deletes sessions or answer history, and completed
+attempts remain unchanged when a new cumulative study session is needed.
+
+Answered history is paginated at 25 questions by default (50 maximum), with subject and
+answer-status filters applied in PostgreSQL. Saved bookmarks are retained when switching
+history pages. Lecture reset responses identify the deleted sessions so the browser clears
+only their drafts and positions. Expired exams have one automatic completion attempt and
+an explicit retry on failure. Startup connection failures retain the session token and show
+a connection retry screen; authentication rejections still end the session. Protected PDF
+loading and rendering each retain a concurrency limit of two, with at most six waiting tasks
+and a five-second queue timeout. PDF access checks and no-store delivery remain enforced.
+
 PDF storage is Telegram-only. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID` in
 the application and local upload portal environments. Uploads must succeed in Telegram
-before attachment metadata is saved. `/lectures/:filename` returns an error when Telegram
-is unavailable; it never downloads PDF contents from PostgreSQL or Supabase Storage.
+before attachment metadata is saved. Original `/lectures/:filename` routes always return 410.
+Students use authenticated `/api/documents/:opaqueReference` metadata and page endpoints.
+The server fetches the original from Telegram and renders one protected WebP page.
+watermarks and the viewer footer are optional and OFF by default. Administrators can change
+the global setting in Admin Console → Overview → PDF security watermarks. Apply
+`drizzle/0003_document_watermarks.sql` before deploying. The saved setting is read within the
+existing document authorization query; there is no extra settings query per page or polling.
+Changing it affects newly loaded pages. It does not disable authentication or file protection.
+Original PDF bytes, filenames, and Telegram file identifiers are excluded from API responses.
+Every page request checks the active account and current publication/admin permissions, even
+when original bytes are cached server-side. Responses use private/no-store headers and per-user
+rate limits. Zooming an already rendered page makes no additional database request.
+This prevents original-file delivery, not screenshots, image capture, or reconstruction from
+visible pages. It increases Vercel rendering/bandwidth work; metadata/auth queries remain small.
+Never reintroduce raw-file download links or external-URL fallbacks. The original PDFs belong
+in Telegram or ignored `private/lecture-originals/`; builds reject PDFs under `public/`.
+Node 22.13+ is required; Vercel uses the configured Node 24 runtime. `pdfjs-dist` and native
+canvas binaries/assets must be included in the function bundle, as configured in `vercel.json`.
+Before production rollout, verify the native renderer on Vercel, invalidate previously public
+CDN copies, and verify that earlier deployments cannot expose the old raw-file endpoint.
+The bot-linked upload portal opens without a username or password, as requested by the owner.
+Anyone with its tunnel URL can upload or replace PDFs and import questions. Keep that link private.
+Its original-file route remains disabled, and same-origin request checks remain active.
+Use HTTPS for remote portal access. Future Telegram uploads set `protect_content=true`;
+keep the storage channel private and restrict membership. This flag does not change old posts.
+PDF contents are never downloaded from PostgreSQL or Supabase Storage.
 Existing database PDF blobs are retained for recovery but are excluded from reads and new backups.
 The Telegram sync script now validates references only; missing files must be re-uploaded
 from original PDFs. The activity listener reads MCQ activity from PostgreSQL on demand and
@@ -36,7 +99,7 @@ Key capabilities and security controls implemented in this release:
   - **Exact Recovery Origin Allowlist**: Broad wildcard suffix matching (`*.ai.studio`, `*.run.app`) is removed. Only exact allowlisted HTTPS origins (`https://medatlas.ai.studio`, the specific MedAtlas dev/preview Cloud Run URLs, and origins in `APP_URL` / `ALLOWED_RECOVERY_ORIGINS`) are accepted, with `http://localhost` permitted only outside production.
 - **Shared PostgreSQL Rate Limiting & DoS Hardening**:
   - Authentication and password mutation endpoints use a shared PostgreSQL rate-limit store (`rate_limit_buckets`) with independent per-IP, per-account/email, and combined IP+email rules, anti-churn capacity protection (preventing single-hit `count === 1` key floods from evicting active `count > 1` blocks), and automatic in-memory fallback.
-  - Default JSON body parsing is restricted to `64kb` globally, with `5mb` scoped exclusively to authenticated administrator CSV import routes (`/api/admin/import/preview` and `/api/admin/import/execute`).
+  - Default JSON body parsing is restricted to `64kb` globally, with `5mb` scoped exclusively to authenticated administrator question import routes (`/api/admin/import/preview` and `/api/admin/import/execute`).
 - **Three Practice & Assessment Modes**:
   - **Mode A (Study Mode)**: Immediate feedback after submitting each question, showing the correct answer, primary synthesis explanation, and individual rationales for Options A, B, C, and D.
   - **Mode B (Exam Mode)**: Server-enforced timed exam simulation. Correct answers and explanations are stripped on the server during active exams. Authoritative exam deadlines (`started_at + time_limit_seconds`) are enforced on the server, and `completeExamSession` executes atomically inside a PostgreSQL transaction with `FOR UPDATE` row locking and a unique index (`uq_session_question_attempt`) on `(session_id, question_id)`.
@@ -111,3 +174,23 @@ To ensure Firebase password-reset emails deliver users directly to the MedAtlas 
    ```
 
 
+
+## JSON question imports and Telegram figures
+
+In Admin Console → Bulk JSON Import, choose a target lecture (or use the subject/lecture fields in the file), select one `.json` file and any referenced PNG/JPEG/WebP files together, then validate. The preview shows missing files, duplicates, answer choices, figures and tags. Fix all invalid questions before confirming; duplicate questions are skipped. You can add source tags to one question or the entire batch. The downloadable image example includes a ready-to-use JSON file and a small illustrative figure.
+
+The input is a question array or `{ "subject": "Histology", "lecture": "Cell structure", "questions": [...] }`. Each question has `question_text`, `options` with A/B/C/D keys (or an array of four strings), `correct_answer`, and `explanation`. Optional fields are `difficulty`, `tags`, `special_tags`, `page_number`, `status`, `explanation_a` through `explanation_d`, `images`, and `explanation_images`. Image entries are local filenames or `{ "file": "cell-diagram.png", "alt": "Description of the figure" }`. Filenames must match exactly. URLs, SVG files and base64 image payloads are rejected. See `public/templates/mcq-text-example.json` and the image example ZIP.
+
+Limits: 4 MB JSON / 2,000 questions per batch; 100 selected image files; 2 MB per image; up to four question figures and four explanation figures per MCQ. Images must be no larger than 6,000 pixels per side and 16 megapixels. The uploader preserves the original image quality. Large batches are inserted in chunks, and concurrent imports are serialized to prevent duplicate questions.
+
+Referenced images are uploaded as Telegram documents (without photo compression). PostgreSQL stores only small file references and alt text in `questions.images` and `questions.explanation_images`. Apply `supabase/migrations/20261103075415_question_images_json_import.sql` before running the updated backend. No new environment variables are required: the existing Telegram channel/bot and `AUTH_SESSION_SECRET` are reused. The encrypted full database backup includes these references; the legacy text-only CSV export does not include figures. Back up the Telegram channel too: a database backup cannot recover a file deleted from Telegram.
+
+Student sessions fetch full MCQ content in batches of six. The initial response retains lightweight IDs and answer status for the whole navigator; question text, options, explanations and image references are selected from PostgreSQL only for the requested six. Study resumes in the batch containing the next unanswered question. Reaching the sixth question in a batch prefetches the next six, while jumping elsewhere fetches that batch directly. Loaded batches stay in browser memory; concurrent requests are deduplicated and failures require an explicit retry. Answers and bookmarks keep their existing immediate-save paths, independently of content loading. Submission grades all question IDs using small keys, snapshots only answered questions, and returns a six-question review. Completed mock-exam review fetches further content on demand. Older clients without `batchSize=6` retain their existing response format. No migration or progress reset is needed. Savings depend on how much of a set is opened; completing everything still transfers all content with some extra per-request overhead.
+
+When a question batch loads, the browser fetches its distinct question figures through authenticated server routes, four at a time, and keeps temporary object URLs until the session closes. Moving between loaded questions reuses those images. In Study, explanation figures preload too; in an active exam they are withheld until submission. Telegram downloads are deduplicated and cached in bounded server memory. No image bytes are fetched from Supabase. Opening another session or refreshing the page can fetch images again. Image delivery still uses application hosting bandwidth. The app provides a retry button if a figure is temporarily unavailable.
+
+Stored Telegram identifiers never reach the browser: responses mint encrypted opaque references. The image route requires sign-in and verifies the reference and downloaded SHA-256. It does not perform per-image database queries, apart from the application's existing authentication checks. Rotating the session secret invalidates open browser references; reopening a set mints fresh ones from the unchanged stored Telegram metadata.
+
+The bot-linked upload portal also provides the same JSON/image importer at `/mcqs` (local address `http://localhost:4050/mcqs`). Open the bot portal and choose **Upload MCQs**. It includes lecture search, JSON editing/formatting, image thumbnails, answer/explanation previews, source badges and topic tags for individual rows or a whole batch, duplicate checks and upload progress. Imports default to **Save as draft**, keeping questions hidden from students during review. Choose **Use the status in the JSON file** when publishing is intended. The portal requires no username or password and retains same-origin checks; imports run under the existing active owner administrator and are recorded in the admin audit log. No student sign-in token or database password is placed in the portal frontend. The importer bundles its own local script and CSS, so it does not need an external UI CDN.
+
+The PDF portal shares the MCQ page's local design system and provides subject dropdowns, lecture search, PDF status filters, attached/missing totals, per-lecture upload progress, and compression controls. ILovePDF configuration stays on the server; only a configured/not-configured flag and requested balance are returned. QR codes are generated in the browser without an external QR service. Upload confirmation JSON contains metadata and compression statistics, never the compressed PDF buffer itself.

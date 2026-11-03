@@ -55,6 +55,8 @@ export interface BackupPayload {
     deletedAccounts: unknown[];
     passwordResetTokens: unknown[];
     rateLimitBuckets: unknown[];
+    appSettings?: unknown[];
+    questionReports?: unknown[];
   };
 }
 
@@ -212,13 +214,19 @@ export function decryptBackupPayload(
       throw new Error(`Corrupted backup payload: table "${tableName}" is missing or not an array.`);
     }
   }
+  if (parsed.tables.appSettings !== undefined && !Array.isArray(parsed.tables.appSettings)) {
+    throw new Error('Corrupted backup payload: appSettings must be an array.');
+  }
+  if (parsed.tables.questionReports !== undefined && !Array.isArray(parsed.tables.questionReports)) {
+    throw new Error('Corrupted backup payload: questionReports must be an array.');
+  }
 
   return parsed;
 }
 
 /**
  * Exports all required tables from a single, consistent PostgreSQL Repeatable-Read transaction.
- * Guarantees snapshot consistency across all 15 tables.
+ * Guarantees snapshot consistency across core data and application settings.
  */
 export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload> {
   if (!pool || !isDatabaseConfigured()) {
@@ -253,6 +261,8 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
     const deletedAccountsRes = await client.query('SELECT * FROM public.deleted_accounts ORDER BY id ASC');
     const passwordResetTokensRes = await client.query('SELECT * FROM public.password_reset_tokens ORDER BY id ASC');
     const rateLimitBucketsRes = await client.query('SELECT * FROM public.rate_limit_buckets ORDER BY key ASC');
+    const appSettingsRes = await client.query('SELECT * FROM public.app_settings ORDER BY key ASC');
+    const questionReportsRes = await client.query('SELECT * FROM public.question_reports ORDER BY id ASC');
 
     await client.query('COMMIT');
 
@@ -276,6 +286,8 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
         deletedAccounts: deletedAccountsRes.rows,
         passwordResetTokens: passwordResetTokensRes.rows,
         rateLimitBuckets: rateLimitBucketsRes.rows,
+        appSettings: appSettingsRes.rows,
+        questionReports: questionReportsRes.rows,
       },
     };
   } catch (err) {
@@ -295,6 +307,7 @@ export async function createEncryptedBackup(options?: {
   encryptionKeySecret?: string;
   snapshotOverride?: BackupPayload;
 }): Promise<{ envelope: EncryptedBackupEnvelope; key: Buffer; serialized: string }> {
+  const key = deriveBackupEncryptionKey(options?.encryptionKeySecret);
   const payload = options?.snapshotOverride || (await createConsistentDatabaseSnapshot());
   const serialized = JSON.stringify(payload);
   const plaintextSha256 = crypto.createHash('sha256').update(serialized).digest('hex');
@@ -312,7 +325,6 @@ export async function createEncryptedBackup(options?: {
     plaintextSha256,
   };
 
-  const key = deriveBackupEncryptionKey(options?.encryptionKeySecret);
   const encrypted = encryptBackupPayload(serialized, key);
 
   const envelope: EncryptedBackupEnvelope = {
@@ -441,6 +453,8 @@ export async function testRestoreBackup(
           firebase_uid TEXT,
           email TEXT NOT NULL UNIQUE,
           display_name TEXT NOT NULL,
+          faculty TEXT NOT NULL DEFAULT 'Benha University' CHECK (faculty = 'Benha University'),
+          profile_completed BOOLEAN NOT NULL DEFAULT false,
           password_hash TEXT,
           auth_provider TEXT NOT NULL DEFAULT 'local',
           token_version INTEGER NOT NULL DEFAULT 1,
@@ -557,6 +571,8 @@ export async function testRestoreBackup(
           tags TEXT NOT NULL DEFAULT '',
           special_tags TEXT NOT NULL DEFAULT '',
           diagram_svg TEXT NOT NULL DEFAULT '',
+          images JSONB NOT NULL DEFAULT '[]'::jsonb,
+          explanation_images JSONB NOT NULL DEFAULT '[]'::jsonb,
           page_number INTEGER,
           status TEXT NOT NULL DEFAULT 'published',
           version INTEGER NOT NULL DEFAULT 1,
@@ -623,6 +639,26 @@ export async function testRestoreBackup(
           created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
         );
 
+        CREATE TABLE "${isolatedSchema}".app_settings (
+          key TEXT PRIMARY KEY,
+          boolean_value BOOLEAN NOT NULL DEFAULT false,
+          updated_by TEXT,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE "${isolatedSchema}".question_reports (
+          id SERIAL PRIMARY KEY,
+          user_uid TEXT NOT NULL REFERENCES "${isolatedSchema}".users(uid) ON DELETE CASCADE,
+          question_id INTEGER REFERENCES "${isolatedSchema}".questions(id) ON DELETE SET NULL,
+          lecture_id INTEGER REFERENCES "${isolatedSchema}".lectures(id) ON DELETE SET NULL,
+          reason TEXT NOT NULL CHECK (reason IN ('wrong_answer', 'outside_syllabus')),
+          question_text TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          resolved_at TIMESTAMPTZ,
+          resolved_by TEXT REFERENCES "${isolatedSchema}".users(uid) ON DELETE SET NULL
+        );
+
         CREATE TABLE "${isolatedSchema}".admin_audit_logs (
           id SERIAL PRIMARY KEY,
           admin_uid TEXT NOT NULL,
@@ -654,7 +690,7 @@ export async function testRestoreBackup(
             const rowPlaceholders: string[] = [];
             for (const key of keys) {
               rowPlaceholders.push(`$${paramIdx++}`);
-              values.push(row[key]);
+              values.push((key === 'images' || key === 'explanation_images') && Array.isArray(row[key]) ? JSON.stringify(row[key]) : row[key]);
             }
             valueClauses.push(`(${rowPlaceholders.join(', ')})`);
           }
@@ -682,6 +718,8 @@ export async function testRestoreBackup(
       await insertRows('bookmarks', payload.tables.bookmarks as any[]);
       await insertRows('import_batches', payload.tables.importBatches as any[]);
       await insertRows('admin_audit_logs', payload.tables.adminAuditLogs as any[]);
+      await insertRows('app_settings', (payload.tables.appSettings || []) as any[]);
+      await insertRows('question_reports', (payload.tables.questionReports || []) as any[]);
 
       // 4. Verify row counts and relationships in the disposable schema
       for (const [tableKey, expectedCount] of Object.entries(envelope.metadata.tables)) {

@@ -1,6 +1,8 @@
+import type { QuestionImage } from '../lib/question-images.ts';
 import { relations } from 'drizzle-orm';
 import {
   boolean,
+  jsonb,
   integer,
   index,
   pgTable,
@@ -8,7 +10,16 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  check,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  booleanValue: boolean('boolean_value').notNull().default(false),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', {withTimezone:true}).notNull().defaultNow(),
+});
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
@@ -16,6 +27,8 @@ export const users = pgTable('users', {
   firebaseUid: text('firebase_uid'),
   email: text('email').notNull().unique(),
   displayName: text('display_name').notNull(),
+  faculty: text('faculty').notNull().default('Benha University'),
+  profileCompleted: boolean('profile_completed').notNull().default(false),
   passwordHash: text('password_hash'),
   authProvider: text('auth_provider').notNull().default('local'), // 'local' | 'firebase' | 'both' | 'linked'
   tokenVersion: integer('token_version').notNull().default(1),
@@ -32,7 +45,7 @@ export const users = pgTable('users', {
   preferences: text('preferences').notNull().default('{}'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [check('users_faculty_allowed', sql`${table.faculty} = 'Benha University'`)]);
 
 export const passwordResetTokens = pgTable('password_reset_tokens', {
   id: serial('id').primaryKey(),
@@ -155,6 +168,8 @@ export const questions = pgTable('questions', {
   tags: text('tags').notNull().default(''),
   specialTags: text('special_tags').notNull().default(''),
   diagramSvg: text('diagram_svg').notNull().default(''),
+  images: jsonb('images').$type<QuestionImage[]>().notNull().default([]),
+  explanationImages: jsonb('explanation_images').$type<QuestionImage[]>().notNull().default([]),
   pageNumber: integer('page_number'),
   status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'
   version: integer('version').notNull().default(1),
@@ -242,6 +257,28 @@ export const adminAuditLogs = pgTable('admin_audit_logs', {
   details: text('details').notNull().default(''),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+export const questionReports = pgTable('question_reports', {
+  id: serial('id').primaryKey(),
+  userUid: text('user_uid').notNull().references(() => users.uid, { onDelete: 'cascade' }),
+  questionId: integer('question_id').references(() => questions.id, { onDelete: 'set null' }),
+  lectureId: integer('lecture_id').references(() => lectures.id, { onDelete: 'set null' }),
+  reason: text('reason').$type<'wrong_answer' | 'outside_syllabus'>().notNull(),
+  questionText: text('question_text').notNull(),
+  status: text('status').$type<'open' | 'resolved'>().notNull().default('open'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  resolvedBy: text('resolved_by').references(() => users.uid, { onDelete: 'set null' }),
+}, table => [
+  uniqueIndex('uq_question_report_open').on(table.userUid, table.questionId, table.reason).where(sql`${table.status} = 'open'`),
+  index('idx_question_report_status_created').on(table.status, table.createdAt.desc()),
+  index('idx_question_report_question').on(table.questionId),
+  index('idx_question_report_user').on(table.userUid),
+  index('idx_question_report_lecture').on(table.lectureId),
+  index('idx_question_report_resolved_by').on(table.resolvedBy),
+  check('question_report_reason_check', sql`${table.reason} IN ('wrong_answer', 'outside_syllabus')`),
+  check('question_report_status_check', sql`${table.status} IN ('open', 'resolved')`),
+]);
 
 // Relations
 export const modulesRelations = relations(modules, ({ many }) => ({

@@ -115,6 +115,44 @@ function resetTestEnvironment() {
 
 resetTestEnvironment();
 
+test('a temporary startup failure preserves the login and drafts; only explicit retry checks again', async () => {
+  resetTestEnvironment();
+  const token = 'medatlas.saved.session-token';
+  setAuthToken(token);
+  mockLocalStorage['medatlas_session_draft_answers_55'] = '{"answers":{"1":"A"}}';
+  let requests = 0;
+  mockFetchHandler = async () => { requests++; throw new TypeError('Failed to fetch'); };
+  let resolved = false;
+  let stop!: () => void;
+  await new Promise<void>(resolve => {
+    stop = subscribeToAuthChanges(() => { resolved = true; }, undefined, error => {
+      assert.match(error.message, /session is saved/); resolve();
+    });
+  });
+  assert.equal(resolved, false);
+  assert.equal(getAuthToken(), token);
+  assert.equal(mockLocalStorage['medatlas_session_draft_answers_55'], '{"answers":{"1":"A"}}');
+  assert.equal(requests, 1);
+  stop();
+  mockFetchHandler = async () => { requests++; return Response.json({ user: { uid: 'retry-user', displayName: 'Saved Student' }, token }); };
+  let retryStop!: () => void;
+  const user = await new Promise<any>(resolve => { retryStop = subscribeToAuthChanges(resolve); });
+  retryStop();
+  assert.equal(user.uid, 'retry-user');
+  assert.equal(requests, 2);
+});
+
+test('a rejected startup session still clears authentication instead of using a cached profile', async () => {
+  resetTestEnvironment();
+  setAuthToken('medatlas.rejected.session-token');
+  mockFetchHandler = async () => Response.json({ error: 'Unauthorized' }, { status: 401 });
+  let stop!: () => void;
+  const user = await new Promise(resolve => { stop = subscribeToAuthChanges(resolve, undefined, () => assert.fail('401 must not become an offline session')); });
+  stop();
+  assert.equal(user, null);
+  assert.equal(getAuthToken(), null);
+});
+
 test('1. Popup Sign-In Success: Uses public user.getIdToken() and establishes MedAtlas session', async () => {
   resetTestEnvironment();
 

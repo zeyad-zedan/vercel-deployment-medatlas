@@ -582,7 +582,7 @@ Histology,Epithelium,"Which junctional complex anchors epithelial cells to the b
 
   const report = parseAndValidateCsvQuestions(csvWithSpecialTags);
   assert.equal(report.validCount, 1);
-  assert.equal(report.rows[0].specialTags, 'Old Exam,كتاب القسم');
+  assert.equal(report.rows[0].specialTags, 'Old Exam, كتاب القسم');
 
   // 3b. Binary flag columns system: "old exams", "كتاب القسم", "important" taking 0 or 1
   assert.equal(isBinaryFlagTrue('1'), true);

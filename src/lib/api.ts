@@ -1,3 +1,5 @@
+import type { ImportImageFile, QuestionImage } from './question-images.ts';
+import { clearResetSessionStorage } from './session-progress.ts';
 import {
   signInWithPopup,
   signInWithRedirect,
@@ -11,8 +13,16 @@ import { auth, googleAuthProvider } from './firebase.ts';
 const STORAGE_TOKEN_KEY = 'medatlas_session_token';
 const STORAGE_USER_KEY = 'medatlas_cached_user_profile';
 
-let inMemoryAuthToken: string | null =
-  typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_TOKEN_KEY) : null;
+let inMemoryAuthToken: string | null = null;
+try {
+  if (typeof window !== 'undefined') inMemoryAuthToken = window.localStorage.getItem(STORAGE_TOKEN_KEY);
+} catch { /* Storage can be unavailable in private or restricted browsers. */ }
+
+function importRequestBody(payload: unknown): string {
+  const body=JSON.stringify(payload);
+  if(new TextEncoder().encode(body).byteLength>4*1024*1024)throw new Error('This JSON batch is too large to send. Split it into smaller JSON files.');
+  return body;
+}
 
 export function setCachedUserProfile(user: UserProfile | null) {
   if (typeof window === 'undefined') return;
@@ -230,7 +240,8 @@ async function exchangeFirebaseCredentialForSession(
 
 export function subscribeToAuthChanges(
   onUserResolved: (user: UserProfile | null) => void,
-  onRedirectError?: (error: Error) => void
+  onRedirectError?: (error: Error) => void,
+  onSessionUnavailable?: (error: Error) => void
 ): () => void {
   let cancelled = false;
   let hasResolvedAuthenticatedUser = false;
@@ -385,11 +396,13 @@ export function subscribeToAuthChanges(
     } catch (err: any) {
       if (err?.status === 401 || err?.status === 403 || err?.message?.includes('401')) {
         setAuthToken(null);
+        if (!cancelled && !hasResolvedAuthenticatedUser) onUserResolved(null);
       } else {
         console.warn('Error verifying existing MedAtlas session:', err);
-      }
-      if (!cancelled && !hasResolvedAuthenticatedUser) {
-        onUserResolved(null);
+        if (!cancelled && !hasResolvedAuthenticatedUser) {
+          // Retain the token, route and drafts; only a server rejection ends a session.
+          (onSessionUnavailable || onRedirectError)?.(new Error('Could not connect to MedAtlas. Your session is saved. Please retry when your connection returns.'));
+        }
       }
     }
   })();
@@ -446,6 +459,8 @@ export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  faculty?: string;
+  profileCompleted?: boolean;
   authProvider?: string;
   hasPassword?: boolean;
   role: 'student' | 'admin';
@@ -455,6 +470,27 @@ export interface UserProfile {
   preferences: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReviewQuery { page: number; subjectId?: number; status: string }
+
+const bookmarkListeners = new Set<() => void>();
+export function subscribeToBookmarkChanges(listener: () => void): () => void {
+  bookmarkListeners.add(listener);
+  return () => { bookmarkListeners.delete(listener); };
+}
+const pendingBookmarks = new Map<number, Promise<{bookmarked: boolean; questionId: number}>>();
+function saveBookmarkImmediately(questionId: number, note?: string, bookmarked?: boolean) {
+  const pending = pendingBookmarks.get(questionId);
+  if (pending) return pending;
+  const request = apiRequest<{bookmarked: boolean; questionId: number}>('/api/bookmarks/toggle', {
+    method: 'POST', keepalive: true, body: JSON.stringify({questionId, note, bookmarked}),
+  }).then((result) => {
+    for (const listener of bookmarkListeners) listener();
+    return result;
+  }).finally(() => { pendingBookmarks.delete(questionId); });
+  pendingBookmarks.set(questionId, request);
+  return request;
 }
 
 export const api = {
@@ -467,12 +503,12 @@ export const api = {
     }>('/api/catalog'),
 
   // Authentication
-  registerWithEmail: async (email: string, password: string, displayName: string) => {
+  registerWithEmail: async (email: string, password: string, displayName: string, faculty?: string) => {
     const data = await apiRequest<{ token: string; user: UserProfile }>(
       '/api/auth/register',
       {
         method: 'POST',
-        body: JSON.stringify({ email, password, displayName }),
+        body: JSON.stringify({ email, password, displayName, faculty }),
       }
     );
     setAuthToken(data.token);
@@ -640,13 +676,18 @@ export const api = {
   },
 
   getCurrentUser: () =>
-    apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me'),
-
-  updateProfile: (displayName: string, preferences?: Record<string, unknown>) =>
-    apiRequest<{ user: UserProfile }>('/api/auth/profile', {
-      method: 'PUT',
-      body: JSON.stringify({ displayName, preferences }),
+    apiRequest<{ token?: string; user: UserProfile }>('/api/auth/me', {
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(15000) : undefined,
     }),
+
+  updateProfile: async (displayName: string, preferences?: Record<string, unknown>, faculty?: string) => {
+    const data = await apiRequest<{ user: UserProfile }>('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify({ displayName, preferences, faculty }),
+    });
+    setCachedUserProfile(data.user);
+    return data;
+  },
 
   deleteAccount: async () => {
     const res = await apiRequest<{ deleted: boolean }>('/api/auth/account', {
@@ -679,11 +720,16 @@ export const api = {
   }) =>
     apiRequest<{ session: any; shortfallNotice: string | null }>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(params),
+      body: JSON.stringify({ ...params, batchSize: 6 }),
     }),
 
   getSession: (sessionId: number) =>
-    apiRequest<{ session: any }>(`/api/sessions/${sessionId}`),
+    apiRequest<{ session: any }>(`/api/sessions/${sessionId}?batchSize=6`),
+
+  getSessionQuestionBatch: (sessionId: number, offset: number) =>
+    apiRequest<{ session: any }>(`/api/sessions/${sessionId}?batchSize=6&offset=${offset}`, {
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(20000) : undefined,
+    }),
 
   submitQuestionAnswer: (
     sessionId: number,
@@ -719,33 +765,51 @@ export const api = {
   ) =>
     apiRequest<{ session: any }>(`/api/sessions/${sessionId}/complete`, {
       method: 'POST',
-      body: JSON.stringify({ answers, elapsedSeconds }),
+      body: JSON.stringify({ answers, elapsedSeconds, batchSize: 6 }),
     }),
 
   // Bookmarks & Dashboard
   getDashboard: () => apiRequest<any>('/api/dashboard'),
 
-  getBookmarks: () =>
-    apiRequest<{ bookmarks: any[]; answeredQuestions: any[] }>('/api/bookmarks'),
+  getBookmarks: (savedOnly = false, review?: ReviewQuery) => {
+    const query = new URLSearchParams({ view: savedOnly ? 'saved' : review ? 'answered' : 'all', page: String(review?.page || 1), pageSize: '25' });
+    if (review?.subjectId) query.set('subjectId', String(review.subjectId));
+    if (review?.status) query.set('status', review.status);
+    return apiRequest<{ bookmarks: any[]; answeredQuestions: any[]; answeredCount: number; bookmarkCount: number;
+      reviewPagination?: { page: number; pageSize: number; totalCount: number; hasMore: boolean } }>('/api/bookmarks?' + query);
+  },
 
-  toggleBookmark: (questionId: number, note?: string) =>
-    apiRequest<{ bookmarked: boolean; questionId: number }>('/api/bookmarks/toggle', {
-      method: 'POST',
-      body: JSON.stringify({ questionId, note }),
+  toggleBookmark: saveBookmarkImmediately,
+
+  reportQuestion: (questionId: number, reason: import('./question-reports.ts').QuestionReportReason) =>
+    apiRequest<{ reported: boolean; alreadyReported: boolean }>('/api/question-reports', {
+      method: 'POST', body: JSON.stringify({ questionId, reason }),
     }),
 
-  resetLectureProgress: (lectureId: number) =>
-    apiRequest<{
+  getQuestionReports: () => apiRequest<{ reports: import('./question-reports.ts').QuestionReportItem[]; totalOpen: number }>('/api/admin/question-reports'),
+
+  resolveQuestionReport: (reportId: number) => apiRequest<{ resolved: boolean }>(`/api/admin/question-reports/${reportId}/resolve`, { method: 'POST' }),
+
+  resetLectureProgress: async (lectureId: number) => {
+    const result = await apiRequest<{
       success: boolean;
       message: string;
       lectureId: number;
       lectureTitle: string;
+      resetSessionIds?: number[];
     }>(`/api/lectures/${lectureId}/reset`, {
       method: 'POST',
-    }),
+    });
+    if (result.success) clearResetSessionStorage(result.resetSessionIds || []);
+    return result;
+  },
 
   // Administrator Operations
   getAdminOverview: () => apiRequest<any>('/api/admin/overview'),
+  setDocumentWatermarks: (watermarksEnabled: boolean) =>
+    apiRequest<{documentSecurity:{watermarksEnabled:boolean}}>('/api/admin/document-security', {
+      method:'PUT', body:JSON.stringify({watermarksEnabled}),
+    }),
   getEgressStatus: () => apiRequest<any>('/api/admin/egress-status'),
   setEgressFallback: (forceFallback: boolean | null) =>
     apiRequest<any>('/api/admin/egress-fallback', {
@@ -927,6 +991,20 @@ export const api = {
       reader.readAsDataURL(fileOrUrl);
     });
   },
+
+  uploadQuestionImage: async (file: File): Promise<QuestionImage> => {
+    const token=getAuthToken();
+    const response=await fetch('/api/admin/import/image?name='+encodeURIComponent(file.name),{
+      method:'POST',headers:{'Content-Type':'application/octet-stream',...(token?{Authorization:`Bearer ${token}`}:{})},body:file,
+    });
+    const result=await response.json().catch(()=>({error:'Image upload failed. Please retry.'}));
+    if(!response.ok)throw new Error(result.error || 'Image upload failed.');
+    return result;
+  },
+  previewJsonImport: (jsonContent:string,targetLectureId?:number,imageFiles:ImportImageFile[]=[]) =>
+    apiRequest<any>('/api/admin/import/preview',{method:'POST',body:importRequestBody({jsonContent,targetLectureId,imageFiles})}),
+  executeJsonImport: (fileName:string,jsonContent:string,targetLectureId:number|undefined,rowOverrides:Record<number,{specialTags?:string;tags?:string}>|undefined,imageFiles:ImportImageFile[],uploadedImages:Record<string,QuestionImage>) =>
+    apiRequest<any>('/api/admin/import/execute',{method:'POST',body:importRequestBody({fileName,jsonContent,targetLectureId,rowOverrides,imageFiles,uploadedImages})}),
 
   previewCsvImport: (csvContent: string, targetLectureId?: number) =>
     apiRequest<any>('/api/admin/import/preview', {

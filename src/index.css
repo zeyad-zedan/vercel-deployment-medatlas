@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./styles/design-system.css";
 
 @layer base {
   :root {
@@ -9,8 +10,8 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #F8FAFC;
-    color: #0F172A;
+    background-color: var(--ma-canvas);
+    color: var(--ma-ink);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
@@ -24,7 +25,7 @@
 }
 
 .font-mono-tabular {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
 }
 

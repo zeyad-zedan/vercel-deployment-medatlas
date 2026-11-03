@@ -68,6 +68,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
       setSelectedLectureId(availableLectures[0].id);
     }
     setSelectedFile(null);
+    setManualUrl(''); setUseManualUrl(false); setShowPreviewModal(false);
     setErrorMsg(null);
     setSuccessInfo(null);
   }, [targetLecture, isOpen]);
@@ -83,6 +84,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
   const handleFileSelect = (file: File) => {
     setErrorMsg(null);
     setSuccessInfo(null);
+    setSelectedFile(null);
 
     if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
       setErrorMsg('Invalid file format. Please select a valid PDF file (.pdf).');
@@ -121,7 +123,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
     }
 
     if (useManualUrl && !manualUrl.trim()) {
-      setErrorMsg('Please enter a valid PDF URL.');
+      setErrorMsg('Please enter an existing protected document reference.');
       return;
     }
 
@@ -131,16 +133,18 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
     try {
       if (useManualUrl) {
         const res = await api.attachPdfToLecture(currentLecture.id, manualUrl.trim());
+        if (!res.url) throw new Error('The protected document reference was not returned.');
         setSuccessInfo({
-          url: res.url || manualUrl.trim(),
+          url: res.url,
           fileName: manualUrl.trim().split('/').pop() || 'lecture.pdf',
           lectureTitle: res.lecture?.title || currentLecture.title,
         });
         if (onSuccess) onSuccess(res.lecture);
       } else if (selectedFile) {
         const res = await api.attachPdfToLecture(currentLecture.id, selectedFile);
+        if (!res.url) throw new Error('The protected document reference was not returned.');
         setSuccessInfo({
-          url: res.url || `/lectures/${selectedFile.name}`,
+          url: res.url,
           fileName: selectedFile.name,
           lectureTitle: res.lecture?.title || currentLecture.title,
         });
@@ -168,11 +172,11 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
         aria-labelledby="upload-pdf-modal-title"
         className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto"
       >
-        <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in duration-200">
+        <div className="bg-white rounded-2xl max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in duration-200">
           {/* Header */}
           <div className="flex items-start justify-between border-b border-slate-100 pb-3.5">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-sky-50 text-[#0284C7] border border-sky-100">
+              <div className="p-2.5 rounded-xl bg-sky-50 text-[var(--ma-brand)] border border-sky-100">
                 <Upload className="w-5 h-5" />
               </div>
               <div>
@@ -226,7 +230,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowPreviewModal(true)}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl transition-colors cursor-pointer shadow-xs"
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-xl transition-colors cursor-pointer shadow-xs"
                 >
                   <Eye className="w-4 h-4" />
                   <span>Preview Attached PDF</span>
@@ -264,7 +268,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                       setSelectedFile(null);
                       setErrorMsg(null);
                     }}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                   >
                     {availableLectures.map((l) => (
                       <option key={l.id} value={l.id}>
@@ -309,27 +313,27 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                     setUseManualUrl(!useManualUrl);
                     setErrorMsg(null);
                   }}
-                  className="font-semibold text-[#0284C7] hover:underline cursor-pointer"
+                  className="font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
                 >
-                  {useManualUrl ? 'Switch to File Upload' : 'Enter existing PDF URL'}
+                  {useManualUrl ? 'Switch to File Upload' : 'Use existing protected document'}
                 </button>
               </div>
 
               {useManualUrl ? (
                 <div>
                   <label htmlFor="manual-pdf-url" className="block font-semibold text-slate-700 mb-1">
-                    Direct PDF URL / Path
+                    Protected document reference
                   </label>
                   <input
                     id="manual-pdf-url"
                     type="text"
                     value={manualUrl}
                     onChange={(e) => setManualUrl(e.target.value)}
-                    placeholder="e.g. /lectures/my-custom-lecture.pdf"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#0284C7]"
+                    placeholder="Paste an existing /api/documents/ reference"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
                   />
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Enter a relative path or HTTPS URL pointing to a valid PDF document.
+                    Use a document already uploaded to Telegram. External PDF links are blocked.
                   </p>
                 </div>
               ) : (
@@ -345,7 +349,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                     onClick={() => fileInputRef.current?.click()}
                     className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
                       isDragOver
-                        ? 'border-[#0284C7] bg-sky-50/60'
+                        ? 'border-[var(--ma-brand)] bg-sky-50/60'
                         : selectedFile
                         ? 'border-emerald-300 bg-emerald-50/30'
                         : 'border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50'
@@ -373,13 +377,13 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                         <p className="text-[11px] text-slate-500 font-mono-tabular">
                           {(selectedFile.size / 1024).toFixed(0)} KB · Ready to attach
                         </p>
-                        <span className="text-[11px] text-[#0284C7] font-semibold hover:underline block pt-1">
+                        <span className="text-[11px] text-[var(--ma-brand)] font-semibold hover:underline block pt-1">
                           Click to select a different file
                         </span>
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        <div className="w-10 h-10 mx-auto rounded-full bg-sky-100 text-[#0284C7] flex items-center justify-center">
+                        <div className="w-10 h-10 mx-auto rounded-full bg-sky-100 text-[var(--ma-brand)] flex items-center justify-center">
                           <Upload className="w-5 h-5" />
                         </div>
                         <div>
@@ -409,7 +413,7 @@ export const UploadPdfModal: React.FC<UploadPdfModalProps> = ({
                 <button
                   type="submit"
                   disabled={isUploading || (!useManualUrl && !selectedFile) || (useManualUrl && !manualUrl.trim())}
-                  className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
+                  className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-xs cursor-pointer"
                 >
                   {isUploading ? (
                     <>

@@ -194,11 +194,11 @@ function escapePdf(text: string): string {
 }
 
 /**
- * Ensures all sample lecture PDFs are generated and stored in public/lectures.
+ * Keep development sample originals outside static assets.
  */
 export function ensureSamplePdfsExist(): void {
-  const publicDir = path.resolve(process.cwd(), 'public');
-  const lecturesDir = path.join(publicDir, 'lectures');
+  const publicDir = path.resolve(process.cwd(), 'private');
+  const lecturesDir = path.join(publicDir, 'lecture-originals');
 
   if (!fs.existsSync(publicDir)) {
     fs.mkdirSync(publicDir, { recursive: true });

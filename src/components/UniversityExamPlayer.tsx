@@ -1,3 +1,13 @@
+import { useSessionImagePrefetch } from './QuestionImages.tsx';
+import { useSessionBatches } from '../lib/use-session-batches.ts';
+import { QuestionBatchStatus } from './QuestionBatchStatus.tsx';
+import { QuestionImages } from './QuestionImages.tsx';
+import { QuestionReportButton } from './QuestionReportButton.tsx';
+import { BookmarkButton } from './BookmarkButton.tsx';
+import { AnswerSaveStatus } from './AnswerSaveStatus.tsx';
+import { useAnswerSaving } from '../lib/use-answer-saving.ts';
+import { getResumeQuestionIndex, rememberSessionQuestion } from '../lib/session-progress.ts';
+import type { OptionKey } from '../lib/mcq-engine.ts';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
@@ -33,14 +43,23 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   api,
 }) => {
   const [session, setSession] = useState<any>(initialSession);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const [localSelections, setLocalSelections] = useState<Record<number, string>>({});
+  useSessionImagePrefetch(session.questions);
+  const saves = useAnswerSaving(session, () => {});
+  const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
+  const batches = useSessionBatches(session, setSession, currentIndex, api, session.status !== 'completed');
+  const [localSelections, setLocalSelections] = useState<Record<number, string>>(() => ({
+    ...Object.fromEntries((initialSession.questions || []).filter((q: any) => q.selectedDisplayed).map((q: any) => [q.id, q.selectedDisplayed])),
+    ...saves.drafts,
+  }));
   const [markedForReview, setMarkedForReview] = useState<Set<number>>(new Set());
-  const [visitedQuestionIds, setVisitedQuestionIds] = useState<Set<number>>(new Set([0]));
+  const [visitedQuestionIds, setVisitedQuestionIds] = useState<Set<number>>(() =>
+    new Set(initialSession.questions?.[0]?.id ? [initialSession.questions[0].id] : [])
+  );
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(1); // 0: 13px, 1: 15px, 2: 18px, 3: 21px
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [endScreenOpen, setEndScreenOpen] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [autosaveError, setAutosaveError] = useState<string | null>(null);
   const [resultsFilter, setResultsFilter] = useState<'all' | 'correct' | 'wrong' | 'notanswered'>('all');
   const [reviewingQuestion, setReviewingQuestion] = useState<any | null>(null);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
@@ -53,18 +72,10 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   const totalQuestions = questions.length;
   const currentQ = questions[currentIndex] || null;
 
-  // Initialize selections from session state
-  const localSelectionsRef = useRef<Record<number, string>>({});
+  const localSelectionsRef = useRef(localSelections);
   useEffect(() => {
-    const initial: Record<number, string> = {};
-    for (const q of questions) {
-      if (q.selectedDisplayed) {
-        initial[q.id] = q.selectedDisplayed;
-      }
-    }
-    setLocalSelections(initial);
-    localSelectionsRef.current = initial;
-  }, [session.id]);
+    if (currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
+  }, [session.id, currentQ?.id, currentIndex]);
 
   // Track visited questions
   useEffect(() => {
@@ -137,14 +148,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
       return next;
     });
 
-    // Persist answer to server immediately (unlocked so student can change before submitting)
-    if (api.submitQuestionAnswer) {
-      api
-        .submitQuestionAnswer(session.id, currentQ.id, key, false)
-        .catch((err: any) => {
-          console.warn('Failed to autosave answer:', err);
-        });
-    }
+    saves.save(currentQ.id, key as OptionKey);
 
     onQuestionAnswered?.(session.id, currentQ.id, key);
   };
@@ -183,10 +187,12 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
           ? Math.max(0, session.timeLimitSeconds - rem)
           : 60;
       const res = await api.completeSession(session.id, localSelectionsRef.current, elapsed);
+      saves.finish();
       setSession(res.session);
       onSessionCompleted(res.session);
       setEndScreenOpen(true);
     } catch (err: any) {
+      setAutosaveError(err.message || 'Could not submit the exam. Please retry.');
       console.error('Failed to complete exam:', err);
       completingRef.current = false;
     } finally {
@@ -230,7 +236,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Header */}
           <div className="text-center space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-[#15616d]">
+            <h1 className="text-2xl sm:text-3xl font-bold text-[var(--ma-brand-hover)]">
               Examination Performance &amp; Evaluation
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 font-mono-tabular">
@@ -334,6 +340,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             </div>
           </div>
 
+          {batches.error && <QuestionBatchStatus error={batches.error} retry={batches.retry}/>}
           {/* Filter Tabs */}
           <div className="flex items-center justify-center gap-2 flex-wrap pt-2">
             {[
@@ -348,7 +355,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                 onClick={() => setResultsFilter(tab.id as any)}
                 className={`px-4 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer border ${
                   resultsFilter === tab.id
-                    ? 'bg-[#159f98] text-white border-[#159f98]'
+                    ? 'bg-[var(--ma-brand)] text-white border-[var(--ma-brand)]'
                     : 'bg-white text-slate-700 border-[#cfdbe4] hover:bg-slate-50'
                 }`}
               >
@@ -405,7 +412,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4 max-w-xs font-semibold text-slate-800">
-                        <div className="line-clamp-2">{q.questionText}</div>
+                        <div className="line-clamp-2">{q.questionText || `Question ${originalIdx + 1} — open Review to load`}</div>
                         {parseAllQuestionTags(q.tags, q.specialTags).length > 0 && (
                           <div className="flex flex-wrap items-center gap-1 mt-1">
                             {parseAllQuestionTags(q.tags, q.specialTags).map((tagItem) => (
@@ -414,10 +421,10 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border ${
                                   tagItem.isSpecial
                                     ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
-                                    : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                                    : 'font-medium bg-teal-50 text-[var(--ma-brand-hover)] border-teal-200'
                                 }`}
                               >
-                                <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                                <Tag className={`w-2.5 h-2.5 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[var(--ma-brand-hover)]'}`} />
                                 {tagItem.label}
                               </span>
                             ))}
@@ -439,7 +446,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       <td className="py-3 px-4 text-right">
                         <button
                           type="button"
-                          onClick={() => setReviewingQuestion(q)}
+                          onClick={async () => { const loaded = await batches.ensure(originalIdx); if (loaded) setReviewingQuestion(loaded); }}
                           className="px-3 py-1 bg-[#eef5f8] hover:bg-[#dcf0ee] text-[#159f98] font-bold text-xs rounded transition-colors cursor-pointer"
                         >
                           Review
@@ -470,7 +477,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-auto p-6 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-bold text-[#15616d] text-base">
+                  <h3 className="font-bold text-[var(--ma-brand-hover)] text-base">
                     Question Breakdown &amp; Analysis
                   </h3>
                   {parseAllQuestionTags(reviewingQuestion.tags, reviewingQuestion.specialTags).map((tagItem) => (
@@ -479,10 +486,10 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border ${
                         tagItem.isSpecial
                           ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
-                          : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                          : 'font-medium bg-teal-50 text-[var(--ma-brand-hover)] border-teal-200'
                       }`}
                     >
-                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[var(--ma-brand-hover)]'}`} />
                       {tagItem.label}
                     </span>
                   ))}
@@ -495,6 +502,8 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               <div className="font-semibold text-slate-900 text-sm leading-relaxed">
                 {reviewingQuestion.questionText}
               </div>
+              <QuestionImages images={reviewingQuestion.images}/>
+                  <QuestionReportButton key={reviewingQuestion.id} questionId={reviewingQuestion.id}/>
 
               <div className="space-y-2">
                 {(['A', 'B', 'C', 'D'] as const).map((key) => {
@@ -544,6 +553,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <p className="text-slate-700 leading-relaxed font-sans">
                     {reviewingQuestion.explanation}
                   </p>
+                  <QuestionImages images={reviewingQuestion.explanationImages}/>
                 </div>
               )}
 
@@ -597,7 +607,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
     return (
       <div className="fixed inset-0 bg-white z-50 flex items-center justify-center font-sans p-6">
         <div className="max-w-md w-full text-center space-y-8">
-          <div className="w-16 h-16 rounded-full bg-[#159f98]/10 text-[#159f98] flex items-center justify-center mx-auto">
+          <div className="w-16 h-16 rounded-full bg-[var(--ma-brand)]/10 text-[#159f98] flex items-center justify-center mx-auto">
             <CheckCircle2 className="w-10 h-10" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
@@ -606,13 +616,22 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
           <button
             type="button"
             onClick={() => setEndScreenOpen(false)}
-            className="px-8 py-3.5 bg-[#159f98] hover:bg-[#128c85] text-white font-bold text-base rounded shadow-md transition-all cursor-pointer"
+            className="px-8 py-3.5 bg-[var(--ma-brand)] hover:bg-[#128c85] text-white font-bold text-base rounded shadow-md transition-all cursor-pointer"
           >
             Show Results
           </button>
         </div>
       </div>
     );
+  }
+
+  if (currentQ?.contentLoaded === false) {
+    return <div className="ma-dashboard-panel my-6 space-y-4">
+      <h2 className="font-semibold">Question {currentIndex + 1} of {totalQuestions} · Time left: {formatTime(remainingSeconds ?? 0)}</h2>
+      <QuestionBatchStatus error={batches.error} retry={batches.retry}/>
+      <button type="button" className="mr-4 font-semibold underline" onClick={() => setCurrentIndex(Math.max(0, questions.findIndex((q: any) => q.contentLoaded !== false)))}>Back to loaded questions</button>
+      <button type="button" className="font-semibold underline" onClick={onExit}>Return to Dashboard</button>
+    </div>;
   }
 
   // --------------------------------------------------------------------------
@@ -622,10 +641,13 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   const isWarningTime = remainingSeconds !== null && remainingSeconds <= 300; // <= 5 minutes
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-2 sm:p-4 font-sans select-none">
-      <div className="w-full max-w-[1200px] h-[calc(100vh-24px)] max-h-[920px] bg-white border border-[#aaa] shadow-lg flex flex-col overflow-hidden">
+    <div className="ma-exam-player flex flex-col items-center p-0 font-sans">
+      <div className="ma-exam-shell w-full max-w-[1200px] min-h-[620px] lg:h-[calc(100dvh-124px)] lg:max-h-[920px] bg-white flex flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-slate-100 bg-white px-4 py-2"><AnswerSaveStatus status={saves.status} unsavedCount={saves.unsavedCount} retry={saves.retry}/></div>
+        {batches.error && <QuestionBatchStatus error={batches.error} retry={batches.retry}/>}
+        {autosaveError && <div role="alert" className="shrink-0 bg-amber-50 p-3 text-xs text-amber-900">{autosaveError}</div>}
         {/* Topbar: Teal #08a39d */}
-        <div className="h-[34px] shrink-0 bg-[#08a39d] text-white flex items-center justify-between px-3.5 text-xs font-semibold gap-3">
+        <div className="ma-exam-topbar shrink-0 bg-[var(--ma-brand)] text-white flex items-center justify-between px-3.5 text-xs font-semibold gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
@@ -638,17 +660,21 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             </button>
             <span className="truncate">{session.title}</span>
           </div>
-          <span className="shrink-0 bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider">
+          <span className="hidden lg:inline shrink-0 bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider">
             Exam Live
+          </span>
+          <span className={`lg:hidden shrink-0 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-bold tabular-nums ${isWarningTime ? 'text-amber-200' : ''}`} aria-label="Time remaining">
+            <Clock className="mr-1.5 inline h-3.5 w-3.5" aria-hidden="true" />
+            {remainingSeconds !== null ? formatTime(remainingSeconds) : '—'}
           </span>
         </div>
 
         {/* Content Layout: Main (left) + Sidebar (right) */}
         <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
           {/* Main Area */}
-          <section className="flex-1 min-w-0 border-r border-[#aaa] flex flex-col min-h-0">
+          <section className="flex-1 min-w-0 lg:border-r border-slate-200 flex flex-col min-h-[420px] lg:min-h-0">
             {/* Status strip */}
-            <div className="h-7 shrink-0 bg-[#e8eef7] border-b border-[#b8c6d8] px-3 py-1.5 text-[11px] text-[#444] font-medium flex items-center justify-between">
+            <div className="ma-exam-status shrink-0 border-b px-4 py-2 text-xs font-medium flex items-center justify-between">
               <div>
                 Total questions in exam: <b>{totalQuestions}</b> | Answered:{' '}
                 <b className="text-[#20a95b]">{answeredCount}</b>
@@ -672,11 +698,11 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] border shadow-2xs ${
                         tagItem.isSpecial
                           ? 'font-bold bg-amber-100 text-amber-800 border-amber-300'
-                          : 'font-medium bg-teal-50 text-[#15616d] border-teal-200'
+                          : 'font-medium bg-teal-50 text-[var(--ma-brand-hover)] border-teal-200'
                       }`}
                       title={tagItem.isSpecial ? `Special Source Label: ${tagItem.label}` : `Tag: ${tagItem.label}`}
                     >
-                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[#15616d]'}`} />
+                      <Tag className={`w-3 h-3 shrink-0 ${tagItem.isSpecial ? 'text-amber-600' : 'text-[var(--ma-brand-hover)]'}`} />
                       {tagItem.label}
                     </span>
                   ))}
@@ -685,7 +711,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => setFontSizeLevel((prev) => Math.max(0, prev - 1))}
-                    className="w-7 h-6 flex items-center justify-center bg-[#159aa5] text-white hover:brightness-95 border border-[#159aa5] rounded-xs cursor-pointer font-sans"
+                    className="w-7 h-6 flex items-center justify-center bg-[var(--ma-brand)] text-white hover:brightness-95 border border-[var(--ma-brand)] rounded-xs cursor-pointer font-sans"
                     title="Decrease font size"
                   >
                     A<sup className="text-[9px]">-</sup>
@@ -693,7 +719,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => setFontSizeLevel(1)}
-                    className="w-7 h-6 flex items-center justify-center bg-[#159aa5] text-white hover:brightness-95 border border-[#159aa5] rounded-xs cursor-pointer font-sans"
+                    className="w-7 h-6 flex items-center justify-center bg-[var(--ma-brand)] text-white hover:brightness-95 border border-[var(--ma-brand)] rounded-xs cursor-pointer font-sans"
                     title="Reset font size"
                   >
                     A
@@ -701,7 +727,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => setFontSizeLevel((prev) => Math.min(3, prev + 1))}
-                    className="w-7 h-6 flex items-center justify-center bg-[#159aa5] text-white hover:brightness-95 border border-[#159aa5] rounded-xs cursor-pointer font-sans"
+                    className="w-7 h-6 flex items-center justify-center bg-[var(--ma-brand)] text-white hover:brightness-95 border border-[var(--ma-brand)] rounded-xs cursor-pointer font-sans"
                     title="Increase font size"
                   >
                     A<sup className="text-[9px]">+</sup>
@@ -713,12 +739,16 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               <div className="flex-1 min-h-0 overflow-y-auto pr-1">
                 {currentQ ? (
                   <div className="space-y-4">
+                    <BookmarkButton key={currentQ.id} questionId={currentQ.id} saved={Boolean(currentQ.isBookmarked)}
+                      onSaved={(saved) => setSession((prev: any) => ({...prev, questions: prev.questions.map((q: any) => q.id === currentQ.id ? {...q,isBookmarked:saved} : q)}))}/>
+                    <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>
                     <div
                       className="font-semibold text-slate-900 leading-relaxed"
                       style={{ fontSize: currentFontSize }}
                     >
                       {currentQ.questionText}
                     </div>
+                    <QuestionImages images={currentQ.images}/>
 
                     <div className="space-y-3 pt-2">
                       {(['A', 'B', 'C', 'D'] as const).map((key) => {
@@ -729,10 +759,9 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                         return (
                           <label
                             key={key}
-                            onClick={() => handleSelectOption(key)}
                             className={`flex items-start gap-3 p-3 rounded-lg border transition-all cursor-pointer ${
                               isSelected
-                                ? 'bg-sky-50/80 border-[#08a39d] text-slate-900 font-semibold shadow-xs'
+                                ? 'bg-sky-50/80 border-[var(--ma-brand)] text-slate-900 font-semibold shadow-xs'
                                 : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800'
                             }`}
                             style={{ fontSize: currentOptionFontSize }}
@@ -742,7 +771,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                               name={`exam_q_${currentQ.id}`}
                               checked={isSelected}
                               onChange={() => handleSelectOption(key)}
-                              className="mt-1 accent-[#08a39d] cursor-pointer"
+                              className="mt-1 accent-[var(--ma-brand)] cursor-pointer"
                             />
                             <span className="font-bold text-slate-700 font-mono-tabular shrink-0">
                               {key}.
@@ -756,14 +785,10 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                 ) : null}
               </div>
 
-              {/* Watermark: Subtle diagonal rotated Exam Simulation */}
-              <div className="absolute inset-x-4 inset-y-16 pointer-events-none opacity-[0.035] flex items-center justify-center text-5xl font-extrabold uppercase text-slate-900 select-none -rotate-12">
-                Exam Simulation
-              </div>
             </div>
 
             {/* Bottom Actions */}
-            <div className="h-12 shrink-0 border-t border-[#aaa] flex items-center justify-between px-3 bg-white">
+            <div className="shrink-0 border-t border-slate-200 flex flex-wrap gap-2 items-center justify-between p-3 bg-white">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -776,26 +801,27 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                 <button
                   type="button"
                   onClick={handleSaveNext}
-                  className="px-4 py-1.5 bg-[#2d9c96] hover:brightness-95 text-white text-xs rounded-xs font-semibold cursor-pointer shadow-xs"
+                  className="px-4 py-1.5 bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] text-white text-xs rounded-lg font-semibold cursor-pointer shadow-xs"
                 >
-                  {currentIndex === totalQuestions - 1 ? 'Save & Review' : 'Save & Next'}
+                  {currentIndex === totalQuestions - 1 ? 'Review & submit' : 'Next'}
                 </button>
               </div>
 
               {/* Mark for Review Toggle */}
               {currentQ && (
                 <label
-                  className="inline-flex items-center gap-2 px-2.5 py-1 bg-[#159aa5] text-white text-xs font-medium rounded-xs cursor-pointer select-none hover:brightness-95"
+                  className="inline-flex min-h-9 items-center gap-2 px-2.5 py-1 border border-slate-300 text-slate-700 text-xs font-medium rounded-lg cursor-pointer select-none hover:bg-slate-50 focus-within:ring-2 focus-within:ring-[var(--ma-brand)]"
                   title="Mark or unmark this question for review"
                 >
                   <input
                     type="checkbox"
                     checked={markedForReview.has(currentQ.id)}
                     onChange={() => toggleMarkForReview(currentQ.id)}
-                    className="hidden"
+                    className="sr-only"
                   />
                   <span
-                    className={`w-3 h-3 rounded-xs border border-white flex items-center justify-center ${
+                    aria-hidden="true"
+                    className={`w-3 h-3 rounded-xs border border-slate-400 flex items-center justify-center ${
                       markedForReview.has(currentQ.id) ? 'bg-[#7855b8]' : 'bg-white'
                     }`}
                   >
@@ -810,7 +836,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
           </section>
 
           {/* Right Sidebar */}
-          <aside className="w-full lg:w-[230px] shrink-0 bg-[#e9f0fb] p-3 text-[11px] flex flex-col justify-between overflow-y-auto min-h-0 border-t lg:border-t-0 border-[#aaa]">
+          <aside className="ma-exam-sidebar w-full lg:w-[250px] shrink-0 p-4 text-xs flex flex-col justify-between overflow-y-auto min-h-0 border-t lg:border-t-0">
             <div>
               {/* Timer Header */}
               <div className="font-bold text-right text-slate-800 text-xs">
@@ -825,7 +851,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               </div>
 
               {/* Total & Answered Info Box */}
-              <div className="bg-[#dce8f8] border border-[#bdcde1] p-2.5 rounded mb-3 space-y-1 text-slate-800">
+              <div className="bg-white border border-slate-200 p-2.5 rounded mb-3 space-y-1 text-slate-800">
                 <div>
                   Number of questions: <b className="font-mono-tabular">{totalQuestions}</b>
                 </div>
@@ -887,7 +913,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       onClick={() => setCurrentIndex(idx)}
                       className={`aspect-square border rounded-xs font-bold text-[10px] flex items-center justify-center transition-all cursor-pointer font-mono-tabular ${bgClass} ${
                         isCurrent
-                          ? 'ring-2 ring-[#08a39d] ring-offset-1 scale-105 z-10 font-extrabold'
+                          ? 'ring-2 ring-[var(--ma-brand)] ring-offset-1 scale-105 z-10 font-extrabold'
                           : 'hover:opacity-90'
                       }`}
                     >

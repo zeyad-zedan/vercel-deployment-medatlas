@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Upload PDFs · MedAtlas</title>
+  <link rel="stylesheet" href="/mcq-assets/styles.css"><link rel="stylesheet" href="/pdf-assets/styles.css">
+  <script type="module" src="/pdf-assets/client.js"></script>
+</head>
+<body>
+  <header class="portal-bar"><div class="portal-bar-inner"><a class="wordmark" href="/">MedAtlas <span>Uploads</span></a><nav aria-label="Portal sections"><a href="/" aria-current="page">PDFs</a><a href="/mcqs">MCQs</a></nav></div></header>
+  <main class="workspace pdf-workspace">
+    <header class="page-header">
+      <h1>Upload PDFs</h1><p>Attach or replace a lecture’s slide deck.</p>
+    </header>
+    <div class="library-summary" aria-label="PDF library overview">
+      <span><strong id="total-count">—</strong> lectures</span><span><strong id="attached-count">—</strong> PDFs attached</span><span><strong id="missing-count">—</strong> awaiting a PDF</span>
+    </div>
+    <div id="status" role="status" aria-live="polite" hidden></div>
+    <section class="card compression-card">
+      <div class="section-heading"><h2>Compression</h2><label class="compression-toggle"><input type="checkbox" id="compression" checked><span>Compress before uploading</span></label></div>
+      <details class="compression-settings"><summary>Quality and balance</summary>
+        <div class="compression-controls"><div><label for="compression-level">Compression quality</label><select id="compression-level"><option value="recommended">Balanced · recommended</option><option value="low">Light · highest image quality</option><option value="extreme">Strong · smallest file size</option></select></div><div class="compression-status"><span id="compression-status">Checking compression configuration…</span><button id="check-compression" type="button" class="button subtle">Check balance</button></div></div>
+        <p class="hint">The final PDF must be under 50 MB. If compression fails, the original is used when it fits.</p>
+      </details>
+    </section>
+    <section class="library" aria-labelledby="library-title">
+      <div class="section-heading"><h2 id="library-title">Lectures</h2><div class="actions"><button id="share" class="button secondary" type="button">Open on another device</button><button id="refresh" class="button subtle" type="button">Refresh</button></div></div>
+      <div class="card library-filters"><div class="search-field"><label for="search">Find a lecture</label><input id="search" type="search" placeholder="Search by lecture, subject, or number…"></div><div><label for="subject">Subject</label><select id="subject"><option value="all">All subjects</option></select></div><div><label for="pdf-status">PDF status</label><select id="pdf-status"><option value="all">All lectures</option><option value="missing">Awaiting a PDF</option><option value="attached">PDF attached</option></select></div></div>
+      <p id="results-count" class="results-count" aria-live="polite">Loading your lecture library…</p>
+      <div id="lectures" class="subject-list"></div>
+    </section>
+    <footer>PDF files are stored on Telegram.</footer>
+  </main>
+  <dialog id="share-dialog" aria-labelledby="share-title"><div class="section-heading"><h2 id="share-title">Continue on your phone or tablet</h2><button id="share-close" class="button subtle" type="button" aria-label="Close sharing panel">✕</button></div><p id="share-instructions">Scan this code or copy the current portal link.</p><canvas id="qr-canvas" aria-label="QR code for this upload portal"></canvas><p id="share-link" class="share-link"></p><button id="copy-link" type="button" class="button primary">Copy portal link</button><p class="hint">Anyone with this link can use the upload portal.</p></dialog>
+</body>
+</html>

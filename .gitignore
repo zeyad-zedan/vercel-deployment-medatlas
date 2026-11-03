@@ -13,11 +13,22 @@ backups/
 *.dump
 *.sql.gz
 *.enc
-tools/
+tools/*
+!tools/mcq-portal.ts
+!tools/mcq-portal-client.ts
+!tools/mcq-portal.html
+!tools/mcq-portal.css
+!tools/pdf-portal.ts
+!tools/pdf-portal-client.ts
+!tools/pdf-portal.html
+!tools/pdf-portal.css
 start-pdf-tool.bat
 start-remote-tunnel.bat
 *.bat
 public/lectures/*.pdf
+private/
 .egress-tracker.json
+supabase/.temp/
+.vercel/
 
 

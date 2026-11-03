@@ -1,0 +1,25 @@
+{
+  "subject": "Histology",
+  "lecture": "Cell structure",
+  "questions": [
+    {
+      "question_text": "Which organelle modifies and sorts proteins for secretion?",
+      "options": {
+        "A": "Rough endoplasmic reticulum",
+        "B": "Golgi apparatus",
+        "C": "Peroxisome",
+        "D": "Smooth endoplasmic reticulum"
+      },
+      "correct_answer": "B",
+      "explanation": "The Golgi apparatus modifies and sorts proteins for secretion.",
+      "difficulty": "Medium",
+      "tags": [
+        "Cell biology"
+      ],
+      "special_tags": [
+        "Important"
+      ],
+      "status": "published"
+    }
+  ]
+}

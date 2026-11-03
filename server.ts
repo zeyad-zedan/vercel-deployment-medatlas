@@ -1,7 +1,12 @@
+import { getSampleJsonTemplate } from './src/lib/json-import.ts';
+import { protectQuestionImageFields, uploadQuestionImage, imageForStorage, fetchQuestionImage } from './src/lib/telegram-question-images.ts';
+import { validImageFileName } from './src/lib/question-images.ts';
 import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
+import { protectDocumentFields, documentReferenceForStorage } from './src/lib/protected-document-reference.ts';
+import { createProtectedDocumentRouter } from './src/middleware/protected-documents.ts';
 import {
   requireAuth,
   type AuthRequest,
@@ -41,6 +46,9 @@ import {
   completeExamSession,
   toggleBookmarkForStudent,
   getStudentBookmarksAndReview,
+  reportQuestionForStudent,
+  getQuestionReportsForAdmin,
+  resolveQuestionReportAdmin,
   getStudentDashboardAnalytics,
   getAdminDashboardData,
   upsertModuleAdmin,
@@ -60,7 +68,9 @@ import {
   executeCsvImportAdmin,
   exportQuestionBankCsvAdmin,
   saveUploadedPdfFileAdmin,
-  getPdfTelegramMetadataByUrl,
+  getProtectedPdfMetadata,
+  getDocumentSecuritySettings,
+  setDocumentWatermarksEnabled,
   attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
 import { pool, isDatabaseConfigured } from './src/db/index.ts';
@@ -73,7 +83,6 @@ import {
 } from './src/lib/telegram-storage.ts';
 import {
   isPlanBActive,
-  recordPdfEgress,
   getEgressStatus,
   setPlanBOverride,
 } from './src/lib/egress-monitor.ts';
@@ -100,62 +109,29 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Small bounded in-memory cache for PDFs fetched from Telegram (warm serverless instances reuse it,
-// avoiding repeated Telegram round-trips). Capped by total bytes.
-const PDF_CACHE_MAX_BYTES = 40 * 1024 * 1024;
-const pdfBufferCache = new Map<string, { buffer: Buffer; contentType: string }>();
-let pdfBufferCacheBytes = 0;
-
-function cachePdfBuffer(key: string, buffer: Buffer, contentType: string) {
-  if (buffer.length > PDF_CACHE_MAX_BYTES / 2) return;
-  const existing = pdfBufferCache.get(key);
-  if (existing) {
-    pdfBufferCacheBytes -= existing.buffer.length;
-    pdfBufferCache.delete(key);
+// Never expose the original file, including local public assets, range requests,
+// old Telegram proxy URLs, or alternate static-serving paths.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  let pathname: string;
+  try { pathname = decodeURIComponent(req.path); } catch { return res.status(400).end(); }
+  if ((pathname.startsWith('/lectures/') && pathname !== '/lectures/') || /\.pdf(?:$|\/)/i.test(pathname)) {
+    res.set({ 'Cache-Control': 'private, no-store', 'CDN-Cache-Control': 'no-store', 'Vercel-CDN-Cache-Control': 'no-store' });
+    return res.status(410).json({ error: 'Direct PDF delivery is disabled. Use the protected lecture viewer.' });
   }
-  while (pdfBufferCacheBytes + buffer.length > PDF_CACHE_MAX_BYTES && pdfBufferCache.size > 0) {
-    const oldestKey = pdfBufferCache.keys().next().value as string;
-    const oldest = pdfBufferCache.get(oldestKey);
-    pdfBufferCache.delete(oldestKey);
-    if (oldest) pdfBufferCacheBytes -= oldest.buffer.length;
-  }
-  pdfBufferCache.set(key, { buffer, contentType });
-  pdfBufferCacheBytes += buffer.length;
-}
-
-function sendPdfBuffer(res: Response, buffer: Buffer, contentType: string, source: string) {
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Length', buffer.length);
-  // Allow browsers and the Vercel edge CDN to cache the PDF so repeat views never hit the function/DB.
-  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('X-MedAtlas-Source', source);
-  return res.send(buffer);
-}
-
-// Telegram-only PDF delivery. This route always responds, so static assets and
-// PostgreSQL binary blobs can never act as fallback PDF sources.
-app.get('/lectures/:filename', async (req: Request, res: Response) => {
-  const relativeUrl = `/lectures/${path.basename(req.params.filename)}`;
-  try {
-    if (!isTelegramConfigured()) return res.status(503).json({ error: 'Telegram PDF storage is not configured.' });
-    const cached = pdfBufferCache.get(relativeUrl);
-    if (cached) return sendPdfBuffer(res, cached.buffer, cached.contentType, 'telegram-memory-cache');
-    const meta = await getPdfTelegramMetadataByUrl(relativeUrl);
-    if (!meta?.telegramFileId) return res.status(404).json({ error: 'PDF is not available on Telegram.' });
-    const pdf = await fetchTelegramPdfBuffer(meta.telegramFileId);
-    cachePdfBuffer(relativeUrl, pdf.buffer, 'application/pdf');
-    return sendPdfBuffer(res, pdf.buffer, 'application/pdf', 'telegram');
-  } catch {
-    return res.status(503).json({ error: 'Telegram PDF delivery is temporarily unavailable. Please retry.' });
-  }
+  next();
 });
 
-// Serve public static assets (excluding /lectures/:filename handled above)
+// Hide original filenames/URLs and Telegram identifiers in every JSON response,
+// including catalog, saved sessions, bookmarks, upload results, and admin forms.
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => originalJson(protectDocumentFields(protectQuestionImageFields(body)))) as typeof res.json;
+  next();
+});
 app.use(express.static(path.resolve(process.cwd(), 'public')));
 
 // Tight default JSON body parser (64kb) for all API and auth endpoints;
-// 5mb parser is scoped exclusively to authenticated admin CSV import endpoints;
+// 5mb parser is scoped exclusively to authenticated admin question import endpoints;
 // 50mb parser is scoped exclusively to authenticated admin PDF slide deck uploads.
 const defaultJsonParser = express.json({ limit: '64kb' });
 const adminCsvImportJsonParser = express.json({ limit: '5mb' });
@@ -167,7 +143,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   ) {
     return adminCsvImportJsonParser(req, res, next);
   }
-  if (req.path.startsWith('/api/admin/upload-pdf')) {
+  if (req.path.startsWith('/api/admin/upload-pdf') || /^\/api\/admin\/lectures\/\d+\/attach-pdf$/.test(req.path)) {
     return adminPdfUploadJsonParser(req, res, next);
   }
   return defaultJsonParser(req, res, next);
@@ -176,6 +152,24 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const rateLimitResolution = resolveRateLimitStoreConfig(process.env);
 const sharedRateLimitStore = rateLimitResolution.store;
 const rateLimitDegradedPolicy = rateLimitResolution.degradedModePolicy;
+
+app.use('/api/documents', createProtectedDocumentRouter({
+  authenticate: requireAuth,
+  limiter: createBoundedRateLimiter({ scope: 'document-view', maxRequests: 90,
+    windowMs: 60_000, maxKeys: 5_000, store: sharedRateLimitStore,
+    degradedModePolicy: rateLimitDegradedPolicy,
+    keyGenerator: (req) => (req as AuthRequest).user!.uid }),
+  getMetadata: getProtectedPdfMetadata,
+  fetchSource: async (fileId) => (await fetchTelegramPdfBuffer(fileId)).buffer,
+}));
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api/admin/') && req.body && Object.hasOwn(req.body, 'pdfUrl')) {
+    try { req.body.pdfUrl = documentReferenceForStorage(req.body.pdfUrl); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid document reference.' }); }
+  }
+  next();
+});
 
 function extractNormalizedRateLimitEmail(req: Request): string | null {
   const raw = req.body?.email;
@@ -377,7 +371,7 @@ app.get('/api/catalog', async (_req, res) => {
 // ============================================================================
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
-    const { email, password, displayName } = req.body || {};
+    const { email, password, displayName, faculty } = req.body || {};
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       return res.status(400).json({ error: 'Please provide a valid email address.' });
     }
@@ -392,12 +386,12 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
     if (!displayName || typeof displayName !== 'string' || displayName.trim().length < 2) {
       return res.status(400).json({
-        error: 'Please enter your full name or display name (at least 2 characters).',
+        error: 'Username must be at least 2 characters long.',
       });
     }
 
     // Any client-supplied role or emailVerified flags in req.body are ignored.
-    const user = await registerEmailPasswordUser(email, password, displayName);
+    const user = await registerEmailPasswordUser(email, password, displayName, faculty);
     const token = createServerSessionToken({
       uid: user.uid,
       email: user.email,
@@ -656,14 +650,10 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
 
 app.put('/api/auth/profile', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { displayName, preferences } = req.body || {};
-    if (displayName !== undefined && String(displayName).trim().length < 2) {
-      return res
-        .status(400)
-        .json({ error: 'Display name must be at least 2 characters long.' });
-    }
+    const { displayName, faculty, preferences } = req.body || {};
     const updated = await updateUserProfile(req.user!.uid, {
-      displayName: displayName ? String(displayName) : undefined,
+      displayName,
+      faculty,
       preferences: typeof preferences === 'object' ? preferences : undefined,
     });
     return res.json({ user: sanitizeUserForClient(updated) });
@@ -718,6 +708,7 @@ app.post('/api/sessions', requireAuth, async (req: AuthRequest, res) => {
       shuffleOptions: Boolean(shuffleOptions),
       avoidRecent: Boolean(avoidRecent),
       onlyMistakes: Boolean(onlyMistakes),
+      batched: req.body?.batchSize === 6,
       timeLimitMinutes:
         timeLimitMinutes !== undefined && timeLimitMinutes !== null
           ? Number(timeLimitMinutes)
@@ -735,7 +726,13 @@ app.get('/api/sessions/:id', requireAuth, async (req: AuthRequest, res) => {
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
       return res.status(400).json({ error: 'Invalid session ID.' });
     }
-    const session = await getExamSessionForStudent(req.user!.uid, sessionId);
+    const batched = req.query.batchSize === '6';
+    const offset = req.query.offset === undefined ? undefined : Number(req.query.offset);
+    if (req.query.offset !== undefined && (!batched || !Number.isSafeInteger(offset) || offset! < 0 || offset! % 6 !== 0)) {
+      return res.status(400).json({ error: 'Invalid question batch offset.' });
+    }
+    const session = await getExamSessionForStudent(req.user!.uid, sessionId, undefined,
+      { batched, offset, batchOnly: offset !== undefined });
     return res.json({ session });
   } catch (error) {
     return sendErrorResponse(res, error, 'Session not found.', 404);
@@ -789,7 +786,8 @@ app.post('/api/sessions/:id/complete', requireAuth, async (req: AuthRequest, res
       req.user!.uid,
       sessionId,
       answers,
-      typeof elapsedSeconds === 'number' ? elapsedSeconds : undefined
+      typeof elapsedSeconds === 'number' ? elapsedSeconds : undefined,
+      { batched: req.body?.batchSize === 6 }
     );
     return res.json({ session });
   } catch (error) {
@@ -821,7 +819,16 @@ app.get('/api/dashboard', requireAuth, async (req: AuthRequest, res) => {
 
 app.get('/api/bookmarks', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const data = await getStudentBookmarksAndReview(req.user!.uid);
+    const positiveInteger = (value: unknown) => value === undefined || (typeof value === 'string' && /^[1-9]\d{0,5}$/.test(value));
+    if (![req.query.page, req.query.pageSize, req.query.subjectId].every(positiveInteger) ||
+      (req.query.status !== undefined && !['all', 'correct', 'incorrect', 'unanswered'].includes(String(req.query.status)))) {
+      return res.status(400).json({ error: 'Choose a valid review page and filters.' });
+    }
+    const data = await getStudentBookmarksAndReview(req.user!.uid, req.query.view === 'saved', {
+      page: Number(req.query.page) || 1, pageSize: Number(req.query.pageSize) || 25,
+      subjectId: Number(req.query.subjectId) || undefined, status: req.query.status ? String(req.query.status) : undefined,
+      reviewOnly: req.query.view === 'answered',
+    });
     return res.json(data);
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load bookmarks.', 500);
@@ -830,19 +837,44 @@ app.get('/api/bookmarks', requireAuth, async (req: AuthRequest, res) => {
 
 app.post('/api/bookmarks/toggle', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { questionId, note } = req.body || {};
-    if (!questionId) {
+    const { questionId, note, bookmarked } = req.body || {};
+    if (bookmarked !== undefined && typeof bookmarked !== 'boolean') return res.status(400).json({ error: 'bookmarked must be true or false.' });
+    if (!Number.isInteger(Number(questionId)) || Number(questionId) <= 0) {
       return res.status(400).json({ error: 'questionId is required.' });
     }
     const result = await toggleBookmarkForStudent(
       req.user!.uid,
       Number(questionId),
-      note ? String(note) : undefined
+      note ? String(note) : undefined,
+      bookmarked
     );
     return res.json(result);
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to toggle bookmark.', 500);
   }
+});
+
+const questionReportLimiter = createBoundedRateLimiter({
+  scope: 'question-report', maxRequests: 20, windowMs: 60 * 60_000, maxKeys: 5000,
+  store: sharedRateLimitStore, degradedModePolicy: rateLimitDegradedPolicy,
+  keyGenerator: req => (req as AuthRequest).user!.uid,
+});
+
+app.post('/api/question-reports', requireAuth, questionReportLimiter, async (req: AuthRequest, res) => {
+  try {
+    const result = await reportQuestionForStudent(req.user!.uid, req.body?.questionId, req.body?.reason);
+    return res.json(result);
+  } catch (error) { return sendErrorResponse(res, error, 'Could not send the question report.', 500); }
+});
+
+app.get('/api/admin/question-reports', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try { return res.json(await getQuestionReportsForAdmin(req.user!.uid)); }
+  catch (error) { return sendErrorResponse(res, error, 'Could not load question reports.', 500); }
+});
+
+app.post('/api/admin/question-reports/:id/resolve', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try { return res.json(await resolveQuestionReportAdmin(req.user!, Number(req.params.id))); }
+  catch (error) { return sendErrorResponse(res, error, 'Could not resolve the question report.', 500); }
 });
 
 // ============================================================================
@@ -862,15 +894,26 @@ app.post('/api/admin/egress-fallback', requireAuth, requireAdmin, (req: AuthRequ
 
 app.get('/api/admin/overview', requireAuth, requireAdmin, async (_req: AuthRequest, res) => {
   try {
-    const data = await getAdminDashboardData();
+    const [data, documentSecurity] = await Promise.all([getAdminDashboardData(), getDocumentSecuritySettings()]);
     return res.json({
       ...data,
       egressStatus: getEgressStatus(),
       isTelegramConfigured: isTelegramConfigured(),
+      documentSecurity,
     });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load admin overview.', 500);
   }
+});
+
+app.put('/api/admin/document-security', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    if (typeof req.body?.watermarksEnabled !== 'boolean') {
+      return res.status(400).json({error:'watermarksEnabled must be a boolean.'});
+    }
+    const documentSecurity = await setDocumentWatermarksEnabled({uid:req.user!.uid,email:req.user!.email!},req.body.watermarksEnabled);
+    return res.json({documentSecurity});
+  } catch (error) { return sendErrorResponse(res,error,'Failed to save document settings.',500); }
 });
 
 app.post('/api/admin/modules', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -1383,6 +1426,26 @@ app.post(
   }
 );
 
+const imageReadLimiter = createBoundedRateLimiter({scope:'question-image-read',maxRequests:240,windowMs:60000,maxKeys:5000,keyGenerator:(req)=>String((req as AuthRequest).user?.uid || normalizeClientIp(req))});
+const imageUploadLimiter = createBoundedRateLimiter({scope:'question-image-upload',maxRequests:150,windowMs:600000,maxKeys:100,keyGenerator:(req)=>String((req as AuthRequest).user?.uid)});
+app.post('/api/admin/import/image', requireAuth, requireAdmin, imageUploadLimiter, express.raw({type:'application/octet-stream',limit:'2mb'}), async(req:AuthRequest,res)=>{
+  const fileName=String(req.query.name || '');
+  if(!validImageFileName(fileName) || !Buffer.isBuffer(req.body))return res.status(400).json({error:'Choose a PNG, JPEG, or WebP file up to 2 MB.'});
+  try {return res.json(await uploadQuestionImage(fileName,req.body));}
+  catch {return res.status(400).json({error:'Image could not be uploaded. Check it is a valid PNG/JPEG/WebP under 2 MB, then retry.'});}
+});
+app.get('/api/question-images/:reference', requireAuth, imageReadLimiter, async(req:AuthRequest,res)=>{
+  res.set({'Cache-Control':'private, no-store','CDN-Cache-Control':'no-store','Vercel-CDN-Cache-Control':'no-store'});
+  let image;
+  try {image=imageForStorage({id:'',alt:'',source:'/api/question-images/'+req.params.reference});}
+  catch {return res.status(404).json({error:'Image reference is invalid. Reopen the study set.'});}
+  try {
+    const buffer=await fetchQuestionImage(image);
+    return res.type(image.mimeType!).set('Content-Disposition','inline').send(buffer);
+  } catch {return res.status(503).json({error:'Image is temporarily unavailable. Please retry loading it.'});}
+});
+app.get('/api/admin/json-template',requireAuth,requireAdmin,(_req,res)=>res.type('application/json').attachment('medatlas_mcq_template.json').send(getSampleJsonTemplate()));
+
 app.get('/api/admin/csv-template', requireAuth, requireAdmin, (_req, res) => {
   const csv = getSampleCsvTemplate();
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -1396,17 +1459,19 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const { csvContent, targetLectureId } = req.body || {};
-      if (!csvContent || typeof csvContent !== 'string') {
-        return res.status(400).json({ error: 'CSV content is required for validation.' });
+      const { csvContent, jsonContent, imageFiles, targetLectureId } = req.body || {};
+      const content = jsonContent ?? csvContent;
+      if (!content || typeof content !== 'string') {
+        return res.status(400).json({ error: 'JSON content is required for validation.' });
       }
       const preview = await previewCsvImportAdmin(
-        csvContent,
-        targetLectureId ? Number(targetLectureId) : undefined
+        content,
+        targetLectureId ? Number(targetLectureId) : undefined,
+        jsonContent !== undefined ? {format:'json', imageFiles: imageFiles ?? []} : undefined
       );
       return res.json(preview);
     } catch (error) {
-      return sendErrorResponse(res, error, 'Failed to validate CSV.', 400);
+      return sendErrorResponse(res, error, 'Failed to validate questions.', 400);
     }
   }
 );
@@ -1417,20 +1482,22 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const { fileName, csvContent, targetLectureId, rowOverrides } = req.body || {};
-      if (!csvContent || typeof csvContent !== 'string') {
-        return res.status(400).json({ error: 'CSV content is required for import.' });
+      const { fileName, csvContent, jsonContent, imageFiles, uploadedImages, targetLectureId, rowOverrides } = req.body || {};
+      const content = jsonContent ?? csvContent;
+      if (!content || typeof content !== 'string') {
+        return res.status(400).json({ error: 'JSON content is required for import.' });
       }
       const result = await executeCsvImportAdmin(
         { uid: req.user!.uid, email: req.user!.email },
-        fileName || 'upload.csv',
-        csvContent,
+        fileName || 'upload.json',
+        content,
         targetLectureId ? Number(targetLectureId) : undefined,
-        rowOverrides
+        rowOverrides,
+        jsonContent !== undefined ? {format:'json', imageFiles: imageFiles ?? [], uploadedImages} : undefined
       );
       return res.json(result);
     } catch (error) {
-      return sendErrorResponse(res, error, 'CSV import failed.', 400);
+      return sendErrorResponse(res, error, 'Question import failed.', 400);
     }
   }
 );

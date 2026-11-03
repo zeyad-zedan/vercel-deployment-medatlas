@@ -75,7 +75,7 @@ async function sendTelegramMessage(
         inline_keyboard: [
           [
             {
-              text: '🚀 Open MedAtlas PDF Portal 📚',
+              text: '🚀 Open MedAtlas Upload Portal 📚',
               url: inlineButtonUrl,
             },
           ],
@@ -194,6 +194,16 @@ async function ensureLocalServer(): Promise<void> {
     return;
   }
 
+  // The preview can run independently, so refreshing it need not stop the tunnel.
+  try {
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/health`, {signal:AbortSignal.timeout(1500)});
+    const health = await response.json() as {status?:string;service?:string};
+    if (response.ok && health.status === 'ok' && health.service === 'medatlas-upload-portal') {
+      console.log(`Reusing the upload portal already running on port ${PORT}.`);
+      return;
+    }
+  } catch { /* Start the portal below when no existing instance is available. */ }
+
   console.log(`🚀 Starting local PDF Server...`);
   await startPdfServer(false);
   console.log(`✅ Local PDF Server is active and listening on http://127.0.0.1:${PORT}`);
@@ -296,7 +306,7 @@ async function rotateTunnel() {
 
     // Post to Telegram Channel
     const message = [
-      `📚 <b>MedAtlas PDF Upload Portal — Active Link</b>`,
+      `📚 <b>MedAtlas PDF & MCQ Upload Portal — Active Link</b>`,
       ``,
       `🔗 <b>Direct Link:</b>`,
       `<a href="${newUrl}">${newUrl}</a>`,
@@ -307,7 +317,7 @@ async function rotateTunnel() {
       `⏱ <b>Generated:</b> ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       `⏳ <b>Valid until:</b> ${nextRotation.formatted} (Auto-rotates every ${ROTATE_HOURS}h)`,
       ``,
-      `💡 <i>Anyone with this link can upload and compress lecture PDFs directly from outside your home network. No login or installation needed.</i>`,
+      `📎 <i>Upload lecture PDFs or MCQs with JSON and images. Files are stored on Telegram.</i>`,
     ].join('\n');
 
     console.log(`📤 Posting new link to Telegram channel (${CHANNEL_ID})...`);
@@ -419,12 +429,18 @@ async function main() {
     const pidArg = process.argv.find((arg) => arg.startsWith('--tunnel-pid='));
     adoptedTunnelPid = Number(pidArg?.split('=')[1]);
     if (!Number.isInteger(adoptedTunnelPid) || adoptedTunnelPid <= 0) throw new Error('Existing tunnel PID required.');
-    const response = await fetch('http://127.0.0.1:20241/quicktunnel');
-    const data = await response.json() as { hostname: string };
-    if (!/^[a-z0-9-]+\.trycloudflare\.com$/.test(data.hostname)) throw new Error('Invalid tunnel hostname.');
-    currentTunnelUrl = `https://${data.hostname}`;
-    console.log(`Reusing existing tunnel: ${currentTunnelUrl}`);
-    rotationTimer = setTimeout(() => rotateTunnel().catch(console.error), ROTATE_HOURS * 3600000);
+    try {
+      const response = await fetch('http://127.0.0.1:20241/quicktunnel', {signal:AbortSignal.timeout(3000)});
+      const data = await response.json() as { hostname: string };
+      if (!/^[a-z0-9-]+\.trycloudflare\.com$/.test(data.hostname)) throw new Error('Invalid tunnel hostname.');
+      currentTunnelUrl = `https://${data.hostname}`;
+      console.log(`Reusing existing tunnel: ${currentTunnelUrl}`);
+      rotationTimer = setTimeout(() => rotateTunnel().catch(console.error), ROTATE_HOURS * 3600000);
+    } catch {
+      adoptedTunnelPid = undefined;
+      console.warn('Previous tunnel is unavailable. Opening a fresh bot portal link.');
+      await rotateTunnel();
+    }
   } else {
     await rotateTunnel();
   }

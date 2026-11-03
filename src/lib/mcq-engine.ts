@@ -1,3 +1,4 @@
+import type { QuestionImage } from './question-images.ts';
 export type OptionKey = 'A' | 'B' | 'C' | 'D';
 export type DifficultyLevel = 'Easy' | 'Medium' | 'Hard';
 export type ContentStatus = 'draft' | 'published' | 'archived';
@@ -29,6 +30,8 @@ export interface CanonicalQuestion {
   tags: string;
   specialTags?: string;
   diagramSvg?: string;
+  images?: QuestionImage[];
+  explanationImages?: QuestionImage[];
   pageNumber?: number | null;
   status: ContentStatus;
   version?: number;
@@ -41,10 +44,10 @@ export function parseSpecialTags(raw?: string | null): string[] {
   if (!raw || typeof raw !== 'string') return [];
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const part of raw.split(',')) {
-    const trimmed = part.trim();
+  for (const part of raw.split(/[,;|،]+/)) {
+    const trimmed = part.normalize('NFC').trim().replace(/\s+/g, ' ');
     if (!trimmed) continue;
-    const lower = trimmed.toLowerCase();
+    const lower = trimmed.toLowerCase().replace(/^old[ _-]+exams?$/, 'old exams');
     if (!seen.has(lower)) {
       seen.add(lower);
       result.push(trimmed);
@@ -72,7 +75,7 @@ export function parseAllQuestionTags(
 
   // 1. First add special tags (isSpecial: true)
   for (const item of parseSpecialTags(specialTags)) {
-    const lower = item.toLowerCase();
+    const lower = item.toLowerCase().replace(/^old[ _-]+exams?$/, 'old exams');
     if (!seen.has(lower)) {
       seen.add(lower);
       result.push({ label: item, isSpecial: true });
@@ -81,10 +84,9 @@ export function parseAllQuestionTags(
 
   // 2. Add standard tags if not already present in special tags
   if (tags && typeof tags === 'string') {
-    for (const part of tags.split(',')) {
-      const trimmed = part.trim();
+    for (const trimmed of parseSpecialTags(tags)) {
       if (!trimmed) continue;
-      const lower = trimmed.toLowerCase();
+      const lower = trimmed.toLowerCase().replace(/^old[ _-]+exams?$/, 'old exams');
       if (!seen.has(lower)) {
         seen.add(lower);
         result.push({ label: trimmed, isSpecial: false });
@@ -724,6 +726,7 @@ export function formatQuestionForClient(
       tags: question.tags,
       specialTags: question.specialTags || '',
       diagramSvg: safeDiagramSvg,
+      images: question.images || [],
       pageNumber: question.pageNumber ?? null,
       permutation,
     };
@@ -752,6 +755,8 @@ export function formatQuestionForClient(
     tags: question.tags,
     specialTags: question.specialTags || '',
     diagramSvg: safeDiagramSvg,
+    images: question.images || [],
+    explanationImages: question.explanationImages || [],
     pageNumber: question.pageNumber ?? null,
     permutation,
   };
@@ -1137,7 +1142,13 @@ export function parseCsvRows(csvText: string): string[][] {
   let currentField = '';
   let inQuotes = false;
 
-  const text = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  let text = csvText.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Excel may emit an explicit separator directive or locale-specific semicolon CSV.
+  const directive = text.match(/^sep=([,;\t])\n/i);
+  if (directive) text = text.slice(directive[0].length);
+  const firstLine = text.split('\n')[0] || '';
+  const delimiter = directive?.[1] || (firstLine.includes(',') ? ',' : firstLine.includes('\t') ? '\t' : firstLine.includes(';') ? ';' : ',');
+  let closedQuote = false;
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
@@ -1149,16 +1160,20 @@ export function parseCsvRows(csvText: string): string[][] {
         i++;
       } else if (ch === '"') {
         inQuotes = false;
+        closedQuote = true;
       } else {
         currentField += ch;
       }
     } else {
       if (ch === '"') {
+        if (currentField.trim() || closedQuote) throw new Error('Unexpected quote in CSV field. Quote the entire field and escape inner quotes as double quotes.');
         inQuotes = true;
-      } else if (ch === ',') {
+      } else if (ch === delimiter) {
+        closedQuote = false;
         currentRow.push(currentField.trim());
         currentField = '';
       } else if (ch === '\n') {
+        closedQuote = false;
         currentRow.push(currentField.trim());
         if (currentRow.some((cell) => cell !== '')) {
           rows.push(currentRow);
@@ -1166,11 +1181,13 @@ export function parseCsvRows(csvText: string): string[][] {
         currentRow = [];
         currentField = '';
       } else {
+        if (closedQuote && ch.trim()) throw new Error('Unexpected text after a closing CSV quote.');
         currentField += ch;
       }
     }
   }
 
+  if (inQuotes) throw new Error('Unclosed quoted field in CSV. Check the final quote.');
   currentRow.push(currentField.trim());
   if (currentRow.some((cell) => cell !== '')) {
     rows.push(currentRow);
@@ -1294,7 +1311,10 @@ export function parseAndValidateCsvQuestions(
   targetContext?: { defaultSubject?: string; defaultLecture?: string }
 ): CsvValidationReport {
   const fileHash = computeContentHash(csvContent);
-  const rawRows = parseCsvRows(csvContent);
+  let rawRows: string[][];
+  try { rawRows = parseCsvRows(csvContent); }
+  catch (error) { return { fileHash, totalRows: 0, validCount: 0, duplicateCount: 0, invalidCount: 0,
+    rows: [], headerErrors: [error instanceof Error ? error.message : 'Invalid CSV format.'] }; }
 
   if (rawRows.length === 0) {
     return {
@@ -1308,8 +1328,12 @@ export function parseAndValidateCsvQuestions(
     };
   }
 
-  const headerRow = rawRows[0].map((h) => h.toLowerCase().trim());
+  const headerRow = rawRows[0].map((h) => h.toLowerCase().trim().replace(/[\s-]+/g, '_'));
   const headerMap = new Map<string, number>();
+  const duplicateHeaders = headerRow.filter((col, idx) => headerRow.indexOf(col) !== idx);
+  if (duplicateHeaders.length || headerRow.some((col) => !col)) return {
+    fileHash, totalRows: rawRows.length - 1, validCount: 0, duplicateCount: 0, invalidCount: 0, rows: [],
+    headerErrors: [duplicateHeaders.length ? `Duplicate CSV columns: ${[...new Set(duplicateHeaders)].join(', ')}.` : 'CSV has an empty column heading.'] };
   headerRow.forEach((col, idx) => headerMap.set(col, idx));
 
   const requiredHeaders = [
@@ -1355,6 +1379,7 @@ export function parseAndValidateCsvQuestions(
     const raw = rawRows[i];
     const rowNumber = i + 1;
     const errors: string[] = [];
+    if (raw.length !== headerRow.length) errors.push(`Expected ${headerRow.length} columns but found ${raw.length}. Check delimiters and quote fields containing commas.`);
 
     const subject = (targetContext?.defaultSubject || getCol(raw, 'subject')).trim();
     const lecture = (targetContext?.defaultLecture || getCol(raw, 'lecture')).trim();
@@ -1370,7 +1395,7 @@ export function parseAndValidateCsvQuestions(
     const explanationC = getCol(raw, 'explanation_c');
     const explanationD = getCol(raw, 'explanation_d');
     const rawDifficulty = getCol(raw, 'difficulty') || 'Medium';
-    const tags = getCol(raw, 'tags');
+    const tags = parseSpecialTags(getCol(raw, 'tags')).join(', ');
     // Collect special tags from both legacy special_tags column and individual 0/1 binary flag columns
     const collectedSpecialTags = new Set<string>();
 
@@ -1433,9 +1458,7 @@ export function parseAndValidateCsvQuestions(
       }
     }
 
-    const specialTags = flagColumnsFound
-      ? Array.from(collectedSpecialTags).join(', ')
-      : explicitSpecialTags;
+    const specialTags = parseSpecialTags(Array.from(collectedSpecialTags).join(', ')).join(', ');
     const rawStatus = (getCol(raw, 'status') || 'published').toLowerCase();
     const rawPage = getCol(raw, 'page_number') || getCol(raw, 'pdf_page_number');
     let pageNumber: number | null = null;
