@@ -2,6 +2,7 @@ import { getSampleJsonTemplate } from './src/lib/json-import.ts';
 import { protectQuestionImageFields, uploadQuestionImage, imageForStorage, fetchQuestionImage } from './src/lib/telegram-question-images.ts';
 import { validImageFileName } from './src/lib/question-images.ts';
 import 'dotenv/config';
+import {shortAnswerRouter} from './src/lib/short-answer-routes.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -648,6 +649,28 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+app.use('/api/short-answers', requireAuth, shortAnswerRouter);
+
+app.all('/api/auth/gemini-key', requireAuth, async (req: AuthRequest, res) => {
+  res.setHeader('Cache-Control','no-store');
+  try {
+    const keys=await import('./src/lib/student-gemini-keys.ts');
+    const uid=req.user!.uid;
+    if(req.method==='GET')return res.json(await keys.getStudentGeminiKeyStatus(uid));
+    if(req.method==='DELETE')return res.json(await keys.removeStudentGeminiKey(uid));
+    if(req.method==='PUT') {
+      if(!keys.studentKeyStorageAvailable())return res.status(503).json({error:'Secure key storage is temporarily unavailable. Please try again later.'});
+      const value=typeof req.body?.apiKey==='string'?req.body.apiKey.trim():req.body?.apiKey;
+      if(!keys.validStudentGeminiKey(value))return res.status(400).json({error:'Enter a complete Gemini API key from Google AI Studio.'});
+      return res.json(await keys.saveStudentGeminiKey(uid,value));
+    }
+    res.setHeader('Allow','GET, PUT, DELETE');return res.status(405).json({error:'Method not allowed.'});
+  }catch{
+    // Never include provider keys, request bodies, database errors or ciphertext in logs/responses.
+    return res.status(500).json({error:'Could not update Gemini key settings. Please try again.'});
+  }
+});
+
 app.put('/api/auth/profile', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { displayName, faculty, preferences } = req.body || {};
@@ -745,7 +768,7 @@ app.post('/api/sessions/:id/answer', requireAuth, async (req: AuthRequest, res) 
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
       return res.status(400).json({ error: 'Invalid session ID.' });
     }
-    const { questionId, selectedOption, lockAnswer, elapsedSeconds, slim } = req.body || {};
+    const { questionId, selectedOption, lockAnswer, elapsedSeconds, slim, matchingChoiceId } = req.body || {};
     const session = await saveSessionQuestionAnswer(
       req.user!.uid,
       sessionId,
@@ -753,7 +776,8 @@ app.post('/api/sessions/:id/answer', requireAuth, async (req: AuthRequest, res) 
       selectedOption || null,
       Boolean(lockAnswer),
       typeof elapsedSeconds === 'number' ? elapsedSeconds : undefined,
-      Boolean(slim)
+      Boolean(slim),
+      matchingChoiceId
     );
     return res.json({ session });
   } catch (error) {
@@ -1181,6 +1205,7 @@ app.post('/api/admin/lectures', requireAuth, requireAdmin, async (req: AuthReque
         title: String(title),
         description: String(description),
         lectureNumber: Number(lectureNumber) || 1,
+        contentType:req.body.contentType,
         educationalNotes: educationalNotes ? String(educationalNotes) : '',
         estimatedMinutes: Number(estimatedMinutes) || 30,
         pdfUrl: pdfUrl !== undefined && pdfUrl !== null && String(pdfUrl).trim() !== '' ? String(pdfUrl).trim() : null,
@@ -1256,6 +1281,7 @@ app.post('/api/admin/questions', requireAuth, requireAdmin, async (req: AuthRequ
         optionC: String(optionC),
         optionD: String(optionD),
         correctAnswer: String(correctAnswer).toUpperCase() as any,
+        matchingChoiceId: req.body.matchingChoiceId,
         explanation: String(explanation),
         explanationA: explanationA ? String(explanationA) : '',
         explanationB: explanationB ? String(explanationB) : '',

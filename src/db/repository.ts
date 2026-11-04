@@ -1,3 +1,4 @@
+import { matchingGrade, type MatchingQuestionDefinition } from '../lib/matching-questions.ts';
 import { parseAndValidateJsonQuestions, type JsonQuestionRow } from '../lib/json-import.ts';
 import type { ImportImageFile, QuestionImage } from '../lib/question-images.ts';
 import { imageForStorage } from '../lib/telegram-question-images.ts';
@@ -2632,7 +2633,7 @@ export async function getPublishedCatalog(userUid?: string) {
       .orderBy(asc(subjects.displayOrder), asc(subjects.id));
 
     const pubLectures = await db
-      .select()
+      .select({...getTableColumns(lectures),shortAnswerCount:sql<number>`(SELECT count(*)::int FROM public.short_answer_questions sa WHERE sa.lecture_id="lectures"."id" AND sa.status='published')`})
       .from(lectures)
       .where(eq(lectures.status, 'published'))
       .orderBy(asc(lectures.lectureNumber), asc(lectures.id));
@@ -2844,6 +2845,8 @@ export interface SessionOrderItem {
   selectedCanonical: OptionKey | null;
   submitted: boolean;
   correctAnswer?: OptionKey;
+  isMatching?: boolean;
+  matchingChoiceId?: string | null;
 }
 
 /** Opens cumulative lecture progress without deleting or rewriting historical attempts. */
@@ -2861,11 +2864,11 @@ async function openLectureStudy(userUid: string, lectureId: number, shuffleOptio
       inArray(examSessions.status, ['in_progress', 'completed'])
     )).orderBy(sql`CASE WHEN ${examSessions.status} = 'in_progress' THEN 0 ELSE 1 END`,
       desc(sql`${examSessions.totalQuestions} - ${examSessions.unansweredCount}`), desc(examSessions.startedAt), desc(examSessions.id)).limit(1).for('update');
-    const published = await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer }).from(questions)
+    const published = await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'` }).from(questions)
       .where(and(eq(questions.lectureId, lectureId), eq(questions.status, 'published'))).orderBy(asc(questions.id));
     if (!published.length) throw new ClientSafeError('No published questions are available for this lecture.', 400);
     const latestAnswers = await tx.selectDistinctOn([questionAttempts.questionId], {
-      questionId: questionAttempts.questionId, selectedOption: questionAttempts.selectedOption,
+      questionId: questionAttempts.questionId, selectedOption: questionAttempts.selectedOption, matchingChoiceId: questionAttempts.matchingChoiceId,
     }).from(questionAttempts).where(and(eq(questionAttempts.userUid, userUid),
       inArray(questionAttempts.questionId, published.map(question => question.id)), sql`${questionAttempts.selectedOption} IS NOT NULL`))
       .orderBy(questionAttempts.questionId, desc(questionAttempts.answeredAt), desc(questionAttempts.id));
@@ -3115,8 +3118,9 @@ export async function createPracticeOrExamSession(
 
     const orderItems: SessionOrderItem[] = selection.selectedQuestions.map((q, idx) => ({
       questionId: q.id,
+      ...(q.matchingGroupId ? { isMatching: true } : {}),
       permutation: createOptionPermutation(
-        Boolean(params.shuffleOptions),
+        !q.matchingGroupId && Boolean(params.shuffleOptions),
         Date.now() + idx * 97 + q.id
       ),
       selectedDisplayed: null,
@@ -3207,7 +3211,7 @@ let questionMetadataCache: { expiresAt: number; rows: any[] } | null = null;
 function readQuestionMetadata() {
   return db.select({ id: questions.id, subjectId: questions.subjectId,
     lectureId: questions.lectureId, difficulty: questions.difficulty, tags: questions.tags,
-    specialTags: questions.specialTags, status: questions.status, correctAnswer: questions.correctAnswer })
+    specialTags: questions.specialTags, status: questions.status, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'` })
     .from(questions).where(eq(questions.status, 'published')).execute();
 }
 let questionMetadataRequest: ReturnType<typeof readQuestionMetadata> | null = null;
@@ -3413,8 +3417,10 @@ export async function getExamSessionForStudent(
         const source = snapshot || liveQ;
         const index = options.batchOnly ? offset + idx : idx;
         if (!source) return options.batched ? {
+          ...(item.isMatching ? {questionType:'matching'} : {}),
           id: item.questionId, index, contentLoaded: false,
           selectedDisplayed: item.selectedDisplayed, submitted: item.submitted,
+          matchingChoiceId: item.matchingChoiceId ?? null,
           ...(!(session.mode === 'exam' && session.status === 'in_progress') && item.correctAnswer
             ? { correctDisplayedOption: resolveDisplayedOption(item.correctAnswer, item.permutation) } : {}),
         } : null;
@@ -3443,6 +3449,7 @@ export async function getExamSessionForStudent(
           specialTags: source.specialTags || liveQ?.specialTags || '',
           diagramSvg: source.diagramSvg || liveQ?.diagramSvg || '',
           images: source.images || [],
+          matching: source.matching || null,
           explanationImages: source.explanationImages || [],
           pageNumber: source.pageNumber ?? liveQ?.pageNumber ?? null,
           status: (liveQ?.status || 'published') as ContentStatus,
@@ -3464,6 +3471,7 @@ export async function getExamSessionForStudent(
           index,
           ...(options.batched ? { contentLoaded: true } : {}),
           selectedDisplayed: item.selectedDisplayed,
+          matchingChoiceId: item.matchingChoiceId ?? null,
           submitted: item.submitted,
           isBookmarked: bookmarkedSet.has(item.questionId),
         };
@@ -3492,10 +3500,10 @@ export async function getExamSessionForStudent(
       lectureId: session.lectureId,
       status: session.status,
       totalQuestions: session.totalQuestions,
-      correctCount: session.correctCount,
-      incorrectCount: session.incorrectCount,
+      correctCount: isExamActive ? 0 : session.correctCount,
+      incorrectCount: isExamActive ? 0 : session.incorrectCount,
       unansweredCount: session.unansweredCount,
-      scorePercentage: session.scorePercentage,
+      scorePercentage: isExamActive ? 0 : session.scorePercentage,
       timeLimitSeconds: session.timeLimitSeconds,
       elapsedSeconds:
         session.status === 'completed'
@@ -3524,7 +3532,7 @@ export async function getExamSessionForStudent(
 export async function saveSessionQuestionAnswer(
   userUid: string, sessionId: number, questionId: number,
   displayedOption: OptionKey | null, lockAnswer: boolean,
-  _clientElapsedSeconds?: number, slim = false
+  _clientElapsedSeconds?: number, slim = false, matchingChoiceId?: string | null
 ) {
   if (displayedOption != null && !OPTION_KEYS.includes(displayedOption)) {
     throw new ClientSafeError('Invalid answer option. Must be A, B, C, D, or null.', 400);
@@ -3548,15 +3556,26 @@ export async function saveSessionQuestionAnswer(
       id: sessionId, status: row.status, correctCount: row.correct_count,
       incorrectCount: row.incorrect_count, unansweredCount: row.unanswered_count,
       scorePercentage: row.score_percentage, elapsedSeconds: row.elapsed_seconds,
-      updatedQuestionId: questionId, submitted: true, selectedDisplayed: item.selectedDisplayed,
+      updatedQuestionId: questionId, submitted: true, selectedDisplayed: item.selectedDisplayed, matchingChoiceId: item.matchingChoiceId ?? null,
     };
     const cachedQ = getCachedSessionQuestions(sessionId)?.find((q) => q.id === questionId);
     const needsSnapshot = (row.mode !== 'exam' || lockAnswer) && displayedOption != null;
-    const q = cachedQ || (await (needsSnapshot ? tx.select() : tx.select({ correctAnswer: questions.correctAnswer }))
+    const q = cachedQ || (await (needsSnapshot ? tx.select() : tx.select({ correctAnswer: questions.correctAnswer, matching: questions.matching }))
       .from(questions).where(eq(questions.id, questionId)).limit(1))[0];
     if (!q) throw new ClientSafeError('Question no longer exists.', 404);
-    item.selectedDisplayed = displayedOption ?? null;
-    item.selectedCanonical = resolveCanonicalOption(displayedOption ?? null, item.permutation);
+    if (q.matching) {
+      if (matchingChoiceId === undefined) throw new ClientSafeError('Choose an answer for this numbered label.', 400);
+      let grade: OptionKey | null;
+      try { grade = matchingGrade(q.matching, matchingChoiceId); } catch { throw new ClientSafeError('Choose a valid matching answer.', 400); }
+      item.matchingChoiceId = matchingChoiceId || null;
+      item.isMatching = true;
+      item.selectedCanonical = grade;
+      item.selectedDisplayed = grade === null ? null : row.mode === 'exam' ? 'A' : grade;
+    } else {
+      if (matchingChoiceId !== undefined) throw new ClientSafeError('This question uses MCQ options.', 400);
+      item.selectedDisplayed = displayedOption ?? null;
+      item.selectedCanonical = resolveCanonicalOption(displayedOption ?? null, item.permutation);
+    }
     item.correctAnswer = q.correctAnswer as OptionKey;
     if (lockAnswer) item.submitted = true;
     const elapsed = Math.max(row.elapsed_seconds, deadline.effectiveElapsedSeconds);
@@ -3587,7 +3606,7 @@ export async function saveSessionQuestionAnswer(
       if (item.selectedCanonical != null) {
         const catalog = await getCachedCatalog(tx);
         await tx.insert(questionAttempts).values({ sessionId, userUid, questionId,
-          subjectId: q.subjectId, lectureId: q.lectureId, selectedOption: item.selectedCanonical,
+          subjectId: q.subjectId, lectureId: q.lectureId, selectedOption: item.selectedCanonical, matchingChoiceId: item.matchingChoiceId ?? null,
           correctOptionSnapshot: q.correctAnswer, isCorrect: item.selectedCanonical === q.correctAnswer,
           questionSnapshotJson: JSON.stringify({ ...q,
             subjectTitle: catalog.subjects.find((s: any) => s.id === q.subjectId)?.title || 'Medical Subject',
@@ -3596,10 +3615,10 @@ export async function saveSessionQuestionAnswer(
       }
     }
     const counts = updated.rows[0];
-    return { id: sessionId, status: row.status, correctCount: counts.correct_count,
-      incorrectCount: counts.incorrect_count, unansweredCount: counts.unanswered_count,
-      scorePercentage: counts.score_percentage, elapsedSeconds: elapsed,
-      updatedQuestionId: questionId, submitted: item.submitted, selectedDisplayed: item.selectedDisplayed };
+    return { id: sessionId, status: row.status, correctCount: row.mode === 'exam' ? 0 : counts.correct_count,
+      incorrectCount: row.mode === 'exam' ? 0 : counts.incorrect_count, unansweredCount: counts.unanswered_count,
+      scorePercentage: row.mode === 'exam' ? 0 : counts.score_percentage, elapsedSeconds: elapsed,
+      updatedQuestionId: questionId, submitted: item.submitted, selectedDisplayed: item.selectedDisplayed, matchingChoiceId: item.matchingChoiceId ?? null };
   });
   return slim ? result : getExamSessionForStudent(userUid, sessionId);
 }
@@ -3679,7 +3698,7 @@ export async function completeExamSession(
         if (deadlineStatus.isExpired) {
           let attemptedPostExpiryMutation = false;
           for (const item of orderItems) {
-            if (item.questionId in finalDisplayedAnswers) {
+            if (!item.isMatching && item.questionId in finalDisplayedAnswers) {
               const disp = finalDisplayedAnswers[item.questionId] ?? null;
               if (disp !== item.selectedDisplayed) {
                 attemptedPostExpiryMutation = true;
@@ -3699,7 +3718,7 @@ export async function completeExamSession(
           }
         } else {
           for (const item of orderItems) {
-            if (item.questionId in finalDisplayedAnswers) {
+            if (!item.isMatching && item.questionId in finalDisplayedAnswers) {
               const rawDisp = finalDisplayedAnswers[item.questionId];
               const validDisp =
                 rawDisp && OPTION_KEYS.includes(rawDisp) ? rawDisp : null;
@@ -3718,6 +3737,7 @@ export async function completeExamSession(
         }
       }
 
+      for (const item of orderItems) if (item.isMatching) item.selectedDisplayed = item.selectedCanonical;
       const qIds = orderItems.map((i) => i.questionId);
       // Grade with tiny keys; only answered questions need historical content snapshots.
       const keys = qIds.length ? await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer })
@@ -3822,6 +3842,7 @@ export async function completeExamSession(
           diagramSvg: q.diagramSvg || '',
           images: q.images || [],
           explanationImages: q.explanationImages || [],
+          matching: q.matching || null,
           pageNumber: q.pageNumber ?? null,
           version: q.version,
         });
@@ -3833,6 +3854,7 @@ export async function completeExamSession(
           subjectId: q.subjectId,
           lectureId: q.lectureId,
           selectedOption: res.selectedCanonical,
+          matchingChoiceId: orderItems.find(item => item.questionId === q.id)?.matchingChoiceId ?? null,
           correctOptionSnapshot: res.correctCanonical,
           isCorrect: res.isCorrect,
           questionSnapshotJson: snapshotJson,
@@ -3976,6 +3998,7 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
         id: questionAttempts.id,
         questionId: questionAttempts.questionId,
         selectedOption: questionAttempts.selectedOption,
+        matchingChoiceId: questionAttempts.matchingChoiceId,
         isCorrect: questionAttempts.isCorrect,
         answeredAt: questionAttempts.answeredAt,
       })
@@ -3995,7 +4018,7 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
     const filtered = Boolean(options.subjectId || status !== 'all');
     const [userAttempts, reviewCount] = await Promise.all([
       savedOnly ? (bookmarkIds.length ? db.select().from(latest).orderBy(desc(latest.answeredAt), desc(latest.id)) : []) :
-        db.select({ id: latest.id, questionId: latest.questionId, selectedOption: latest.selectedOption, isCorrect: latest.isCorrect, answeredAt: latest.answeredAt })
+        db.select({ id: latest.id, questionId: latest.questionId, selectedOption: latest.selectedOption, matchingChoiceId: latest.matchingChoiceId, isCorrect: latest.isCorrect, answeredAt: latest.answeredAt })
           .from(latest).innerJoin(questions, eq(questions.id, latest.questionId)).where(filteredCondition)
           .orderBy(desc(latest.answeredAt), desc(latest.id)).limit(pageSize).offset((page - 1) * pageSize),
       savedOnly ? db.select({ total: sql<number>`count(distinct ${questionAttempts.questionId})::int` })
@@ -4078,6 +4101,8 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
             : latestAtt.isCorrect
             ? 'correct'
             : 'incorrect',
+          matching: q.matching || null,
+          matchingChoiceId: latestAtt?.matchingChoiceId ?? null,
           lastSelectedOption: latestAtt?.selectedOption ?? null,
         };
       })
@@ -4118,6 +4143,8 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
               : latestAtt.isCorrect
               ? 'correct'
               : 'incorrect',
+          matching: q.matching || null,
+          matchingChoiceId: latestAtt.matchingChoiceId ?? null,
           selectedOption: latestAtt.selectedOption,
           answeredAt: latestAtt.answeredAt,
         };
@@ -4692,6 +4719,7 @@ export async function upsertLectureAdmin(
     title: string;
     description: string;
     lectureNumber: number;
+    contentType?: 'lecture' | 'practical';
     educationalNotes?: string;
     estimatedMinutes?: number;
     pdfUrl?: string | null;
@@ -4700,6 +4728,7 @@ export async function upsertLectureAdmin(
 ) {
   try {
     const verifiedAdmin = await assertActiveAdminInDb(admin.uid);
+    if(payload.contentType!==undefined&&!['lecture','practical'].includes(payload.contentType))throw new ClientSafeError('Choose Lecture or Practical.',400);
     const cleanPdfUrl =
       payload.pdfUrl && typeof payload.pdfUrl === 'string' && payload.pdfUrl.trim()
         ? payload.pdfUrl.trim()
@@ -4717,6 +4746,7 @@ export async function upsertLectureAdmin(
           title: payload.title.trim(),
           description: payload.description.trim(),
           lectureNumber: Number(payload.lectureNumber) || 1,
+          ...(payload.contentType!==undefined?{contentType:payload.contentType}:{}),
           educationalNotes: payload.educationalNotes?.trim() || '',
           estimatedMinutes: Number(payload.estimatedMinutes) || 30,
           pdfUrl: cleanPdfUrl,
@@ -4746,6 +4776,7 @@ export async function upsertLectureAdmin(
           title: payload.title.trim(),
           description: payload.description.trim(),
           lectureNumber: Number(payload.lectureNumber) || 1,
+          contentType:payload.contentType||'lecture',
           educationalNotes: payload.educationalNotes?.trim() || '',
           estimatedMinutes: Number(payload.estimatedMinutes) || 30,
           pdfUrl: cleanPdfUrl,
@@ -5007,6 +5038,7 @@ export async function upsertQuestionAdmin(
     optionC: string;
     optionD: string;
     correctAnswer: OptionKey;
+    matchingChoiceId?: string;
     explanation: string;
     explanationA?: string;
     explanationB?: string;
@@ -5045,6 +5077,10 @@ export async function upsertQuestionAdmin(
         .select()
         .from(questions)
         .where(eq(questions.id, payload.id));
+      const matching = existing[0]?.matching;
+      if (matching && payload.matchingChoiceId !== undefined && !matching.choices.some(choice=>choice.id===payload.matchingChoiceId)) throw new ClientSafeError('Choose a valid matching answer key.',400);
+      if (matching && payload.correctAnswer !== 'A') throw new ClientSafeError('Use the matching answer selector to edit this numbered label.',400);
+      const updatedMatching = matching ? {...matching,correctChoiceId:payload.matchingChoiceId ?? matching.correctChoiceId} : null;
       const nextVersion = (existing[0]?.version || 1) + 1;
 
       const [updated] = await db
@@ -5058,6 +5094,7 @@ export async function upsertQuestionAdmin(
           optionC: payload.optionC.trim(),
           optionD: payload.optionD.trim(),
           correctAnswer: payload.correctAnswer,
+          ...(updatedMatching ? {matching:updatedMatching} : {}),
           explanation: payload.explanation.trim(),
           explanationA: payload.explanationA?.trim() || '',
           explanationB: payload.explanationB?.trim() || '',
@@ -5904,6 +5941,7 @@ export async function executeCsvImportAdmin(
           pageNumber: row.pageNumber ?? null,
           images: (row as JsonQuestionRow).images || [],
           explanationImages: (row as JsonQuestionRow).explanationImages || [],
+          matching: (row as JsonQuestionRow).matching || null,
           status: row.status,
           version: 1,
           contentHash: row.contentHash,
@@ -6002,6 +6040,7 @@ export async function exportQuestionBankCsvAdmin(): Promise<string> {
     const allQuestions = await db
       .select()
       .from(questions)
+      .where(isNull(questions.matching))
       .orderBy(asc(questions.subjectId), asc(questions.lectureId), asc(questions.id));
 
     const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));

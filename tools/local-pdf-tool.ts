@@ -303,6 +303,7 @@ const server = http.createServer(async (req, res) => {
           title: l.title,
           description: l.description,
           lectureNumber: l.lectureNumber,
+          contentType:l.contentType,
           pdfUrl: l.pdfUrl ? protectDocumentReference(l.pdfUrl) : null,
           subjectId: l.subjectId,
           subjectTitle: subj?.title || 'Unknown Subject',

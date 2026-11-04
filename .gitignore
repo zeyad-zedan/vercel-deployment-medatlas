@@ -22,6 +22,14 @@ tools/*
 !tools/pdf-portal-client.ts
 !tools/pdf-portal.html
 !tools/pdf-portal.css
+!tools/destination-creator.ts
+!tools/guided-upload.ts
+!tools/question-image-editor.ts
+!tools/question-image-editor-client.ts
+!tools/question-workflow.ts
+!tools/short-answer-portal.ts
+!tools/short-answer-portal-client.ts
+!tools/short-answer-portal.html
 start-pdf-tool.bat
 start-remote-tunnel.bat
 *.bat

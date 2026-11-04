@@ -20,7 +20,7 @@ export function mergeQuestionBatch(previous: any, incoming: any) {
   return { ...previous, questions: previous.questions.map((q: any) => {
     const loaded: any = byId.get(q.id);
     if (!loaded || q.contentLoaded !== false) return q;
-    return { ...loaded, ...(q.selectedDisplayed || q.submitted ? { selectedDisplayed: q.selectedDisplayed, submitted: q.submitted } : {}),
+    return { ...loaded, ...(q.selectedDisplayed || q.submitted ? { selectedDisplayed: q.selectedDisplayed, submitted: q.submitted, matchingChoiceId: q.matchingChoiceId ?? loaded.matchingChoiceId } : {}),
       ...(q.isBookmarked !== undefined ? { isBookmarked: q.isBookmarked } : {}) };
   }) };
 }

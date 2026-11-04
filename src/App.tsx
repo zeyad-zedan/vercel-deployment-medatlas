@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+const ShortAnswersView=lazy(()=>import('./components/ShortAnswersView.tsx'));
+const PracticalView=lazy(()=>import('./components/PracticalView.tsx'));
+import {catalogByContentType} from './lib/lecture-kinds.ts';
 import {
   BookOpen,
   Bookmark,
@@ -40,6 +43,7 @@ const VALID_TABS = [
   'subjects',
   'lectures',
   'practical',
+  'short-answers',
   'practice',
   'exams',
   'bookmarks',
@@ -115,6 +119,7 @@ export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [initializingAuth, setInitializingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState<string>(() => parseCurrentRoute().tab);
+  const [shortAnswerLectureId,setShortAnswerLectureId]=useState<number|undefined>();
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       let saved: string | null = null;
@@ -421,6 +426,7 @@ export default function App() {
     { id: 'lectures', label: 'Lectures', icon: BookOpen },
     { id: 'practical', label: 'Practical', icon: GraduationCap },
     { id: 'practice', label: 'Practice MCQs', icon: SlidersHorizontal },
+    { id: 'short-answers', label: 'Short Answers', icon: BookOpen },
     { id: 'exams', label: 'Mock Exams', icon: Clock },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
     { id: 'progress', label: 'Dashboard', icon: History },
@@ -491,6 +497,7 @@ export default function App() {
                   }
                   setActiveSession(null);
                   setActiveTab(item.id);
+                  if(item.id==='short-answers')setShortAnswerLectureId(undefined);
                   if (item.id === 'lectures') {
                     setSelectedSubjectId('all');
                   }
@@ -636,7 +643,7 @@ export default function App() {
 
               {activeTab === 'lectures' && (
                 <SubjectsAndLecturesView
-                  catalog={catalog}
+                  catalog={catalogByContentType(catalog,'lecture')}
                   dashboardData={dashboardData}
                   initialSelectedSubjectId={selectedSubjectId}
                   onStartSession={handleStartSession}
@@ -648,12 +655,10 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'short-answers' && <Suspense fallback={<p role="status">Loading short answers…</p>}><ShortAnswersView key={`${user.uid}:${shortAnswerLectureId||''}`} userUid={user.uid} initialLectureId={shortAnswerLectureId}/></Suspense>}
+
               {activeTab === 'practical' && (
-                <section className="ma-empty-state">
-                  <GraduationCap aria-hidden="true" />
-                  <h1>Practical</h1>
-                  <p>No practical content has been added yet.</p>
-                </section>
+                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} onStartSession={handleStartSession} onShortAnswers={id=>{setShortAnswerLectureId(id);setActiveTab('short-answers');}}/></Suspense>
               )}
 
               {activeTab === 'practice' && (

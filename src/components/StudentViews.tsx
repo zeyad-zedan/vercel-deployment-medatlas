@@ -1,5 +1,7 @@
+import { MatchingAnswerReview } from './MatchingQuestion.tsx';
 import { QuestionImages } from './QuestionImages.tsx';
 import { AcademicProfileFields } from './AcademicProfileFields.tsx';
+import { GeminiKeySettings } from './GeminiKeySettings.tsx';
 import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
 import { groupLectureModules } from '../lib/lecture-modules.ts';
 import { ExamCompletionGate } from '../lib/exam-completion.ts';
@@ -607,9 +609,8 @@ export const SubjectsAndLecturesView: React.FC<{
         <div className="space-y-8">
           {matchingSubjects.map((subject: any, subjectIndex: number) => {
             // Find student metrics for this module
-            const subjProgress = dashboardData?.subjectProgress?.find(
-              (p: any) => p.subjectId === subject.id
-            );
+            const subjectRecord=dashboardData?.subjectProgress?.find((p:any)=>p.subjectId===subject.id);
+            const subjProgress = {...subjectRecord,uniqueQuestionsAttempted:(subject.lectures||[]).reduce((sum:number,lecture:any)=>sum+(subjectRecord?.lectures?.find((p:any)=>p.lectureId===lecture.id)?.uniqueQuestionsAttempted??lecture.attemptedQuestions??0),0)};
 
             // Sort lectures belonging to the selected module in their correct order
             const sortedLectures = [...(subject.lectures || [])].filter((l: any) => !search || subject.title.toLocaleLowerCase().includes(search) || l.title.toLocaleLowerCase().includes(search)).sort(
@@ -649,7 +650,7 @@ export const SubjectsAndLecturesView: React.FC<{
                       onClick={() =>
                         onStartSession({
                           mode: 'study',
-                          subjectIds: [subject.id],
+                          lectureIds: (subject.lectures||[]).map((lecture:any)=>lecture.id),
                           title: `${subject.title} — Comprehensive Study`,
                         })
                       }
@@ -662,7 +663,7 @@ export const SubjectsAndLecturesView: React.FC<{
                       onClick={() =>
                         onStartSession({
                           mode: 'exam',
-                          subjectIds: [subject.id],
+                          lectureIds: (subject.lectures||[]).map((lecture:any)=>lecture.id),
                           title: `${subject.title} — Module Mock Exam`,
                           shuffleQuestions: true,
                           shuffleOptions: true,
@@ -2187,8 +2188,9 @@ export const BookmarksView: React.FC<{
 
                 {isOpen && (
                   <div className="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                    {item.matching && <MatchingAnswerReview matching={item.matching} choiceId={item.matchingChoiceId}/>}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {(['A', 'B', 'C', 'D'] as const).map((optKey) => {
+                      {(!item.matching ? ['A', 'B', 'C', 'D'] as const : []).map((optKey) => {
                         const text = item[`option${optKey}`];
                         const isCorrect = item.correctAnswer === optKey;
                         return (
@@ -2214,7 +2216,7 @@ export const BookmarksView: React.FC<{
 
                     <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
                       <p className="font-bold text-slate-900">
-                        Explanation (Correct Answer: {item.correctAnswer}):
+                        {item.matching ? 'Explanation' : `Explanation (Correct Answer: ${item.correctAnswer})`}:
                       </p>
                       <p className="text-slate-700 leading-relaxed">
                         {item.explanation}
@@ -2428,6 +2430,8 @@ export const ProfileSettingsView: React.FC<{
           </button>
         </div>
       </form>
+
+      <GeminiKeySettings key={user.uid}/>
 
       {/* Authenticated Password Change / Provider Account Password Linking */}
       <form

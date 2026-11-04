@@ -1,10 +1,16 @@
 import { getSampleJsonTemplate, type JsonValidationReport, type JsonQuestionRow } from '../src/lib/json-import.ts';
 import { parseSpecialTags } from '../src/lib/mcq-engine.ts';
+import { expandMatchingQuestion } from '../src/lib/matching-questions.ts';
+import {guidedUpload} from './guided-upload.ts';
+import {destinationLabel} from '../src/lib/lecture-kinds.ts';
+import {installDestinationCreator} from './destination-creator.ts';
+import {installQuestionWorkflow} from './question-workflow.ts';
 import { MAX_IMPORT_IMAGES, MAX_QUESTION_IMAGE_BYTES, validImageFileName, type QuestionImage } from '../src/lib/question-images.ts';
 
 const element=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(id) as T;
 const source=element<HTMLTextAreaElement>('source'), lecture=element<HTMLSelectElement>('lecture');
 const form=element<HTMLFieldSetElement>('import-form');
+installQuestionWorkflow(lecture,'mcq');
 const presets=['Old Exams','كتاب القسم','Important'];
 type Asset={file:File;id:string;url:string};
 type TagKey='specialTags'|'tags';
@@ -12,7 +18,7 @@ const assets=new Map<string,Asset>(), uploaded=new Map<string,QuestionImage>();
 const overrides=new Map<number,{specialTags?:string;tags?:string}>(),expanded=new Set<number>();
 let fileName='questions.json', revision=0, busy=false, pageSize=50;
 let report:JsonValidationReport|null=null;
-let lectures:Array<{id:number;title:string;subjectTitle:string;status:string}>=[];
+let lectures:Array<{id:number;title:string;subjectTitle:string;status:string;contentType?:string;lectureNumber?:number}>=[];
 
 function make<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string,className?:string):HTMLElementTagNameMap[K] {
   const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;
@@ -47,11 +53,11 @@ function renderLectures() {
   const selected=lecture.value,query=element<HTMLInputElement>('lecture-search').value.trim().toLowerCase();
   const options=lectures.filter(l=>`${l.subjectTitle} ${l.title}`.toLowerCase().includes(query) || String(l.id)===selected);
   const automatic=make('option','Use JSON destinations (subject + lecture)');automatic.value='';lecture.replaceChildren(automatic);
-  for(const row of options){const option=make('option',`${row.subjectTitle} → ${row.title}${row.status!=='published'?' ['+row.status+']':''}`);option.value=String(row.id);lecture.append(option);}
+  for(const row of options){const option=make('option',`${destinationLabel(row)}${row.status!=='published'?' ['+row.status+']':''}`);option.value=String(row.id);lecture.append(option);}
   lecture.value=selected;
 }
 async function loadLectures() {
-  const data=await request('lectures');lectures=data.lectures;renderLectures();
+  const data=await request('lectures');lectures=data.lectures;renderLectures();creator.setSubjects(data.subjects||[]);element('matching-preview-note').hidden=!data.matchingPreviewOnly;
 }
 function renderAssets() {
   element('asset-section').hidden=!assets.size;element('asset-count').textContent=`${assets.size} selected image${assets.size===1?'':'s'}`;
@@ -60,6 +66,7 @@ function renderAssets() {
     const figure=make('figure',undefined,'asset'),img=make('img');img.src=asset.url;img.alt=name;
     figure.append(img,make('figcaption',`${name} · ${(asset.file.size/1024).toFixed(0)} KB`),button('Remove',()=>{if(busy)return;URL.revokeObjectURL(asset.url);assets.delete(name);invalidate();renderAssets();},''));grid.append(figure);
   }
+  renderMatchingImages();
 }
 async function selectFiles(files:File[]) {
   if(busy || !files.length)return;
@@ -120,7 +127,8 @@ function rowDetails(row:JsonQuestionRow) {
     if(populated)return;populated=true;
     if(row.imageFiles.length)details.append(imageFigures(row.imageFiles,'Question figure'));
     const answers=make('div',undefined,'answers');
-    for(const key of ['A','B','C','D'] as const)answers.append(make('div',`${key}. ${row[`option${key}`]}${row.correctAnswer===key?' ✓ Correct answer':''}`,`answer${row.correctAnswer===key?' correct':''}`));
+    if(row.matching)for(const choice of row.matching.choices)answers.append(make('div',`${choice.text}${row.matching.correctChoiceId===choice.id?' ✓ Correct match':''}`,`answer${row.matching.correctChoiceId===choice.id?' correct':''}`));
+    else for(const key of ['A','B','C','D'] as const)answers.append(make('div',`${key}. ${row[`option${key}`]}${row.correctAnswer===key?' ✓ Correct answer':''}`,`answer${row.correctAnswer===key?' correct':''}`));
     details.append(answers,make('p',row.explanation,'explanation'));
     for(const key of ['A','B','C','D'] as const){const text=row[`explanation${key}`];if(text)details.append(make('p',`${key}: ${text}`,'explanation'));}
     if(row.explanationImageFiles.length)details.append(imageFigures(row.explanationImageFiles,'Explanation figure'));
@@ -224,4 +232,51 @@ element('bulk-add').addEventListener('click',()=>{const input=element<HTMLInputE
 element('show-more').addEventListener('click',()=>{pageSize+=50;renderRows();});
 element('new-import').addEventListener('click',()=>{if(busy)return;source.value='';fileName='questions.json';for(const asset of assets.values())URL.revokeObjectURL(asset.url);assets.clear();uploaded.clear();invalidate();renderAssets();element('file-label').textContent='Paste JSON or select a file above.';window.scrollTo({top:0,behavior:'smooth'});});
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
+function renderMatchingImages() {
+  const select=element<HTMLSelectElement>('matching-image'), previous=select.value;
+  const empty=make('option','Choose an image…');empty.value='';select.replaceChildren(empty);
+  for(const name of assets.keys()){const option=make('option',name);option.value=name;select.append(option);}
+  select.value=assets.has(previous)?previous:assets.keys().next().value||'';
+  const image=element<HTMLImageElement>('matching-image-preview'),asset=assets.get(select.value);
+  image.hidden=!asset;if(asset)image.src=asset.url;else image.removeAttribute('src');
+}
+let matchingRowNumber=0;
+function addMatchingLabel() {
+  if(element('matching-pairs').children.length>=30){message('Use at most 30 numbered labels per image.','error');return;}
+  const row=make('tr'),index=++matchingRowNumber;
+  for(const [key,label,value] of [['number','Number',String(index)],['answer','Correct name',''],['explanation','Explanation','']]){
+    const cell=make('td'),input=make('input');input.dataset.field=key;input.value=value;
+    input.setAttribute('aria-label',`${label} for matching row ${index}`);input.maxLength=key==='number'?4:key==='answer'?300:30000;cell.append(input);row.append(cell);
+  }
+  const actions=make('td');actions.append(button('Remove',()=>row.remove(),'button subtle'));row.append(actions);element('matching-pairs').append(row);
+}
+const matchingWizard=guidedUpload('matching',['Image and instructions','Numbered answers','Choices and tags'],step=>{
+  if(step===0){if(!assets.has(element<HTMLSelectElement>('matching-image').value))throw new Error('Choose your numbered image first.');if(!element<HTMLInputElement>('matching-instructions').value.trim())throw new Error('Add instructions for the student.');}
+  if(step===1){const rows=[...element('matching-pairs').children],numbers=new Set<string>();if(!rows.length)throw new Error('Add at least one numbered label.');for(const row of rows){const number=row.querySelector<HTMLInputElement>('[data-field="number"]')!.value.trim().toUpperCase(),answer=row.querySelector<HTMLInputElement>('[data-field="answer"]')!.value.trim();if(!/^[1-9]\d{0,2}[A-Z]?$/.test(number)||numbers.has(number))throw new Error('Use unique numbers such as 1, 2, or 3A.');if(!answer)throw new Error(`Enter the correct name for label ${number}.`);numbers.add(number);}}
+},step=>{if(step===2)element('matching-summary').textContent=`${element('matching-pairs').children.length} labels · ${element<HTMLSelectElement>('matching-image').value}`;});
+element('open-matching').addEventListener('click',()=>{if(busy)return;element('matching-builder').hidden=false;if(!element('matching-pairs').children.length){addMatchingLabel();addMatchingLabel();}renderMatchingImages();matchingWizard.reset();element('matching-builder').scrollIntoView({behavior:'smooth',block:'start'});});
+element('close-matching').addEventListener('click',()=>{element('matching-builder').hidden=true;});
+element('matching-add-label').addEventListener('click',addMatchingLabel);
+element('matching-image').addEventListener('change',renderMatchingImages);
+element<HTMLInputElement>('matching-image-upload').addEventListener('change',async event=>{const input=event.target as HTMLInputElement;await selectFiles([...input.files||[]]);input.value='';});
+element('matching-add-json').addEventListener('click',()=>{
+  if(busy)return;
+  try{
+    const filename=element<HTMLSelectElement>('matching-image').value;
+    if(!assets.has(filename))throw new Error('Choose the numbered image first.');
+    const matches=Array.from(element('matching-pairs').children).map(row=>Object.fromEntries(Array.from(row.querySelectorAll<HTMLInputElement>('input[data-field]')).map(input=>[input.dataset.field,input.value.trim()])));
+    const entry={question_type:'matching',question_text:element<HTMLInputElement>('matching-instructions').value.trim(),images:[filename],matches,
+      distractors:element<HTMLTextAreaElement>('matching-distractors').value.split(/\r?\n/).map(text=>text.trim()).filter(Boolean),difficulty:'Medium',tags:parseSpecialTags(element<HTMLInputElement>('matching-tags').value),status:'draft'};
+    expandMatchingQuestion(entry,'builder-preview');
+    let root=source.value.trim()?JSON.parse(source.value):{questions:[]};
+    if(Array.isArray(root))root={questions:root};
+    if(!root||!Array.isArray(root.questions))throw new Error('The JSON source must contain a questions array before adding matching labels.');
+    root.questions.push(entry);source.value=JSON.stringify(root,null,2);invalidate();element('matching-builder').hidden=true;
+    element('file-label').textContent='Matching labels added to your JSON batch.';
+    message(`${matches.length} matching labels added. Choose a lecture, then Validate & preview.`);
+    element('source').scrollIntoView({behavior:'smooth',block:'center'});
+  }catch(error){element('matching-error').textContent=(error as Error).message;element('matching-error').hidden=false;message((error as Error).message,'error');}
+});
+const creator=installDestinationCreator(lecture,async saved=>{await loadLectures();lecture.value=String(saved.id);invalidate();message(`${saved.contentType==='practical'?'Section':'Lecture'} created and selected. Add your questions next.`);});
 void loadLectures().catch(error=>message(error.message,'error'));
+if(new URLSearchParams(window.location.search).get('matching')==='1')element('open-matching').click();

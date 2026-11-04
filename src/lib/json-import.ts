@@ -1,11 +1,13 @@
 import { computeContentHash, parseAndValidateCsvQuestions, parseSpecialTags, type CsvValidationReport, type ParsedCsvQuestionRow } from './mcq-engine.ts';
 import { MAX_IMPORT_IMAGES, validImageFileName, type ImportImageFile, type QuestionImage } from './question-images.ts';
+import { expandMatchingQuestion, type MatchingQuestionDefinition } from './matching-questions.ts';
 
 export interface JsonQuestionRow extends ParsedCsvQuestionRow {
   imageFiles: Array<{ file: string; alt: string }>;
   explanationImageFiles: Array<{ file: string; alt: string }>;
   images?: QuestionImage[];
   explanationImages?: QuestionImage[];
+  matching?: MatchingQuestionDefinition;
 }
 export interface JsonValidationReport extends Omit<CsvValidationReport, 'rows'> {
   rows: JsonQuestionRow[];
@@ -40,8 +42,23 @@ export function parseAndValidateJsonQuestions(content: string, existingHashes = 
     manifest.set(f.name, f.id);
   }
   if (report.headerErrors.length) return report;
+  let expanded: Array<{entry:any;matching?:MatchingQuestionDefinition}> = [];
+  for (const [index,entry] of entries.entries()) {
+    if (entry?.question_type === 'matching') {
+      try {
+        for (const key of Object.keys(entry)) if (!allowed.has(key) && !['question_type','matches','distractors'].includes(key)) throw new Error(`Unknown field "${key}".`);
+        if (['options','option_a','option_b','option_c','option_d','correct_answer'].some(key=>key in entry)) throw new Error('Matching questions use matches and distractors, not MCQ options.');
+        const groupId=computeContentHash(JSON.stringify([entry.question_text,entry.matches,entry.distractors,
+          entry.images?.map((image:any)=>manifest.get(typeof image==='string'?image:image.file))]));
+        expanded.push(...expandMatchingQuestion(entry,groupId));
+      } catch(error) {report.headerErrors.push(`Matching image ${index+1}: ${(error as Error).message}`);}
+    } else expanded.push({entry});
+  }
+  if (expanded.length > 2000) report.headerErrors.push('A batch may contain at most 2,000 questions, counting each matching label separately.');
+  if (report.headerErrors.length) return report;
   const referenced = new Set<string>(), seen = new Set<string>();
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, prepared] of expanded.entries()) {
+    const entry=prepared.entry;
     const errors: string[] = [];
     const q = object(entry) ? entry : {};
     if (!object(entry)) errors.push('Each question must be a JSON object.');
@@ -89,18 +106,18 @@ export function parseAndValidateJsonQuestions(content: string, existingHashes = 
     if (!base) { report.headerErrors.push(`Question ${index+1} could not be parsed.`); continue; }
     errors.push(...base.errors);
     const imageHashes = [...imageFiles.map(f=>'q:'+manifest.get(f.file)),...explanationImageFiles.map(f=>'e:'+manifest.get(f.file))];
-    const contentHash = imageHashes.length ? computeContentHash(base.contentHash+'|'+imageHashes.join('|')) : base.contentHash;
+    const contentHash = imageHashes.length || prepared.matching ? computeContentHash(base.contentHash+'|'+imageHashes.join('|')+(prepared.matching?'|'+JSON.stringify(prepared.matching):'')) : base.contentHash;
     const duplicate = seen.has(contentHash) || existingHashes.has(contentHash);
     if (duplicate) errors.push('Question already exists in this import or the question bank.');
     // Invalid entries must not prevent a later corrected entry from importing.
     if (!errors.length) seen.add(contentHash);
-    const row = {...base,rowNumber:index+1,contentHash,imageFiles,explanationImageFiles,isValid:!errors.length,isDuplicate:duplicate,errors};
+    const row = {...base,rowNumber:index+1,contentHash,imageFiles,explanationImageFiles,matching:prepared.matching,isValid:!errors.length,isDuplicate:duplicate,errors};
     report.rows.push(row);
     if (row.isValid) report.validCount++;
     else if (duplicate && errors.length === 1) report.duplicateCount++;
     else report.invalidCount++;
   }
-  report.totalRows = entries.length;
+  report.totalRows = expanded.length;
   report.referencedImages = [...referenced];
   report.unusedImages = files.map(f=>f.name).filter(n=>!referenced.has(n));
   // Include routing and image content in batch identity, while preserving JSON case.

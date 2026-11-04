@@ -689,6 +689,16 @@ export const api = {
     return data;
   },
 
+  getGeminiKeyStatus: () => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key'),
+  shortAnswerCatalog: () => apiRequest<any>('/api/short-answers/catalog'),
+  shortAnswerQuestions: (lectureId:number,after?:number) => apiRequest<any>(`/api/short-answers/questions?lectureId=${lectureId}${after?'&after='+after:''}`),
+  shortAnswerHistory: (before?:number) => apiRequest<any>('/api/short-answers/history'+(before?'?before='+before:'')),
+  saveShortAnswer: (questionId:number,answer:string) => apiRequest<any>('/api/short-answers/answers',{method:'POST',body:JSON.stringify({questionId,answer})}),
+  getShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}`),
+  gradeShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}/grade`,{method:'POST',body:JSON.stringify({consent:true})}),
+  saveGeminiKey: (apiKey:string) => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key',{method:'PUT',body:JSON.stringify({apiKey})}),
+  removeGeminiKey: () => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key',{method:'DELETE'}),
+
   deleteAccount: async () => {
     const res = await apiRequest<{ deleted: boolean }>('/api/auth/account', {
       method: 'DELETE',
@@ -737,7 +747,8 @@ export const api = {
     selectedOption: string | null,
     lockAnswer: boolean,
     elapsedSeconds?: number,
-    slim = true
+    slim = true,
+    matchingChoiceId?: string | null
   ) =>
     apiRequest<{ session: any }>(`/api/sessions/${sessionId}/answer`, {
       method: 'POST',
@@ -748,6 +759,7 @@ export const api = {
         lockAnswer,
         elapsedSeconds,
         slim,
+        matchingChoiceId,
       }),
     }),
 

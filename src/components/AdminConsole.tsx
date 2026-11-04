@@ -1,3 +1,4 @@
+import { MatchingAnswerReview } from './MatchingQuestion.tsx';
 import { getSampleJsonTemplate } from '../lib/json-import.ts';
 import { MAX_QUESTION_IMAGE_BYTES, MAX_IMPORT_IMAGES, validImageFileName, type QuestionImage } from '../lib/question-images.ts';
 import { ImportImageThumbnail } from './ImportImageThumbnail.tsx';
@@ -96,6 +97,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [lectTitle, setLectTitle] = useState('');
   const [lectDesc, setLectDesc] = useState('');
   const [lectNumber, setLectNumber] = useState(1);
+  const [lectContentType,setLectContentType]=useState<'lecture'|'practical'>('lecture');
   const [lectNotes, setLectNotes] = useState('');
   const [lectPdfUrl, setLectPdfUrl] = useState('');
   const [lectStatus, setLectStatus] = useState<'published' | 'draft' | 'archived'>(
@@ -117,6 +119,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [qSearch, setQSearch] = useState('');
   const [qSubjectFilter, setQSubjectFilter] = useState<number | 'all'>('all');
   const [qStatusFilter, setQStatusFilter] = useState<string>('all');
+  const [qMatchingChoice,setQMatchingChoice]=useState('');
   const [editingQuestion, setEditingQuestion] = useState<any | null>(null);
   const [previewQuestion, setPreviewQuestion] = useState<any | null>(null);
   const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState<
@@ -353,6 +356,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       setLectTitle(lect.title);
       setLectDesc(lect.description);
       setLectNumber(lect.lectureNumber);
+      setLectContentType(lect.contentType||'lecture');
       setLectNotes(lect.educationalNotes || '');
       setLectPdfUrl(lect.pdfUrl || '');
       setLectStatus(lect.status);
@@ -360,6 +364,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       setEditingLecture({ id: undefined });
       setLectSubjectId(defaultSubjId);
       setLectTitle('');
+      setLectContentType('lecture');
       setLectDesc('');
       setLectNumber(lectures.length + 1);
       setLectNotes('');
@@ -404,12 +409,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         title: lectTitle,
         description: lectDesc,
         lectureNumber: lectNumber,
+        contentType:lectContentType,
         educationalNotes: lectNotes,
         pdfUrl: lectPdfUrl.trim() || null,
         status: lectStatus,
       });
       setEditingLecture(null);
-      setFeedbackMsg('Lecture saved successfully.');
+      setFeedbackMsg(lectContentType==='practical'?'Section saved successfully.':'Lecture saved successfully.');
       onRefresh();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to save lecture.');
@@ -427,6 +433,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
     if (q) {
       setEditingQuestion(q);
+      setQMatchingChoice(q.matching?.correctChoiceId || '');
       setQSubjectId(q.subjectId);
       setQLectureId(q.lectureId);
       setQText(q.questionText);
@@ -494,7 +501,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         optionB: qOptB,
         optionC: qOptC,
         optionD: qOptD,
-        correctAnswer: qCorrect,
+        correctAnswer: editingQuestion?.matching ? 'A' : qCorrect,
+        ...(editingQuestion?.matching ? {matchingChoiceId:qMatchingChoice} : {}),
         explanation: qExplanation,
         explanationA: qExpA,
         explanationB: qExpB,
@@ -601,7 +609,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       a.download = 'medatlas_question_bank_backup.csv';
       a.click();
       URL.revokeObjectURL(url);
-      setFeedbackMsg('Exported question text as CSV. Full database backups preserve Telegram image references.');
+      setFeedbackMsg('Exported standard MCQs as CSV. Matching labels stay in their JSON source and full database backups.');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to export question bank.');
     }
@@ -788,7 +796,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               { id: 'overview', label: 'Overview & Logs' },
               { id: 'users', label: `Users & Roles (${users.length})` },
               { id: 'modules', label: `Modules & Subjects (${modulesList.length} / ${subjects.length})` },
-              { id: 'lectures', label: `Lectures (${lectures.length})` },
+              { id: 'lectures', label: `Lectures & Sections (${lectures.length})` },
               { id: 'questions', label: `Question Bank (${questions.length})` },
               { id: 'import', label: 'Bulk JSON Import & Export' },
               { id: 'reports', label: 'Question reports' },
@@ -1684,10 +1692,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-slate-900">
-                Manage Lectures &amp; Quizzes
+                Manage Lectures &amp; Sections
               </h2>
               <p className="text-xs text-slate-500">
-                Create lectures, organize modules, and upload or replace lecture PDF slide decks.
+                Create lectures and practical sections, and upload or replace their PDF slide decks.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1709,7 +1717,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>New Lecture</span>
+                <span>New Lecture / Section</span>
               </button>
             </div>
           </div>
@@ -1720,8 +1728,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               className="bg-white rounded-xl border border-slate-200 p-6 space-y-4 text-xs"
             >
               <h3 className="text-sm font-bold text-slate-900">
-                {editingLecture.id ? 'Edit Lecture' : 'Create New Lecture'}
+                {editingLecture.id ? `Edit ${lectContentType==='practical'?'Section':'Lecture'}` : 'Create Lecture / Section'}
               </h3>
+              <label className="block font-semibold text-slate-700">Content type<select aria-label="Content type" value={lectContentType} onChange={e=>{setLectContentType(e.target.value as 'lecture'|'practical');if(!editingLecture.id&&e.target.value==='practical')setLectStatus('draft');}} className="block w-full mt-1 px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"><option value="lecture">Lecture</option><option value="practical">Practical — Section</option></select></label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
@@ -1744,7 +1753,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Lecture Number
+                    {lectContentType==='practical'?'Section Number':'Lecture Number'}
                   </label>
                   <input
                     type="number"
@@ -1771,7 +1780,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Lecture Title
+                  {lectContentType==='practical'?'Section Title':'Lecture Title'}
                 </label>
                 <input
                   type="text"
@@ -1802,7 +1811,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                       Lecture Slide Deck / PDF Document
                     </label>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Upload a PDF file to save directly into the database, or enter an existing URL.
+                      Upload a PDF file to Telegram, or use an existing protected document reference.
                     </p>
                   </div>
                   {lectPdfUrl && (
@@ -1894,7 +1903,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   type="submit"
                   className="px-4 py-2 font-semibold text-white bg-[var(--ma-brand)] rounded-lg cursor-pointer"
                 >
-                  Save Lecture
+                  {lectContentType==='practical'?'Save Section':'Save Lecture'}
                 </button>
               </div>
             </form>
@@ -1911,7 +1920,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
                     <th className="py-3 px-4 font-semibold">Subject</th>
                     <th className="py-3 px-4 font-semibold">#</th>
-                    <th className="py-3 px-4 font-semibold">Lecture Title</th>
+                    <th className="py-3 px-4 font-semibold">Lecture / Section Title</th>
                     <th className="py-3 px-4 font-semibold">PDF Document</th>
                     <th className="py-3 px-4 font-semibold">Questions</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
@@ -1930,6 +1939,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                         </td>
                         <td className="py-3 px-4">
                           <p className="font-bold text-slate-900">{l.title}</p>
+                          <p className="text-xs text-[var(--ma-brand)]">{l.contentType==='practical'?'Practical · Section':'Lecture'}</p>
                           <p className="text-slate-500">{l.description}</p>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
@@ -2290,7 +2300,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {!editingQuestion?.matching && <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Option A
@@ -2339,10 +2349,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
                   />
                 </div>
-              </div>
+              </div>}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
+                {editingQuestion?.matching ? <div><label className="block font-semibold mb-1">Correct name for label #{editingQuestion.matching.number}</label>
+                  <select value={qMatchingChoice} onChange={event=>setQMatchingChoice(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                    {editingQuestion.matching.choices.map((choice:any)=><option key={choice.id} value={choice.id}>{choice.text}</option>)}
+                  </select></div> : <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Correct Answer Key
                   </label>
@@ -2356,7 +2369,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     <option value="C">Option C</option>
                     <option value="D">Option D</option>
                   </select>
-                </div>
+                </div>}
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     PDF Page Number
@@ -2638,7 +2651,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
-                  Export Text-only CSV
+                  Export standard MCQs (CSV)
                 </button>
               </div>
             </div>
@@ -3311,8 +3324,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               {previewQuestion.questionText}
             </p>
 
+            {previewQuestion.matching && <MatchingAnswerReview matching={previewQuestion.matching}/>}
             <div className="space-y-2 text-xs">
-              {(['A', 'B', 'C', 'D'] as const).map((opt) => {
+              {(!previewQuestion.matching ? ['A', 'B', 'C', 'D'] as const : []).map((opt) => {
                 const isCorrect = previewQuestion.correctAnswer === opt;
                 return (
                   <div

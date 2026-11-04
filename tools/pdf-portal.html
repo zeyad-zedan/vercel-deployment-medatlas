@@ -7,7 +7,7 @@
   <script type="module" src="/pdf-assets/client.js"></script>
 </head>
 <body>
-  <header class="portal-bar"><div class="portal-bar-inner"><a class="wordmark" href="/">MedAtlas <span>Uploads</span></a><nav aria-label="Portal sections"><a href="/" aria-current="page">PDFs</a><a href="/mcqs">MCQs</a></nav></div></header>
+  <header class="portal-bar"><div class="portal-bar-inner"><a class="wordmark" href="/">MedAtlas <span>Uploads</span></a><nav aria-label="Portal sections"><a href="/" aria-current="page">PDFs</a><a href="/mcqs">MCQs & matching</a><a href="/short-answers">Short answers</a></nav></div></header>
   <main class="workspace pdf-workspace">
     <header class="page-header">
       <h1>Upload PDFs</h1><p>Attach or replace a lecture’s slide deck.</p>
@@ -24,7 +24,7 @@
       </details>
     </section>
     <section class="library" aria-labelledby="library-title">
-      <div class="section-heading"><h2 id="library-title">Lectures</h2><div class="actions"><button id="share" class="button secondary" type="button">Open on another device</button><button id="refresh" class="button subtle" type="button">Refresh</button></div></div>
+      <div class="section-heading"><h2 id="library-title">Lectures & sections</h2><div class="actions"><button id="share" class="button secondary" type="button">Open on another device</button><button id="refresh" class="button subtle" type="button">Refresh</button></div></div>
       <div class="card library-filters"><div class="search-field"><label for="search">Find a lecture</label><input id="search" type="search" placeholder="Search by lecture, subject, or number…"></div><div><label for="subject">Subject</label><select id="subject"><option value="all">All subjects</option></select></div><div><label for="pdf-status">PDF status</label><select id="pdf-status"><option value="all">All lectures</option><option value="missing">Awaiting a PDF</option><option value="attached">PDF attached</option></select></div></div>
       <p id="results-count" class="results-count" aria-live="polite">Loading your lecture library…</p>
       <div id="lectures" class="subject-list"></div>

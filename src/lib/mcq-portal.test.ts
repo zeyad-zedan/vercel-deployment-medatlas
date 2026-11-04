@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { randomUUID,createHash } from 'node:crypto';
 import { and,eq,inArray,like } from 'drizzle-orm';
 import { getSampleJsonTemplate } from './json-import.ts';
+import { getMatchingJsonTemplate } from './matching-questions.ts';
 
 process.env.NODE_ENV='test';
 const enabled=/^postgres(?:ql)?:\/\/[^/]*@(?:localhost|127\.0\.0\.1):/.test(process.env.DATABASE_URL || '');
@@ -19,6 +20,7 @@ test('bot portal opens without login and supports JSON, Telegram figures, tags, 
   const [subject]=await db.insert(subjects).values({slug:uid,title:'Portal test '+marker,description:'Disposable test'}).returning();
   const [lecture]=await db.insert(lectures).values({subjectId:subject.id,title:'Upload portal fixture',description:'Disposable test'}).returning();
   const oldKey=process.env.ILOVEPDF_PUBLIC_KEY,oldToken=process.env.TELEGRAM_BOT_TOKEN,oldChannel=process.env.TELEGRAM_CHANNEL_ID;
+  const oldMatchingPreview=process.env.MATCHING_PREVIEW_ONLY;
   const compressionKey='test-only-compression-key-'+marker;
   process.env.ILOVEPDF_PUBLIC_KEY=compressionKey;process.env.TELEGRAM_BOT_TOKEN='123:test';process.env.TELEGRAM_CHANNEL_ID='test-channel';
   const realFetch=globalThis.fetch;
@@ -77,6 +79,17 @@ test('bot portal opens without login and supports JSON, Telegram figures, tags, 
     assert.equal(uploads,1,'Text-only imports do not contact Telegram.');
     const published=await db.select().from(questions).where(and(eq(questions.lectureId,lecture.id),eq(questions.status,'published')));assert.equal(published.length,1);
 
+    process.env.MATCHING_PREVIEW_ONLY='true';
+    assert.equal((await(await request('/api/mcq/lectures')).json()).matchingPreviewOnly,true);
+    const matching={...getMatchingJsonTemplate('cell-diagram.png'),status:'published'};
+    const guarded=await(await request('/api/mcq/preview',{...payload,publication:'json',jsonContent:JSON.stringify({questions:[matching,text.questions[0]]})})).json();
+    assert.equal(guarded.validCount,3); // The previously imported ordinary MCQ is a duplicate.
+    assert.ok(guarded.rows.filter((row:any)=>row.matching).every((row:any)=>row.status==='draft'));
+    assert.equal(guarded.rows.find((row:any)=>!row.matching).status,'published','The matching preview guard must not change ordinary MCQ publication.');
+    process.env.MATCHING_PREVIEW_ONLY='false';
+    const publishable=await(await request('/api/mcq/preview',{...payload,publication:'json',jsonContent:JSON.stringify({questions:[matching]})})).json();
+    assert.equal(publishable.validCount,3);assert.ok(publishable.rows.every((row:any)=>row.status==='published'));
+
     const form=new FormData();form.append('lectureId',String(lecture.id));form.append('file',new Blob([new Uint8Array(pdf)],{type:'application/pdf'}),marker+'.pdf');form.append('compress','true');
     const attached=await fetch(origin+'/api/upload',{method:'POST',body:form});const attachment=await attached.json();assert.equal(attached.status,200,JSON.stringify(attachment));
     assert.equal(attachment.compression.usedCompression,true);assert.equal(attachment.compression.compressedBuffer,undefined);assert.ok(JSON.stringify(attachment).length<10000,'Upload confirmations must not echo PDF bytes.');
@@ -86,7 +99,7 @@ test('bot portal opens without login and supports JSON, Telegram figures, tags, 
   } finally {
     globalThis.fetch=realFetch;
     await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));
-    for(const [key,value] of Object.entries({ILOVEPDF_PUBLIC_KEY:oldKey,TELEGRAM_BOT_TOKEN:oldToken,TELEGRAM_CHANNEL_ID:oldChannel})){if(value===undefined)delete process.env[key];else process.env[key]=value;}
+    for(const [key,value] of Object.entries({ILOVEPDF_PUBLIC_KEY:oldKey,TELEGRAM_BOT_TOKEN:oldToken,TELEGRAM_CHANNEL_ID:oldChannel,MATCHING_PREVIEW_ONLY:oldMatchingPreview})){if(value===undefined)delete process.env[key];else process.env[key]=value;}
     await db.delete(adminAuditLogs).where(like(adminAuditLogs.details,'%'+marker+'%'));
     if(batches.length)await db.delete(importBatches).where(inArray(importBatches.id,batches));
     await db.delete(subjects).where(eq(subjects.id,subject.id));

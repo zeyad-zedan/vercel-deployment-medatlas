@@ -60,3 +60,20 @@ export function rememberSessionQuestion(sessionId: number, questionId: number, i
     localStorage.setItem(`medatlas_session_curr_idx_${sessionId}`, String(index));
   } catch { /* Browsing still works when local storage is unavailable. */ }
 }
+
+/** Matching choices share the same acknowledged-write draft envelope as MCQ options. */
+export function readSessionMatchingDrafts(session: any): Record<number,string> {
+  if (session?.status === 'completed') return {};
+  try {
+    const stored = JSON.parse(localStorage.getItem(`medatlas_session_draft_answers_${session.id}`) || '{}');
+    const drafts: Record<number,string> = {};
+    for (const q of session.questions || []) {
+      const choice = stored.matchingChoices?.[q.id];
+      if (typeof choice !== 'string' || !/^c[1-9]\d{0,2}$/.test(choice)) continue;
+      if (session.mode !== 'exam' && q.submitted) continue;
+      if (q.matchingChoiceId === choice) continue;
+      drafts[q.id] = choice;
+    }
+    return drafts;
+  } catch { return {}; }
+}

@@ -5,6 +5,7 @@ export interface AnswerToSave {
   selectedOption: OptionKey;
   lockAnswer: boolean;
   elapsedSeconds?: number;
+  matchingChoiceId?: string;
 }
 
 export type AnswerSaveStatus = 'idle' | 'saving' | 'saved' | 'error';

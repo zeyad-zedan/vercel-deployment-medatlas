@@ -1,0 +1,27 @@
+{
+  "questions": [
+    {
+      "question_type": "short_answer",
+      "question_text": "Name three functions of bone.",
+      "model_answer": "Support, protection, and movement.",
+      "rubric": [
+        {
+          "description": "Support of the body",
+          "marks": 1
+        },
+        {
+          "description": "Protection of organs",
+          "marks": 1
+        },
+        {
+          "description": "Movement through leverage and muscle attachment",
+          "marks": 1
+        }
+      ],
+      "tags": [
+        "Anatomy"
+      ],
+      "status": "draft"
+    }
+  ]
+}

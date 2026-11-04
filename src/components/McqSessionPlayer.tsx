@@ -1,3 +1,4 @@
+import { MatchingQuestion } from './MatchingQuestion.tsx';
 import { useSessionImagePrefetch } from './QuestionImages.tsx';
 import { useSessionBatches } from '../lib/use-session-batches.ts';
 import { mergeCompletedStudy } from '../lib/session-batches.ts';
@@ -77,6 +78,15 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
       return { ...map, ...saves.drafts };
     }
   );
+  const [matchingChoices,setMatchingChoices]=useState<Record<number,string>>(()=>({...Object.fromEntries((initialSession.questions||[]).filter((q:any)=>q.matchingChoiceId).map((q:any)=>[q.id,q.matchingChoiceId])),...saves.matchingDrafts}));
+  const handleMatchingChoice=(question:any,choice:string)=>{
+    if (session.status==='completed'||(session.mode!=='exam'&&question.submitted))return;
+    const selected=session.mode==='exam'?'A':choice===question.matching.correctChoiceId?'A':'B';
+    setMatchingChoices(previous=>({...previous,[question.id]:choice}));
+    setLocalSelections(previous=>({...previous,[question.id]:selected}));
+    setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===question.id?{...q,matchingChoiceId:choice,selectedDisplayed:selected,submitted:session.mode!=='exam'}:q)}));
+    setCurrentIndex(question.index);saves.saveMatch(question.id,choice,elapsedSeconds);
+  };
   const [flaggedIds, setFlaggedIds] = useState<Set<number>>(new Set());
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [completingSession, setCompletingSession] = useState(false);
@@ -325,7 +335,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             ? {
                 ...q,
                 submitted: isLock !== undefined ? isLock : q.submitted,
-                selectedDisplayed: opt !== undefined ? opt : q.selectedDisplayed,
+                selectedDisplayed: updated.selectedDisplayed ?? (opt !== undefined ? opt : q.selectedDisplayed),
+                matchingChoiceId: updated.matchingChoiceId ?? q.matchingChoiceId,
               }
             : q
         ),
@@ -950,6 +961,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 </div>
               </div>
 
+              {currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} completed={isCompleted} exam={isExamMode} onSelect={handleMatchingChoice}
+                onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <>
               {/* Question Text Vignette */}
               <div className="space-y-3">
                 <p className="ma-question-stem font-serif-academic text-slate-900">
@@ -1043,8 +1056,9 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 })}
               </div>
 
+              </>}
               {/* Study Mode: Immediate Feedback Banner & Explanation */}
-              {showFeedback && (
+              {showFeedback && !currentQ.matching && (
                 <div className="space-y-3 pt-1 animate-fadeIn">
                   {/* Feedback Status Alert Banner */}
                   <div

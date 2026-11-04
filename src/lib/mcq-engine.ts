@@ -1,4 +1,5 @@
 import type { QuestionImage } from './question-images.ts';
+import type { MatchingQuestionDefinition } from './matching-questions.ts';
 export type OptionKey = 'A' | 'B' | 'C' | 'D';
 export type DifficultyLevel = 'Easy' | 'Medium' | 'Hard';
 export type ContentStatus = 'draft' | 'published' | 'archived';
@@ -32,6 +33,7 @@ export interface CanonicalQuestion {
   diagramSvg?: string;
   images?: QuestionImage[];
   explanationImages?: QuestionImage[];
+  matching?: MatchingQuestionDefinition | null;
   pageNumber?: number | null;
   status: ContentStatus;
   version?: number;
@@ -690,6 +692,15 @@ export function formatQuestionForClient(
   permutation: OptionPermutation,
   hideAnswers: boolean
 ) {
+  if (question.matching) {
+    const {correctChoiceId,...publicMatching} = question.matching;
+    return {id:question.id,subjectId:question.subjectId,lectureId:question.lectureId,subjectTitle:question.subjectTitle,
+      lectureTitle:question.lectureTitle,questionText:question.questionText,images:question.images||[],difficulty:question.difficulty,
+      tags:question.tags,specialTags:question.specialTags||'',pageNumber:question.pageNumber,questionType:'matching',
+      matching:hideAnswers?publicMatching:question.matching,
+      ...(!hideAnswers?{correctDisplayedOption:'A' as OptionKey,correctCanonicalOption:'A' as OptionKey,explanation:question.explanation,explanationImages:question.explanationImages||[]}:{}),
+      options:{A:'',B:'',C:'',D:''} as Record<OptionKey,string>};
+  }
   const canonicalOptions: Record<OptionKey, string> = {
     A: question.optionA,
     B: question.optionB,

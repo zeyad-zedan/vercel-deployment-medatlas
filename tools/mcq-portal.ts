@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import {handleShortAnswerPortal} from './short-answer-portal.ts';
+import {handleQuestionImageEditor} from './question-image-editor.ts';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../src/db/index.ts';
 import { lectures, subjects, users } from '../src/db/schema.ts';
-import { ClientSafeError, OWNER_ADMIN_EMAIL, previewCsvImportAdmin, executeCsvImportAdmin } from '../src/db/repository.ts';
+import { ClientSafeError, OWNER_ADMIN_EMAIL, previewCsvImportAdmin, executeCsvImportAdmin,upsertLectureAdmin } from '../src/db/repository.ts';
 import { getSampleJsonTemplate } from '../src/lib/json-import.ts';
 import { MAX_QUESTION_IMAGE_BYTES, validImageFileName } from '../src/lib/question-images.ts';
 import { protectQuestionImageFields, uploadQuestionImage } from '../src/lib/telegram-question-images.ts';
@@ -50,7 +52,9 @@ function json(res:ServerResponse,status:number,value:unknown) {
 
 /** The bot-linked portal uses same-origin checks and needs no interactive login. */
 export async function handleMcqPortalRequest(req:IncomingMessage,res:ServerResponse,url:URL):Promise<boolean> {
-  if (!['/mcqs','/mcqs/','/mcq-assets/client.js','/mcq-assets/styles.css','/api/mcq/lectures','/api/mcq/preview','/api/mcq/execute','/api/mcq/image','/api/mcq/template','/api/mcq/image-example'].includes(url.pathname)) return false;
+  if(await handleQuestionImageEditor(req,res,url,readPortalBody,portalActor))return true;
+  if(await handleShortAnswerPortal(req,res,url,readPortalBody,portalActor))return true;
+  if (!['/mcqs','/mcqs/','/mcq-assets/client.js','/mcq-assets/styles.css','/api/mcq/lectures','/api/mcq/destinations','/api/mcq/preview','/api/mcq/execute','/api/mcq/image','/api/mcq/template','/api/mcq/image-example'].includes(url.pathname)) return false;
   try {
     if(req.method==='GET') {
       if(url.pathname==='/mcqs' || url.pathname==='/mcqs/') {
@@ -62,13 +66,13 @@ export async function handleMcqPortalRequest(req:IncomingMessage,res:ServerRespo
       if(url.pathname==='/api/mcq/template') {res.setHeader('Content-Disposition','attachment; filename="questions.json"');res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'});res.end(getSampleJsonTemplate());return true;}
       if(url.pathname==='/api/mcq/image-example') {res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':'attachment; filename="mcq-image-example.zip"'});res.end(await fs.readFile(asset('../public/templates/mcq-image-example.zip')));return true;}
       if(url.pathname==='/api/mcq/lectures') {
-        const rows=await db.select({id:lectures.id,title:lectures.title,subjectTitle:subjects.title,status:lectures.status})
+        const [rows,parentSubjects]=await Promise.all([db.select({id:lectures.id,title:lectures.title,lectureNumber:lectures.lectureNumber,contentType:lectures.contentType,subjectTitle:subjects.title,status:lectures.status})
           .from(lectures).innerJoin(subjects,eq(subjects.id,lectures.subjectId))
-          .orderBy(asc(subjects.displayOrder),asc(lectures.lectureNumber),asc(lectures.id));
-        json(res,200,{lectures:rows});return true;
+          .orderBy(asc(subjects.displayOrder),asc(lectures.lectureNumber),asc(lectures.id)),db.select({id:subjects.id,title:subjects.title,status:subjects.status}).from(subjects).orderBy(asc(subjects.displayOrder),asc(subjects.id))]);
+        json(res,200,{lectures:rows,subjects:parentSubjects,matchingPreviewOnly:process.env.MATCHING_PREVIEW_ONLY==='true'});return true;
       }
     }
-    if(req.method==='POST' && ['/api/mcq/preview','/api/mcq/execute','/api/mcq/image'].includes(url.pathname)) {
+    if(req.method==='POST' && ['/api/mcq/preview','/api/mcq/execute','/api/mcq/image','/api/mcq/destinations'].includes(url.pathname)) {
       if(req.headers['x-medatlas-portal']!=='1')throw new ClientSafeError('Open this action from the private upload portal.',403);
       if(url.pathname==='/api/mcq/image') {
         const name=url.searchParams.get('name') || '';
@@ -82,18 +86,24 @@ export async function handleMcqPortalRequest(req:IncomingMessage,res:ServerRespo
       let body:any;
       try {body=JSON.parse((await readPortalBody(req,5*1024*1024)).toString('utf8'));}
       catch(error){if(error instanceof ClientSafeError)throw error;throw new ClientSafeError('The import request contains invalid JSON.',400);}
+      if(url.pathname==='/api/mcq/destinations'){
+        if(!body||!Number.isInteger(body.subjectId)||body.subjectId<=0||!['lecture','practical'].includes(body.contentType)||!Number.isInteger(body.lectureNumber)||body.lectureNumber<1||typeof body.title!=='string'||!body.title.trim()||body.title.length>200||typeof body.description!=='string'||body.description.length>4000||!['draft','published'].includes(body.status??'draft'))throw new ClientSafeError('Choose a subject, Lecture or Practical, a title, a positive number and a publication status.',400);
+        const admin=await portalActor();
+        const saved=await upsertLectureAdmin(admin,{subjectId:body.subjectId,contentType:body.contentType,title:body.title,description:body.description.trim()||`${body.contentType==='practical'?'Practical section':'Lecture'}: ${body.title.trim()}`,lectureNumber:body.lectureNumber,status:body.status??'draft'});
+        json(res,200,{lecture:saved});return true;
+      }
       if(!body || typeof body.jsonContent!=='string' || !body.jsonContent.trim())throw new ClientSafeError('Select or paste a JSON question file first.',400);
       const target=body.targetLectureId===undefined || body.targetLectureId===null ? undefined : Number(body.targetLectureId);
       if(target!==undefined && (!Number.isInteger(target) || target<=0))throw new ClientSafeError('Choose a valid target lecture.',400);
       const publication=body.publication ?? 'draft';
       if(!['draft','json'].includes(publication))throw new ClientSafeError('Choose drafts or the JSON publication status.',400);
       let content=body.jsonContent;
-      if(publication==='draft') {
+      if(publication==='draft' || process.env.MATCHING_PREVIEW_ONLY==='true') {
         try {
           const parsed=JSON.parse(content.replace(/^\uFEFF/,''));
           const rows=Array.isArray(parsed)?parsed:parsed?.questions;
           if(Array.isArray(rows)) {
-            const drafts=rows.map(row=>row && typeof row==='object' && !Array.isArray(row)?{...row,status:'draft'}:row);
+            const drafts=rows.map(row=>row && typeof row==='object' && !Array.isArray(row) && (publication==='draft' || row.question_type==='matching')?{...row,status:'draft'}:row);
             content=JSON.stringify(Array.isArray(parsed)?drafts:{...parsed,questions:drafts});
           }
         } catch { /* Let the shared validator report the original JSON syntax error. */ }

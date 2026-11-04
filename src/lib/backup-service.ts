@@ -57,6 +57,9 @@ export interface BackupPayload {
     rateLimitBuckets: unknown[];
     appSettings?: unknown[];
     questionReports?: unknown[];
+    studentGeminiKeys?: unknown[];
+    shortAnswerQuestions?: unknown[];
+    shortAnswerAttempts?: unknown[];
   };
 }
 
@@ -220,6 +223,10 @@ export function decryptBackupPayload(
   if (parsed.tables.questionReports !== undefined && !Array.isArray(parsed.tables.questionReports)) {
     throw new Error('Corrupted backup payload: questionReports must be an array.');
   }
+  if (parsed.tables.studentGeminiKeys !== undefined && !Array.isArray(parsed.tables.studentGeminiKeys)) {
+    throw new Error('Corrupted backup payload: studentGeminiKeys must be an array.');
+  }
+  for(const name of ['shortAnswerQuestions','shortAnswerAttempts'] as const)if(parsed.tables[name]!==undefined&&!Array.isArray(parsed.tables[name]))throw new Error(`Corrupted backup payload: ${name} must be an array.`);
 
   return parsed;
 }
@@ -263,6 +270,9 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
     const rateLimitBucketsRes = await client.query('SELECT * FROM public.rate_limit_buckets ORDER BY key ASC');
     const appSettingsRes = await client.query('SELECT * FROM public.app_settings ORDER BY key ASC');
     const questionReportsRes = await client.query('SELECT * FROM public.question_reports ORDER BY id ASC');
+    const studentKeysRes = await client.query('SELECT * FROM public.student_gemini_keys ORDER BY user_uid ASC');
+    const shortQuestionsRes=await client.query('SELECT * FROM public.short_answer_questions ORDER BY id ASC');
+    const shortAttemptsRes=await client.query('SELECT * FROM public.short_answer_attempts ORDER BY id ASC');
 
     await client.query('COMMIT');
 
@@ -288,6 +298,9 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
         rateLimitBuckets: rateLimitBucketsRes.rows,
         appSettings: appSettingsRes.rows,
         questionReports: questionReportsRes.rows,
+        studentGeminiKeys: studentKeysRes.rows,
+        shortAnswerQuestions: shortQuestionsRes.rows,
+        shortAnswerAttempts: shortAttemptsRes.rows,
       },
     };
   } catch (err) {
@@ -518,6 +531,7 @@ export async function testRestoreBackup(
           title TEXT NOT NULL,
           description TEXT NOT NULL,
           lecture_number INTEGER NOT NULL DEFAULT 1,
+          content_type TEXT NOT NULL DEFAULT 'lecture',
           educational_notes TEXT NOT NULL DEFAULT '',
           estimated_minutes INTEGER NOT NULL DEFAULT 30,
           pdf_url TEXT,
@@ -573,6 +587,7 @@ export async function testRestoreBackup(
           diagram_svg TEXT NOT NULL DEFAULT '',
           images JSONB NOT NULL DEFAULT '[]'::jsonb,
           explanation_images JSONB NOT NULL DEFAULT '[]'::jsonb,
+          matching JSONB,
           page_number INTEGER,
           status TEXT NOT NULL DEFAULT 'published',
           version INTEGER NOT NULL DEFAULT 1,
@@ -610,6 +625,7 @@ export async function testRestoreBackup(
           subject_id INTEGER,
           lecture_id INTEGER,
           selected_option TEXT,
+          matching_choice_id TEXT,
           correct_option_snapshot TEXT NOT NULL,
           is_correct BOOLEAN NOT NULL DEFAULT FALSE,
           question_snapshot_json TEXT NOT NULL,
@@ -639,6 +655,25 @@ export async function testRestoreBackup(
           created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
         );
 
+        CREATE TABLE "${isolatedSchema}".student_gemini_keys (
+          user_uid TEXT PRIMARY KEY REFERENCES "${isolatedSchema}".users(uid) ON DELETE CASCADE,
+          encrypted_key TEXT NOT NULL,
+          key_suffix TEXT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE "${isolatedSchema}".short_answer_questions (
+          id SERIAL PRIMARY KEY, lecture_id INTEGER NOT NULL REFERENCES "${isolatedSchema}".lectures(id) ON DELETE CASCADE,
+          definition JSONB NOT NULL, content_hash TEXT NOT NULL, max_score INTEGER NOT NULL, status TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(lecture_id,content_hash)
+        );
+        CREATE TABLE "${isolatedSchema}".short_answer_attempts (
+          id SERIAL PRIMARY KEY,user_uid TEXT NOT NULL REFERENCES "${isolatedSchema}".users(uid) ON DELETE CASCADE,
+          question_id INTEGER NOT NULL REFERENCES "${isolatedSchema}".short_answer_questions(id) ON DELETE CASCADE,
+          answer TEXT NOT NULL,answer_hash TEXT NOT NULL,snapshot JSONB NOT NULL,status TEXT NOT NULL,
+          result JSONB,error_code TEXT,model TEXT,lease_id TEXT,grade_started_at TIMESTAMPTZ,retry_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(user_uid,question_id,answer_hash)
+        );
         CREATE TABLE "${isolatedSchema}".app_settings (
           key TEXT PRIMARY KEY,
           boolean_value BOOLEAN NOT NULL DEFAULT false,
@@ -705,11 +740,14 @@ export async function testRestoreBackup(
       // Topological insertion sequence
       await insertRows('modules', payload.tables.modules as any[]);
       await insertRows('users', payload.tables.users as any[]);
+      await insertRows('student_gemini_keys', (payload.tables.studentGeminiKeys || []) as any[]);
       await insertRows('deleted_accounts', payload.tables.deletedAccounts as any[]);
       await insertRows('password_reset_tokens', payload.tables.passwordResetTokens as any[]);
       await insertRows('rate_limit_buckets', payload.tables.rateLimitBuckets as any[]);
       await insertRows('subjects', payload.tables.subjects as any[]);
       await insertRows('lectures', payload.tables.lectures as any[]);
+      await insertRows('short_answer_questions', (payload.tables.shortAnswerQuestions || []) as any[]);
+      await insertRows('short_answer_attempts', (payload.tables.shortAnswerAttempts || []) as any[]);
       await insertRows('lecture_files', payload.tables.lectureFiles as any[]);
       await insertRows('question_banks', payload.tables.questionBanks as any[]);
       await insertRows('questions', payload.tables.questions as any[]);

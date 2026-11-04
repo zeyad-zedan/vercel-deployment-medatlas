@@ -1,4 +1,5 @@
 import type { QuestionImage } from '../lib/question-images.ts';
+import type { MatchingQuestionDefinition } from '../lib/matching-questions.ts';
 import { relations } from 'drizzle-orm';
 import {
   boolean,
@@ -46,6 +47,26 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [check('users_faculty_allowed', sql`${table.faculty} = 'Benha University'`)]);
+
+export const studentGeminiKeys = pgTable('student_gemini_keys', {
+  userUid: text('user_uid').primaryKey().references(() => users.uid, {onDelete:'cascade'}),
+  encryptedKey: text('encrypted_key').notNull(),
+  keySuffix: text('key_suffix').notNull(),
+  updatedAt: timestamp('updated_at', {withTimezone:true}).notNull().defaultNow(),
+});
+
+export const shortAnswerQuestions = pgTable('short_answer_questions', {
+  id:serial('id').primaryKey(),lectureId:integer('lecture_id').notNull().references(()=>lectures.id,{onDelete:'cascade'}),
+  definition:jsonb('definition').notNull(),contentHash:text('content_hash').notNull(),maxScore:integer('max_score').notNull(),
+  status:text('status').notNull().default('draft'),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),
+},table=>[uniqueIndex('short_answer_questions_lecture_hash').on(table.lectureId,table.contentHash),index('short_answer_questions_lecture_status').on(table.lectureId,table.status,table.id)]);
+export const shortAnswerAttempts = pgTable('short_answer_attempts', {
+  id:serial('id').primaryKey(),userUid:text('user_uid').notNull().references(()=>users.uid,{onDelete:'cascade'}),
+  questionId:integer('question_id').notNull().references(()=>shortAnswerQuestions.id,{onDelete:'cascade'}),
+  answer:text('answer').notNull(),answerHash:text('answer_hash').notNull(),snapshot:jsonb('snapshot').notNull(),status:text('status').notNull().default('saved'),
+  result:jsonb('result'),errorCode:text('error_code'),model:text('model'),leaseId:text('lease_id'),gradeStartedAt:timestamp('grade_started_at',{withTimezone:true}),retryAt:timestamp('retry_at',{withTimezone:true}),
+  createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),updatedAt:timestamp('updated_at',{withTimezone:true}).notNull().defaultNow(),
+},table=>[uniqueIndex('short_answer_attempts_owner_question_hash').on(table.userUid,table.questionId,table.answerHash),index('short_answer_attempts_owner_question').on(table.userUid,table.questionId,table.id),index('short_answer_attempts_owner_started').on(table.userUid,table.gradeStartedAt)]);
 
 export const passwordResetTokens = pgTable('password_reset_tokens', {
   id: serial('id').primaryKey(),
@@ -105,13 +126,14 @@ export const lectures = pgTable('lectures', {
   title: text('title').notNull(),
   description: text('description').notNull(),
   lectureNumber: integer('lecture_number').notNull().default(1),
+  contentType: text('content_type').notNull().default('lecture'),
   educationalNotes: text('educational_notes').notNull().default(''),
   estimatedMinutes: integer('estimated_minutes').notNull().default(30),
   pdfUrl: text('pdf_url'),
   status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+},table=>[check('lectures_content_type_allowed',sql`${table.contentType} IN ('lecture','practical')`)]);
 
 export const lectureFiles = pgTable('lecture_files', {
   id: serial('id').primaryKey(),
@@ -170,6 +192,7 @@ export const questions = pgTable('questions', {
   diagramSvg: text('diagram_svg').notNull().default(''),
   images: jsonb('images').$type<QuestionImage[]>().notNull().default([]),
   explanationImages: jsonb('explanation_images').$type<QuestionImage[]>().notNull().default([]),
+  matching: jsonb('matching').$type<MatchingQuestionDefinition>(),
   pageNumber: integer('page_number'),
   status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'
   version: integer('version').notNull().default(1),
@@ -211,6 +234,7 @@ export const questionAttempts = pgTable(
     subjectId: integer('subject_id'),
     lectureId: integer('lecture_id'),
     selectedOption: text('selected_option'), // 'A' | 'B' | 'C' | 'D' | null
+    matchingChoiceId: text('matching_choice_id'),
     correctOptionSnapshot: text('correct_option_snapshot').notNull(),
     isCorrect: boolean('is_correct').notNull().default(false),
     questionSnapshotJson: text('question_snapshot_json').notNull(),

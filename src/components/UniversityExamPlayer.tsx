@@ -1,3 +1,4 @@
+import { MatchingQuestion, MatchingAnswerReview } from './MatchingQuestion.tsx';
 import { useSessionImagePrefetch } from './QuestionImages.tsx';
 import { useSessionBatches } from '../lib/use-session-batches.ts';
 import { QuestionBatchStatus } from './QuestionBatchStatus.tsx';
@@ -51,6 +52,14 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
     ...Object.fromEntries((initialSession.questions || []).filter((q: any) => q.selectedDisplayed).map((q: any) => [q.id, q.selectedDisplayed])),
     ...saves.drafts,
   }));
+  const [matchingChoices,setMatchingChoices]=useState<Record<number,string>>(()=>({...Object.fromEntries((initialSession.questions||[]).filter((q:any)=>q.matchingChoiceId).map((q:any)=>[q.id,q.matchingChoiceId])),...saves.matchingDrafts}));
+  const handleMatchingChoice=(question:any,choice:string)=>{
+    if (session.status==='completed')return;
+    setMatchingChoices(previous=>({...previous,[question.id]:choice}));
+    setLocalSelections(previous=>{const next={...previous,[question.id]:'A'};localSelectionsRef.current=next;return next;});
+    setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===question.id?{...q,matchingChoiceId:choice,selectedDisplayed:'A'}:q)}));
+    setCurrentIndex(question.index);saves.saveMatch(question.id,choice);
+  };
   const [markedForReview, setMarkedForReview] = useState<Set<number>>(new Set());
   const [visitedQuestionIds, setVisitedQuestionIds] = useState<Set<number>>(() =>
     new Set(initialSession.questions?.[0]?.id ? [initialSession.questions[0].id] : [])
@@ -186,6 +195,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
         session.timeLimitSeconds !== null
           ? Math.max(0, session.timeLimitSeconds - rem)
           : 60;
+      if (rem > 0) await saves.flush();
       const res = await api.completeSession(session.id, localSelectionsRef.current, elapsed);
       saves.finish();
       setSession(res.session);
@@ -223,7 +233,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
     const isPassed = scorePct >= 60;
 
     const filteredQuestions = questions.filter((q: any) => {
-      const userPick = localSelections[q.id] || q.selectedDisplayed;
+      const userPick = q.matchingChoiceId ? q.selectedDisplayed : localSelections[q.id] || q.selectedDisplayed;
       const isCorrect = userPick && userPick === q.correctDisplayedOption;
       if (resultsFilter === 'correct') return isCorrect;
       if (resultsFilter === 'wrong') return userPick && !isCorrect;
@@ -380,7 +390,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {filteredQuestions.map((q: any) => {
                   const originalIdx = questions.findIndex((x: any) => x.id === q.id);
-                  const userPick = localSelections[q.id] || q.selectedDisplayed;
+                  const userPick = q.matchingChoiceId ? q.selectedDisplayed : localSelections[q.id] || q.selectedDisplayed;
                   const isCorrect = userPick && userPick === q.correctDisplayedOption;
                   const isUnanswered = !userPick;
 
@@ -434,14 +444,14 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       <td className="py-3 px-4 font-mono-tabular font-bold text-slate-700">
                         {userPick ? (
                           <span className={isCorrect ? 'text-[#20a95b]' : 'text-[#d9534f]'}>
-                            {userPick}
+                            {q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matchingChoiceId)?.text || 'Answered' : userPick}
                           </span>
                         ) : (
                           <span className="text-slate-400 italic">None</span>
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono-tabular font-bold text-[#20a95b]">
-                        {q.correctDisplayedOption}
+                        {q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matching.correctChoiceId)?.text || 'Open review' : q.correctDisplayedOption}
                       </td>
                       <td className="py-3 px-4 text-right">
                         <button
@@ -505,8 +515,9 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               <QuestionImages images={reviewingQuestion.images}/>
                   <QuestionReportButton key={reviewingQuestion.id} questionId={reviewingQuestion.id}/>
 
+              {reviewingQuestion.matching && <MatchingAnswerReview matching={reviewingQuestion.matching} choiceId={reviewingQuestion.matchingChoiceId}/>}
               <div className="space-y-2">
-                {(['A', 'B', 'C', 'D'] as const).map((key) => {
+                {(!reviewingQuestion.matching ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
                   const isCorrect = key === reviewingQuestion.correctDisplayedOption;
                   const isUserPick =
                     (localSelections[reviewingQuestion.id] || reviewingQuestion.selectedDisplayed) === key;
@@ -746,12 +757,13 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       className="font-semibold text-slate-900 leading-relaxed"
                       style={{ fontSize: currentFontSize }}
                     >
-                      {currentQ.questionText}
+                      {!currentQ.matching && currentQ.questionText}
                     </div>
-                    <QuestionImages images={currentQ.images}/>
+                    {currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} exam onSelect={handleMatchingChoice}
+                      onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <QuestionImages images={currentQ.images}/>}
 
                     <div className="space-y-3 pt-2">
-                      {(['A', 'B', 'C', 'D'] as const).map((key) => {
+                      {(!currentQ.matching ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
                         const optText = currentQ.options[key];
                         if (!optText) return null;
                         const isSelected = selectedKey === key;

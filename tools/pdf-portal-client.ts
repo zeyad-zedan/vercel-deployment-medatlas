@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 const el=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(id) as T;
-type Lecture={id:number;title:string;subjectTitle:string;lectureNumber:number;moduleCode?:string;pdfUrl?:string|null};
+type Lecture={id:number;title:string;subjectTitle:string;lectureNumber:number;contentType?:string;moduleCode?:string;pdfUrl?:string|null};
 type Feedback={text:string;state:'busy'|'error'|'success';progress?:number};
 let lectures:Lecture[]=[],compressionConfigured=false,tabletUrl:string|null=null;
 const localAddress=['localhost','127.0.0.1','[::1]'].includes(window.location.hostname);
@@ -59,7 +59,7 @@ function render(){
 }
 function lectureCard(lecture:Lecture){
   const card=node('article',undefined,'lecture-card');card.dataset.lectureId=String(lecture.id);
-  const heading=node('div',undefined,'lecture-heading'),info=node('div');info.append(node('p',`${lecture.moduleCode?lecture.moduleCode+' · ':''}LECTURE ${lecture.lectureNumber}`,'lecture-meta'),node('h3',lecture.title,'lecture-title'));
+  const heading=node('div',undefined,'lecture-heading'),info=node('div');info.append(node('p',`${lecture.moduleCode?lecture.moduleCode+' · ':''}${lecture.contentType==='practical'?'SECTION':'LECTURE'} ${lecture.lectureNumber}`,'lecture-meta'),node('h3',lecture.title,'lecture-title'));
   heading.append(node('span','PDF','document-icon'+(lecture.pdfUrl?' attached':'')),info);
   const bottom=node('div',undefined,'lecture-bottom'),input=node('input');input.type='file';input.accept='.pdf,application/pdf';input.hidden=true;input.setAttribute('aria-label',`Choose PDF for ${lecture.title}`);
   const choose=button(active.has(lecture.id)?'Uploading…':lecture.pdfUrl?'Replace PDF':'Upload PDF',()=>input.click(),lecture.pdfUrl?'button secondary':'button primary');choose.disabled=active.has(lecture.id);

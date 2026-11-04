@@ -1,0 +1,18 @@
+{
+  "questions": [
+    {
+      "question_type": "matching",
+      "question_text": "Match each numbered bone landmark with its name.",
+      "images": ["numbered-bone.png"],
+      "matches": [
+        {"number": "1", "answer": "Head", "explanation": "The rounded head forms the joint."},
+        {"number": "2", "answer": "Neck"},
+        {"number": "3", "answer": "Shaft"}
+      ],
+      "distractors": ["Condyle"],
+      "difficulty": "Medium",
+      "tags": ["Anatomy"],
+      "status": "draft"
+    }
+  ]
+}
