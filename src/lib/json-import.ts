@@ -1,6 +1,7 @@
 import { computeContentHash, parseAndValidateCsvQuestions, parseSpecialTags, type CsvValidationReport, type ParsedCsvQuestionRow } from './mcq-engine.ts';
 import { MAX_IMPORT_IMAGES, validImageFileName, type ImportImageFile, type QuestionImage } from './question-images.ts';
 import { expandMatchingQuestion, type MatchingQuestionDefinition } from './matching-questions.ts';
+import {parseShortAnswerBatch,type ShortAnswerDefinition} from './short-answer-model.ts';
 
 export interface JsonQuestionRow extends ParsedCsvQuestionRow {
   imageFiles: Array<{ file: string; alt: string }>;
@@ -8,6 +9,7 @@ export interface JsonQuestionRow extends ParsedCsvQuestionRow {
   images?: QuestionImage[];
   explanationImages?: QuestionImage[];
   matching?: MatchingQuestionDefinition;
+  shortAnswerDefinition?:ShortAnswerDefinition;
 }
 export interface JsonValidationReport extends Omit<CsvValidationReport, 'rows'> {
   rows: JsonQuestionRow[];
@@ -42,7 +44,7 @@ export function parseAndValidateJsonQuestions(content: string, existingHashes = 
     manifest.set(f.name, f.id);
   }
   if (report.headerErrors.length) return report;
-  let expanded: Array<{entry:any;matching?:MatchingQuestionDefinition}> = [];
+  let expanded: Array<{entry:any;matching?:MatchingQuestionDefinition;shortAnswerDefinition?:ShortAnswerDefinition}> = [];
   for (const [index,entry] of entries.entries()) {
     if (entry?.question_type === 'matching') {
       try {
@@ -52,7 +54,14 @@ export function parseAndValidateJsonQuestions(content: string, existingHashes = 
           entry.images?.map((image:any)=>manifest.get(typeof image==='string'?image:image.file))]));
         expanded.push(...expandMatchingQuestion(entry,groupId));
       } catch(error) {report.headerErrors.push(`Matching image ${index+1}: ${(error as Error).message}`);}
-    } else expanded.push({entry});
+    } else if(entry?.question_type==='short_answer'){
+      try{
+        const extra=['subject','lecture','difficulty','special_tags','page_number'];const clean=Object.fromEntries(Object.entries(entry).filter(([key])=>!extra.includes(key)));
+        const [{imageFiles,...definition}]=parseShortAnswerBatch(JSON.stringify({questions:[clean]}));
+        expanded.push({shortAnswerDefinition:definition,entry:{...Object.fromEntries(extra.filter(key=>key in entry).map(key=>[key,entry[key]])),question_text:definition.question_text,options:{A:'Written response',B:'Graded against model answer',C:'No multiple-choice options',D:'Short answer'},correct_answer:'A',explanation:'Written answer graded against the saved marking guide.',tags:definition.tags,status:definition.status,images:entry.images||[]}});
+      }catch(error){report.headerErrors.push(`Short answer ${index+1}: ${(error as Error).message}`);}
+    } else if(entry?.question_type&&entry.question_type!=='mcq')report.headerErrors.push(`Question ${index+1}: choose mcq, matching or short_answer.`);
+    else expanded.push({entry:entry?.question_type==='mcq'?Object.fromEntries(Object.entries(entry).filter(([key])=>key!=='question_type')):entry});
   }
   if (expanded.length > 2000) report.headerErrors.push('A batch may contain at most 2,000 questions, counting each matching label separately.');
   if (report.headerErrors.length) return report;
@@ -106,12 +115,12 @@ export function parseAndValidateJsonQuestions(content: string, existingHashes = 
     if (!base) { report.headerErrors.push(`Question ${index+1} could not be parsed.`); continue; }
     errors.push(...base.errors);
     const imageHashes = [...imageFiles.map(f=>'q:'+manifest.get(f.file)),...explanationImageFiles.map(f=>'e:'+manifest.get(f.file))];
-    const contentHash = imageHashes.length || prepared.matching ? computeContentHash(base.contentHash+'|'+imageHashes.join('|')+(prepared.matching?'|'+JSON.stringify(prepared.matching):'')) : base.contentHash;
+    const contentHash = imageHashes.length || prepared.matching ||prepared.shortAnswerDefinition ? computeContentHash(base.contentHash+'|'+imageHashes.join('|')+(prepared.matching?'|'+JSON.stringify(prepared.matching):'')+(prepared.shortAnswerDefinition?'|short-answer|'+JSON.stringify(prepared.shortAnswerDefinition):'')) : base.contentHash;
     const duplicate = seen.has(contentHash) || existingHashes.has(contentHash);
     if (duplicate) errors.push('Question already exists in this import or the question bank.');
     // Invalid entries must not prevent a later corrected entry from importing.
     if (!errors.length) seen.add(contentHash);
-    const row = {...base,rowNumber:index+1,contentHash,imageFiles,explanationImageFiles,matching:prepared.matching,isValid:!errors.length,isDuplicate:duplicate,errors};
+    const row = {...base,rowNumber:index+1,contentHash,imageFiles,explanationImageFiles,matching:prepared.matching,shortAnswerDefinition:prepared.shortAnswerDefinition,isValid:!errors.length,isDuplicate:duplicate,errors};
     report.rows.push(row);
     if (row.isValid) report.validCount++;
     else if (duplicate && errors.length === 1) report.duplicateCount++;

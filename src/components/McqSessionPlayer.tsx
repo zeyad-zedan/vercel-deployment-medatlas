@@ -1,3 +1,5 @@
+import {QuizTextSaveProvider,useQuizTextSaves} from '../lib/quiz-text-drafts.tsx';
+import {ShortAnswerQuestion,QuizMarks} from './ShortAnswerQuestion.tsx';
 import { MatchingQuestion } from './MatchingQuestion.tsx';
 import { useSessionImagePrefetch } from './QuestionImages.tsx';
 import { useSessionBatches } from '../lib/use-session-batches.ts';
@@ -50,16 +52,17 @@ interface McqSessionPlayerProps {
 
 export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = (props) => {
   if (props.initialSession?.mode === 'exam') {
-    return <QuestionImageProvider key={props.initialSession.id} questions={props.initialSession.questions}><UniversityExamPlayer session={props.initialSession}
-      onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={api}/></QuestionImageProvider>;
+    return <QuizTextSaveProvider key={props.initialSession.id} session={props.initialSession}><QuestionImageProvider questions={props.initialSession.questions}><UniversityExamPlayer session={props.initialSession}
+      onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={api}/></QuestionImageProvider></QuizTextSaveProvider>;
   }
-  return <QuestionImageProvider key={props.initialSession.id} questions={props.initialSession.questions}><StudySessionPlayer {...props}/></QuestionImageProvider>;
+  return <QuizTextSaveProvider key={props.initialSession.id} session={props.initialSession}><QuestionImageProvider questions={props.initialSession.questions}><StudySessionPlayer {...props}/></QuestionImageProvider></QuizTextSaveProvider>;
 };
 
 const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered,
 }) => {
   const [session, setSession] = useState<any>(initialSession);
+  const textSaves=useQuizTextSaves();
   useSessionImagePrefetch(session.questions);
   const saves = useAnswerSaving(session, (result, answer) => {
     mergeSessionUpdate(result.session, answer.questionId, answer.selectedOption, answer.lockAnswer);
@@ -79,6 +82,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     }
   );
   const [matchingChoices,setMatchingChoices]=useState<Record<number,string>>(()=>({...Object.fromEntries((initialSession.questions||[]).filter((q:any)=>q.matchingChoiceId).map((q:any)=>[q.id,q.matchingChoiceId])),...saves.matchingDrafts}));
+  const handleShortAnswer=(question:any,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===question.maxMarks?'A':'B'):'C';setLocalSelections(previous=>({...previous,[question.id]:pick}));setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===question.id?{...q,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||question.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick,submitted:true}:q)}));onQuestionAnswered?.(result.session);};
   const handleMatchingChoice=(question:any,choice:string)=>{
     if (session.status==='completed'||(session.mode!=='exam'&&question.submitted))return;
     const selected=session.mode==='exam'?'A':choice===question.matching.correctChoiceId?'A':'B';
@@ -328,6 +332,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         incorrectCount: updated.incorrectCount ?? prev.incorrectCount,
         unansweredCount: updated.unansweredCount ?? prev.unansweredCount,
         scorePercentage: updated.scorePercentage ?? prev.scorePercentage,
+        quizScore:updated.quizScore??prev.quizScore,
         elapsedSeconds: updated.elapsedSeconds ?? prev.elapsedSeconds,
         status: updated.status ?? prev.status,
         questions: (prev.questions || []).map((q: any) =>
@@ -491,6 +496,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     setErrorMsg(null);
     try {
       await saves.flush();
+      await textSaves.flush();
       const res = await api.completeSession(session.id, localSelections, elapsedSeconds);
       saves.finish();
       setSession((previous: any) => mergeCompletedStudy(previous, res.session));
@@ -811,7 +817,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         </div>
       )}
 
-      <AnswerSaveStatus status={saves.status} unsavedCount={saves.unsavedCount} retry={saves.retry}/>
+      <QuizMarks score={session.quizScore}/><AnswerSaveStatus status={saves.status} unsavedCount={saves.unsavedCount} retry={saves.retry}/>
       {errorMsg && (
         <div
           role="alert"
@@ -838,7 +844,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 <span>Session Completed</span>
               </div>
               <h2 className="text-lg font-bold text-slate-900">
-                Score: {session.scorePercentage}% ({session.correctCount} of {session.totalQuestions} Correct)
+                {session.quizScore?.pendingGradingCount?'Provisional score':'Score'}: {session.scorePercentage}%
               </h2>
             </div>
             <div className="flex items-center gap-2">
@@ -961,7 +967,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 </div>
               </div>
 
-              {currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} completed={isCompleted} exam={isExamMode} onSelect={handleMatchingChoice}
+              {currentQ.questionType==='short_answer'?<ShortAnswerQuestion key={currentQ.id} question={currentQ} sessionId={session.id} exam={isExamMode} completed={isCompleted} disabled={completingSession} onSaved={result=>handleShortAnswer(currentQ,result)}/>:currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} completed={isCompleted} exam={isExamMode} onSelect={handleMatchingChoice}
                 onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <>
               {/* Question Text Vignette */}
               <div className="space-y-3">
@@ -1058,7 +1064,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
               </>}
               {/* Study Mode: Immediate Feedback Banner & Explanation */}
-              {showFeedback && !currentQ.matching && (
+              {showFeedback && !currentQ.matching && currentQ.questionType!=='short_answer' && (
                 <div className="space-y-3 pt-1 animate-fadeIn">
                   {/* Feedback Status Alert Banner */}
                   <div

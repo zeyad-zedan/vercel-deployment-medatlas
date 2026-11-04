@@ -1,6 +1,11 @@
-import { createOptionPermutation, OPTION_KEYS, resolveCanonicalOption, resolveDisplayedOption, type OptionKey, type OptionPermutation } from './mcq-engine.ts';
+import { createOptionPermutation, OPTION_KEYS, resolveCanonicalOption, resolveDisplayedOption,prioritizeTaggedQuestions, type OptionKey, type OptionPermutation } from './mcq-engine.ts';
 
 interface StudyItem {
+  shortAnswerId?:number|null;
+  shortAnswerAttemptId?:number|null;
+  shortAnswerStatus?:string;
+  shortAnswerScore?:number|null;
+  maxMarks?:number;
   questionId: number;
   permutation: OptionPermutation;
   selectedCanonical: OptionKey | null;
@@ -21,8 +26,8 @@ export function isWholeLectureStudy(params: {
 }
 
 // Only small answer references are needed; never copy question snapshots or attempts.
-export function reconcileLectureStudyItems(existing: StudyItem[], published: { id: number; correctAnswer: string; matchingGroupId?: string | null }[],
-  latestAnswers: { questionId: number | null; selectedOption: string | null; matchingChoiceId?: string | null }[], shuffleOptions: boolean): StudyItem[] {
+export function reconcileLectureStudyItems(existing: StudyItem[], published: { id: number; correctAnswer: string; matchingGroupId?: string | null;shortAnswerId?:number|null;shortAnswerMaxMarks?:number;tags?:string;specialTags?:string;hasTags?:boolean }[],
+  latestAnswers: { questionId: number | null; selectedOption: string | null; matchingChoiceId?: string | null;shortAnswerState?:any }[], shuffleOptions: boolean): StudyItem[] {
   const publishedMap = new Map(published.map(question => [question.id, question]));
   const latest = new Map(latestAnswers.map(answer => [answer.questionId, answer]));
   const seen = new Set<number>();
@@ -32,13 +37,15 @@ export function reconcileLectureStudyItems(existing: StudyItem[], published: { i
     seen.add(item.questionId);
     items.push(item);
   }
-  for (const question of published) {
+  for (const question of prioritizeTaggedQuestions(published)) {
     if (!seen.has(question.id)) items.push({ questionId: question.id,
       ...(question.matchingGroupId ? { isMatching: true } : {}),
+      ...(question.shortAnswerId?{shortAnswerId:question.shortAnswerId,maxMarks:question.shortAnswerMaxMarks}:{}),
       permutation: createOptionPermutation(!question.matchingGroupId && shuffleOptions, question.id), selectedCanonical: null, selectedDisplayed: null, submitted: false });
   }
   return items.map(item => {
     const latestRecord = latest.get(item.questionId);
+    if(item.shortAnswerId){const saved=latestRecord?.shortAnswerState,attempt=saved?(saved.shortAnswerAttemptId??null):(item.shortAnswerAttemptId??null),status=saved?.shortAnswerStatus??item.shortAnswerStatus,score=saved?.shortAnswerScore??item.shortAnswerScore,maximum=saved?.maxMarks??item.maxMarks??1;return {...item,...(saved||{}),correctAnswer:'A' as const,submitted:!!attempt,selectedCanonical:attempt?(status==='graded'?(score===maximum?'A':'B'):'C') as OptionKey:null,selectedDisplayed:null};}
     const latestAnswer = latestRecord?.selectedOption;
     const answer = OPTION_KEYS.includes(latestAnswer as OptionKey) ? latestAnswer :
       OPTION_KEYS.includes(item.selectedCanonical as OptionKey) ? item.selectedCanonical :

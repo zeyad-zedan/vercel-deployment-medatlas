@@ -7,6 +7,7 @@ export function clearResetSessionStorage(sessionIds: number[]) {
       for (const prefix of ['medatlas_session_curr_idx_', 'medatlas_session_question_', 'medatlas_session_draft_answers_']) {
         localStorage.removeItem(prefix + id);
       }
+      for(let index=localStorage.length-1;index>=0;index--){const key=localStorage.key(index);if(key?.startsWith(`medatlas_quiz_short_${id}_`))localStorage.removeItem(key);}
     }
     const active = localStorage.getItem('medatlas_active_session_id');
     if (active !== null && ids.includes(Number(active))) localStorage.removeItem('medatlas_active_session_id');

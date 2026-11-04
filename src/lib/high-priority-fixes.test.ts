@@ -102,7 +102,7 @@ test('paged history preserves every answer and targeted reset preserves other le
       const source = index ? other : base;
       const [lecture] = await db.insert(lectures).values({ subjectId: source.subjectId, title: `Priority ${marker} ${index}`, description: 'Disposable checks' }).returning();
       lectureIds.push(lecture.id);
-      const inserted = await db.insert(questions).values(Array.from({ length: 200 }, (_, n) => ({ ...source, id: undefined, questionBankId: null,
+      const inserted = await db.insert(questions).values(Array.from({ length: 200 }, (_, n) => ({ ...source, id: undefined, questionBankId: null,shortAnswerId:null,shortAnswerMaxMarks:1,
         lectureId: lecture.id, questionText: `Priority ${marker} ${index} ${n}`, contentHash: `${marker}-${index}-${n}` }))).returning({ id: questions.id });
       questionIds.push(...inserted.map(question => question.id));
     }

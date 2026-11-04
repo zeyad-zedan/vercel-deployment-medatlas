@@ -17,7 +17,7 @@ export function GeminiKeySettings() {
   return <section aria-labelledby="gemini-key-title" className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
     <div><h2 id="gemini-key-title" className="text-base font-bold text-slate-900">Gemini API key</h2>
       <p className="text-sm text-slate-600 mt-1">Save your own key once for use across devices. It is stored encrypted with your account.</p></div>
-    <p className="text-xs text-slate-500">Saving a key does not contact Google or use your quota. Short-answer grading uses your Google project's quota and any applicable billing. <a href="/short-answers" className="underline">Open Short Answers</a></p>
+    <p className="text-xs text-slate-500">Saving a key does not contact Google or use your quota. Short-answer grading uses your Google project's quota and any applicable billing. Short answers are graded inside your lecture and section quizzes.</p>
     {error&&<div role="alert" className="text-sm text-red-700">{error}{!status&&<button type="button" onClick={load} className="ml-3 underline">Retry</button>}</div>}
     {message&&<p role="status" className="text-sm text-emerald-800">{message}</p>}
     {!status&&!error&&<p role="status" className="text-sm text-slate-500">Loading key settings…</p>}

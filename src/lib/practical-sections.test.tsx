@@ -17,7 +17,7 @@ test('lecture and section browsing stay separate and Practical uses section labe
  assert.deepEqual(catalogByContentType(catalog,'lecture').lectures,[theory]);assert.deepEqual(catalogByContentType(catalog,'practical').lectures,[section]);
  assert.equal(destinationLabel({...section,subjectTitle:'Anatomy'}),'Anatomy → Section 1: Arm bones');
  const html=renderToStaticMarkup(<PracticalView catalog={catalog} dashboardData={{subjectProgress:[{subjectId:1,lectures:[{lectureId:2,uniqueQuestionsAttempted:1}]}]}} onStartSession={()=>{}} onShortAnswers={()=>{}}/>);
- assert.match(html,/Section 1/);assert.match(html,/1\/2 MCQs/);assert.match(html,/3 short-answer/);assert.ok(!html.includes('Theory'));
+ assert.match(html,/Section 1/);assert.match(html,/1\/2 questions/);assert.match(html,/3 short-answer/);assert.ok(!html.includes('Theory'));
 });
 test('portal section creation, matching/short-answer uploads, publication and reclassification preserve answers/bookmarks', {skip:!enabled},async()=>{
  const repo=await import('../db/repository.ts');await repo.ensureSeededDatabase();
@@ -50,12 +50,12 @@ test('portal section creation, matching/short-answer uploads, publication and re
   assert.equal((await request('/api/admin/lectures',{...withoutType,contentType:'unknown'},admin)).status,400);
   const catalog=await repo.getPublishedCatalog();assert.equal(catalog.lectures.find((row:any)=>row.id===section.id).shortAnswerCount,1,JSON.stringify((await pool.query('SELECT lecture_id,status FROM public.short_answer_questions WHERE lecture_id=$1',[section.id])).rows));
   assert.ok(!catalogByContentType(catalog,'lecture').lectures.some((row:any)=>row.id===section.id));assert.ok(catalogByContentType(catalog,'practical').lectures.some((row:any)=>row.id===section.id));
-  const started=await request('/api/sessions',{mode:'study',lectureIds:[section.id],batchSize:6});assert.equal(started.status,201);const session=started.data.session,q=session.questions[0];assert.equal(q.questionType,'matching');
+  const started=await request('/api/sessions',{mode:'study',lectureIds:[section.id],batchSize:6});assert.equal(started.status,201);const session=started.data.session,q=session.questions.find((question:any)=>question.questionType==='matching');assert.ok(q);
   assert.equal((await request(`/api/sessions/${session.id}/answer`,{questionId:q.id,selectedOption:'A',matchingChoiceId:q.matching.correctChoiceId,lockAnswer:true,slim:true})).status,200);
   await request('/api/bookmarks/toggle',{questionId:q.id,bookmarked:true});
   const saved=await sa.saveShortAnswer(student,(await sa.shortAnswerQuestions(student,section.id,undefined)).questions[0].id,'Support.');
   await request('/api/admin/lectures',{...published.data.lecture,contentType:'lecture'},admin);
-  assert.equal((await repo.getExamSessionForStudent(student,session.id,undefined,{batched:true})).questions[0].submitted,true);
+  assert.equal((await repo.getExamSessionForStudent(student,session.id,undefined,{batched:true})).questions.find((question:any)=>question.id===q.id).submitted,true);
   assert.equal((await db.select().from(bookmarks).where(eq(bookmarks.userUid,student))).length,1);
   assert.equal((await sa.getShortAnswerAttempt(student,saved.id)).answer,'Support.');
   const {createEncryptedBackup,testRestoreBackup}=await import('./backup-service.ts');const {envelope}=await createEncryptedBackup();assert.equal((await testRestoreBackup(envelope)).status,'verified');

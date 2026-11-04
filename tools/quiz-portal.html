@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Upload MCQs · MedAtlas</title>
+  <link rel="stylesheet" href="/mcq-assets/styles.css">
+  <script type="module" src="/mcq-assets/client.js"></script>
+</head>
+<body>
+  <header class="portal-bar"><div class="portal-bar-inner"><a class="wordmark" href="/">MedAtlas <span>Uploads</span></a><nav aria-label="Portal sections"><a href="/">PDFs</a><a href="/mcqs" aria-current="page">Questions</a></nav></div></header>
+  <main class="workspace">
+    <header class="page-header">
+      <h1>Quiz questions</h1><p>Add MCQs, matching and short answers to the same lecture or section quiz.</p>
+    </header>
+    <div id="status" role="status" aria-live="polite" hidden></div>
+    <div class="workflow-tabs" role="group" aria-label="Question tasks"><button id="mode-upload" class="button primary" type="button" aria-pressed="true">Upload new questions</button><button id="mode-manage" class="button secondary" type="button" aria-pressed="false">Edit saved questions</button></div>
+    <fieldset id="import-form">
+      <div class="destination-panel">
+        <section class="card">
+          <div class="step-heading"><h2>1. Destination</h2></div>
+          <label for="lecture-search">Find a lecture or section</label><input id="lecture-search" type="search" placeholder="Search subject or lecture…">
+          <label for="lecture">Target lecture or section</label><select id="lecture"><option value="">Loading lectures and sections…</option></select>
+          <p class="hint">Use JSON destinations to match or create subjects and lectures from your file.</p>
+          <div data-upload-only><label for="publication">After importing</label><select id="publication"><option value="draft">Save as draft — hidden from students</option><option value="json">Use the status in the JSON file</option></select>
+          <p class="hint">Drafts stay hidden from students.</p></div>
+        </section>
+      </div>
+      <div id="upload-workflow">
+    <section class="template-toolbar" aria-label="Import templates">
+      <span>Create or import</span><div class="actions"><label class="visually-hidden" for="question-type">Question type</label><select id="question-type"><option value="mcq">MCQ · JSON</option><option value="matching">Matching · numbered image</option><option value="short_answer">Short answer · written response</option></select><button id="open-sa-guide" class="button secondary" type="button">Build short answer</button><button id="open-matching" class="button primary" type="button">Create matching image question</button><a class="button secondary" href="/api/mcq/template" download>MCQ JSON template</a><a class="button secondary" href="/api/mcq/mixed-template" download>Mixed quiz JSON</a><a class="button secondary" href="/api/mcq/image-example" download>JSON + images</a><button id="sample" class="button subtle" type="button">Load sample</button></div>
+    </section>
+        <section class="card">
+          <div class="step-heading"><h2>2. Question files</h2></div>
+          <label class="dropzone" id="dropzone" for="files"><strong>Select JSON and optional images</strong><span>You can also drop files here.</span><input id="files" type="file" multiple accept=".json,application/json,.png,.jpg,.jpeg,.webp"></label>
+          <p class="hint">JSON: up to 4 MB / 2,000 questions. PNG, JPEG, WebP: up to 2 MB per image. Match image filenames exactly.</p>
+          <details class="help"><summary>How do I reference an image?</summary><p>Add <code>"images": ["cell-diagram.png"]</code> to the question, then select that image file. For figures shown with the explanation, use <code>"explanation_images"</code>. Tags use arrays such as <code>["Important", "كتاب القسم"]</code>.</p></details>
+        </section>
+      <section id="matching-builder" class="card" hidden aria-label="Matching question builder">
+        <div class="section-heading"><div><h2>Numbered image matching</h2><p>Upload an image with its numbers already added. Each label becomes one scored question.</p></div><button id="close-matching" type="button" class="button subtle">Close builder</button></div>
+        <p id="matching-preview-note" class="hint" hidden>Matching labels stay as drafts while you try this preview. They can be published after the website update goes live.</p>
+        <p id="matching-step-status" class="guided-status" role="status" aria-live="polite"></p>
+        <p id="matching-error" class="notice error" role="alert" hidden></p>
+        <div id="matching-step-0">
+        <label for="matching-image-upload">Numbered image</label><input id="matching-image-upload" type="file" accept=".png,.jpg,.jpeg,.webp">
+        <label for="matching-image">Use a selected image</label><select id="matching-image"><option value="">Choose an image…</option></select>
+        <img id="matching-image-preview" hidden alt="Numbered image preview">
+        <label for="matching-instructions">Instructions</label><input id="matching-instructions" value="Match each numbered structure with its name.">
+        </div>
+        <div id="matching-step-1" hidden>
+        <p class="hint">Add one row for each number printed on the image. Each row is scored separately.</p>
+        <div class="table-scroll"><table class="matching-builder-table"><thead><tr><th>Number</th><th>Correct name</th><th>Explanation (optional)</th><th></th></tr></thead><tbody id="matching-pairs"></tbody></table></div>
+        <div class="actions"><button id="matching-add-label" type="button" class="button secondary">Add numbered label</button></div>
+        </div>
+        <div id="matching-step-2" hidden>
+        <p id="matching-summary" class="guided-status"></p>
+        <label for="matching-distractors">Extra answer choices (optional, one per line)</label><textarea id="matching-distractors" rows="3" placeholder="Add extra structures to make the choices more challenging…"></textarea>
+        <p class="hint">Answer choices are generated from your correct names plus any extra choices. Students choose from dropdowns; no lines or hotspots.</p>
+        <label for="matching-tags">Topic tags (optional, separated by commas)</label><input id="matching-tags" placeholder="Anatomy, Upper limb">
+        </div>
+        <div class="actions end"><button id="matching-back" type="button" class="button secondary">Back</button><button id="matching-next" type="button" class="button primary">Next step</button><span id="matching-finish"><button id="matching-add-json" type="button" class="button primary">Add matching labels to this batch</button></span></div>
+      </section>
+<section id="sa-guide" class="guided-builder" hidden aria-label="Short-answer question builder"><div class="section-heading"><h3>Build a short-answer question</h3><button id="close-sa-guide" type="button" class="button subtle">Close builder</button></div><p id="sa-guide-step-status" class="guided-status" role="status" aria-live="polite"></p><p id="sa-guide-error" class="notice error" role="alert" hidden></p>
+<div id="sa-guide-step-0"><label for="sa-question">Question</label><textarea id="sa-question" rows="3" maxlength="4000" placeholder="What should the student answer?"></textarea><label for="sa-image-files">Question images (optional)</label><input id="sa-image-files" type="file" multiple accept=".png,.jpg,.jpeg,.webp"><p class="hint">Up to 4 images per question, 2 MB each. Images are stored on Telegram and shown to students. Gemini receives text only.</p><div id="sa-guide-images" class="assets"></div><label for="sa-model-answer">Model answer</label><textarea id="sa-model-answer" rows="4" maxlength="6000" placeholder="Write the complete correct answer."></textarea></div>
+<div id="sa-guide-step-1" hidden><p class="hint">Split the answer into points. Give each point a description and the marks it is worth.</p><div id="sa-rubric"></div><div class="actions"><button id="sa-add-point" type="button" class="button secondary">Add marking point</button><p id="sa-total" class="hint" aria-live="polite"></p></div></div>
+<div id="sa-guide-step-2" hidden><h3>Review your question</h3><p id="sa-guide-summary" class="guided-status"></p><label for="sa-tags">Topic tags (optional, separated by commas)</label><input id="sa-tags" placeholder="Anatomy, Bones"><p class="hint">The question is added as a draft. You can add more questions before validating and importing the batch.</p></div>
+<div class="actions end"><button id="sa-guide-back" type="button" class="button secondary">Back</button><button id="sa-guide-next" type="button" class="button primary">Next step</button><button id="sa-guide-finish" type="button" class="button primary">Add short answer to batch</button></div></section>
+      <section class="card editor-card">
+        <div class="section-heading"><div><h2>JSON source</h2><p id="file-label">Paste JSON or select a file above.</p></div><button id="format" type="button" class="button subtle">Format JSON</button></div>
+        <label class="visually-hidden" for="source">Questions JSON</label><textarea id="source" rows="7" spellcheck="false" placeholder='{"questions": [{"question_text": "…", "options": {"A": "…", "B": "…", "C": "…", "D": "…"}, "correct_answer": "B", "explanation": "…"}]}'></textarea>
+        <div id="asset-section" hidden><div class="section-heading"><h3 id="asset-count">Selected images</h3><button id="clear-images" class="button subtle" type="button">Clear images</button></div><div id="assets" class="assets"></div></div>
+        <div class="actions end"><button id="validate" type="button" class="button primary">3. Validate & preview</button></div>
+      </section>
+      <section id="preview" class="card" hidden aria-label="Import preview">
+        <div class="section-heading"><div><h2>Preview &amp; tagging</h2><p id="counts"></p></div><button id="confirm" type="button" class="button success">4. Confirm import</button></div>
+        <div id="validation-errors" class="notice error" hidden role="alert"></div><p id="unused" class="hint" hidden></p>
+        <div id="bulk-tags" class="tag-toolbar"><strong>Tag all valid questions</strong><div id="bulk-presets" class="actions"></div><label class="visually-hidden" for="bulk-custom">Custom tag for all valid questions</label><input id="bulk-custom" placeholder="Add a custom tag…"><button id="bulk-add" type="button" class="button secondary">Add to all</button></div>
+        <div id="rows" class="preview-rows"></div><button id="show-more" type="button" class="button secondary" hidden>Show 50 more questions</button>
+      </section>
+      </div>
+    </fieldset>
+    <section id="image-manager" class="card" hidden aria-label="Edit saved questions"><h2>Edit saved questions</h2><p>Add, replace or remove images without importing the question again.</p></section>
+    <section id="result" class="card result" hidden><h2 id="result-title"></h2><p id="result-detail"></p><div id="result-lectures"></div><div class="actions"><button id="new-import" type="button" class="button primary">Upload another batch</button><a class="button secondary" href="/">Attach PDF slide decks</a></div></section>
+    <footer>Images are stored on Telegram.</footer>
+  </main>
+</body>
+</html>

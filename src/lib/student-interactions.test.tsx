@@ -2,6 +2,7 @@ import React,{act} from 'react';
 import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
+import fs from 'node:fs';
 // Initialize the existing API/Firebase module in its supported server-test environment.
 import {api} from './api.ts';
 const {JSDOM}=createRequire(import.meta.url)('jsdom');
@@ -43,8 +44,8 @@ test('short-answer student interaction restores drafts, saves independently, gra
 });
 
 test('practical student controls select the section and start the existing study session',async()=>{
- reset();let selected=0,started:any=null;const section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8,shortAnswerCount:1};const root=createRoot(host());
- try{await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3}]}]}} onStartSession={params=>{started=params;}} onShortAnswers={id=>{selected=id;}}/>));assert.match(text(),/3\/8 MCQs/);await click('Short Answers');assert.equal(selected,82);await click('Continue section');assert.deepEqual(started.lectureIds,[82]);await change('input[type=search]','No match');assert.match(text(),/No sections match/);}finally{await act(async()=>root.unmount());}
+ reset();let started:any=null;const section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8,shortAnswerCount:1};const root=createRoot(host());
+ try{await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3}]}]}} onStartSession={params=>{started=params;}}/>));assert.match(text(),/3\/8 questions/);assert.ok(![...host().querySelectorAll('button')].some(b=>b.textContent==='Short Answers'));await click('Continue section');assert.deepEqual(started.lectureIds,[82]);await change('input[type=search]','No match');assert.match(text(),/No sections match/);}finally{await act(async()=>root.unmount());}
 });
 
 test('matching student choices and bookmarks save immediately and six-question navigation fetches only the next batch',async()=>{
@@ -75,4 +76,29 @@ test('mock exam matching hides grading until submit and shows the actual selecte
   await click('Review & submit');await act(async()=>{const confirm=[...host().querySelectorAll<HTMLButtonElement>('button')].filter(b=>b.textContent?.trim()==='End Test').at(-1);assert.ok(confirm);confirm.click();});assert.ok(completed,text());assert.equal(completed.status,'completed');await click('Show Results');assert.match(text(),/Shaft/);assert.match(text(),/50/);
   const review=[...host().querySelectorAll<HTMLButtonElement>('button')].find(b=>/review/i.test(b.textContent||'')&&b.textContent!.trim()!=='For Review');assert.ok(review);await act(async()=>review.click());assert.match(text(),/Your answer:/);assert.match(text(),/Correct answer:/);
  }finally{await act(async()=>root.unmount());}
+});
+
+test('short answers live inside the quiz and Submit saves typed text before completing it',async()=>{
+ reset();const events:string[]=[];let written='',finished:any=null;
+ const short={id:301,index:0,questionType:'short_answer',shortAnswerId:9,maxMarks:3,questionText:'Describe bone functions.',contentLoaded:true,submitted:false,images:[],selectedDisplayed:null};
+ const mcq={id:302,index:1,questionText:'A regular MCQ',contentLoaded:true,options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A',explanation:'Explanation',submitted:false,selectedDisplayed:null,images:[]};
+ const session={id:99003,title:'One mixed quiz',mode:'study',status:'in_progress',questions:[short,mcq],totalQuestions:2,correctCount:0,incorrectCount:0,unansweredCount:2,remainingSeconds:null,elapsedSeconds:0,questionBatch:{size:6,offset:0}};
+ api.saveQuizShortAnswer=async(_session,_question,answer)=>{events.push('save text');written=answer;return {attempt:{id:77,answer,status:'saved'},session:{id:session.id,quizScore:{earnedMarks:0,maxMarks:4,shortAnswerCount:1,pendingGradingCount:1}}};};
+ api.completeSession=async()=>{events.push('submit quiz');assert.equal(written,'My written response');return {session:{...session,status:'completed',quizScore:{earnedMarks:0,maxMarks:4,shortAnswerCount:1,pendingGradingCount:1},questions:[{...short,hasSavedAnswer:true,submitted:true,selectedDisplayed:'C',shortAnswerStatus:'saved',shortAnswerAttempt:{id:77,answer:written,status:'saved'}},mcq]}};};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<McqSessionPlayer initialSession={session} onExit={()=>{}} onSessionCompleted={result=>{finished=result;}}/>));assert.ok(host().querySelector('textarea'));assert.match(text(),/Short answer · 3 marks/);await change('textarea','My written response');assert.equal(events.length,0,'Typing must not create per-keystroke database traffic.');
+  await click('Next Question');await click('Finish Quiz');await click('Confirm & Submit');await click('Previous Question');assert.deepEqual(events,['save text','submit quiz']);assert.equal(finished.status,'completed');assert.match(text(),/awaiting grading/);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'My written response');assert.equal(findButton('Grade saved answer').disabled,true,'Google calls require consent.');
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('one upload page offers all types and its guided short-answer builder appends to a mixed batch',async()=>{
+ reset();const html=fs.readFileSync(new URL('../../tools/quiz-portal.html',import.meta.url),'utf8'),page=new JSDOM(html);
+ host().innerHTML=page.window.document.querySelector('main').innerHTML;page.window.close();
+ const source=host().querySelector('#source') as HTMLTextAreaElement;source.value=JSON.stringify({questions:[{question_type:'mcq',question_text:'An existing MCQ'}]});
+ const {installShortAnswerBuilder}=await import('../../tools/short-answer-builder.ts');let changed=0;
+ const builder=installShortAnswerBuilder({source,selectImages:async()=>{},image:()=>undefined,changed:()=>{changed++;},notice:()=>{}});builder.open();
+ assert.deepEqual([...host().querySelectorAll<HTMLOptionElement>('#question-type option')].map(option=>option.value),['mcq','matching','short_answer']);
+ (host().querySelector('#sa-question') as HTMLTextAreaElement).value='Name a bone function.';(host().querySelector('#sa-model-answer') as HTMLTextAreaElement).value='Support.';(host().querySelector('#sa-guide-next') as HTMLButtonElement).click();
+ (host().querySelector('#sa-rubric textarea') as HTMLTextAreaElement).value='Support of the body';(host().querySelector('#sa-guide-next') as HTMLButtonElement).click();(host().querySelector('#sa-guide-finish') as HTMLButtonElement).click();
+ const batch=JSON.parse(source.value);assert.equal(batch.questions.length,2);assert.equal(batch.questions[0].question_type,'mcq');assert.equal(batch.questions[1].question_type,'short_answer');assert.equal(batch.questions[1].model_answer,'Support.');assert.equal(changed,1);
 });

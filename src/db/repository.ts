@@ -1,3 +1,6 @@
+import {quizScore,QUIZ_TOTALS_SQL,sqlQuizSummary,type QuizShortAnswerState} from '../lib/quiz-scoring.ts';
+import {quizShortAnswerAttempts} from '../lib/mixed-quiz-short-answers.ts';
+import {syncShortAnswerQuizEntries} from '../lib/short-answer-quiz-links.ts';
 import { matchingGrade, type MatchingQuestionDefinition } from '../lib/matching-questions.ts';
 import { parseAndValidateJsonQuestions, type JsonQuestionRow } from '../lib/json-import.ts';
 import type { ImportImageFile, QuestionImage } from '../lib/question-images.ts';
@@ -25,6 +28,8 @@ import {
   lectureFiles,
   appSettings,
   questionReports,
+  shortAnswerQuestions,
+  shortAnswerAttempts,
 } from './schema.ts';
 import { QUESTION_REPORT_REASONS } from '../lib/question-reports.ts';
 import {
@@ -2597,7 +2602,7 @@ function getLatestAnsweredQuestions(userUid: string) {
   return db
     .selectDistinctOn([questionAttempts.questionId], {
       questionId: questionAttempts.questionId,
-      isCorrect: questionAttempts.isCorrect,
+      isCorrect: sql<boolean|null>`CASE WHEN ${questionAttempts.gradingStatus} IS NOT NULL AND ${questionAttempts.gradingStatus} != 'graded' THEN NULL ELSE ${questionAttempts.isCorrect} END`.as('is_correct'),
     })
     .from(questionAttempts)
     .where(and(
@@ -2729,7 +2734,7 @@ export async function getPublishedCatalog(userUid?: string) {
             q.subjectId,
             (correctCountBySubject.get(q.subjectId) || 0) + 1
           );
-        } else {
+        } else if(latestAttemptByQ.get(q.id)===false) {
           incorrectCountByLecture.set(
             q.lectureId,
             (incorrectCountByLecture.get(q.lectureId) || 0) + 1
@@ -2749,7 +2754,7 @@ export async function getPublishedCatalog(userUid?: string) {
       const attempted = attemptedCountByLecture.get(l.id) || 0;
       const correct = correctCountByLecture.get(l.id) || 0;
       const incorrect = incorrectCountByLecture.get(l.id) || 0;
-      const accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 0;
+      const accuracy = correct+incorrect > 0 ? Math.round((correct / (correct+incorrect)) * 100) : 0;
       const completionProgress = qCount > 0 ? Math.round((attempted / qCount) * 100) : 0;
       const unanswered = Math.max(0, qCount - attempted);
 
@@ -2782,7 +2787,7 @@ export async function getPublishedCatalog(userUid?: string) {
       const attempted = attemptedCountBySubject.get(s.id) || 0;
       const correct = correctCountBySubject.get(s.id) || 0;
       const incorrect = incorrectCountBySubject.get(s.id) || 0;
-      const accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 0;
+      const accuracy = correct+incorrect > 0 ? Math.round((correct / (correct+incorrect)) * 100) : 0;
       const completionProgress = qCount > 0 ? Math.round((attempted / qCount) * 100) : 0;
       const unanswered = Math.max(0, qCount - attempted);
 
@@ -2838,7 +2843,7 @@ export async function getPublishedCatalog(userUid?: string) {
   }
 }
 
-export interface SessionOrderItem {
+export interface SessionOrderItem extends QuizShortAnswerState {
   questionId: number;
   permutation: OptionPermutation;
   selectedDisplayed: OptionKey | null;
@@ -2864,18 +2869,23 @@ async function openLectureStudy(userUid: string, lectureId: number, shuffleOptio
       inArray(examSessions.status, ['in_progress', 'completed'])
     )).orderBy(sql`CASE WHEN ${examSessions.status} = 'in_progress' THEN 0 ELSE 1 END`,
       desc(sql`${examSessions.totalQuestions} - ${examSessions.unansweredCount}`), desc(examSessions.startedAt), desc(examSessions.id)).limit(1).for('update');
-    const published = await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'` }).from(questions)
+    const published = await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'`,shortAnswerId:questions.shortAnswerId,shortAnswerMaxMarks:questions.shortAnswerMaxMarks,
+      hasTags: sql<boolean>`regexp_replace(COALESCE(${questions.tags},'')||','||COALESCE(${questions.specialTags},''), '[[:space:],;|،]', '', 'g') <> ''` }).from(questions)
       .where(and(eq(questions.lectureId, lectureId), eq(questions.status, 'published'))).orderBy(asc(questions.id));
     if (!published.length) throw new ClientSafeError('No published questions are available for this lecture.', 400);
     const latestAnswers = await tx.selectDistinctOn([questionAttempts.questionId], {
-      questionId: questionAttempts.questionId, selectedOption: questionAttempts.selectedOption, matchingChoiceId: questionAttempts.matchingChoiceId,
+      questionId: questionAttempts.questionId, selectedOption: questionAttempts.selectedOption, matchingChoiceId: questionAttempts.matchingChoiceId,shortAnswerState:sql<any>`CASE WHEN ${questionAttempts.gradingStatus} IS NOT NULL THEN ${questionAttempts.questionSnapshotJson}::jsonb->'shortAnswerState' ELSE NULL END`,
     }).from(questionAttempts).where(and(eq(questionAttempts.userUid, userUid),
-      inArray(questionAttempts.questionId, published.map(question => question.id)), sql`${questionAttempts.selectedOption} IS NOT NULL`))
+      inArray(questionAttempts.questionId, published.map(question => question.id)), or(sql`${questionAttempts.selectedOption} IS NOT NULL`,eq(questionAttempts.gradingStatus,'cleared'))))
       .orderBy(questionAttempts.questionId, desc(questionAttempts.answeredAt), desc(questionAttempts.id));
+    const legacyShort=published.filter(q=>q.shortAnswerId&&!latestAnswers.some(a=>a.questionId===q.id));
+    if(legacyShort.length){const {rows:legacy}=await tx.execute(sql`SELECT DISTINCT ON(question_id) id,question_id,status,result->>'score' AS score,COALESCE((result->>'maxScore')::int,(SELECT sum((point->>'marks')::int) FROM jsonb_array_elements(snapshot->'rubric') point)) AS maximum FROM short_answer_attempts WHERE user_uid=${userUid} AND NOT excluded_from_quiz_progress AND question_id IN (${sql.join(legacyShort.map(q=>sql`${q.shortAnswerId}`),sql`,`)}) ORDER BY question_id,updated_at DESC,id DESC`);
+      for(const row of legacy as any[]){const question=legacyShort.find(q=>q.shortAnswerId===row.question_id)!;latestAnswers.push({questionId:question.id,selectedOption:row.status==='graded'?(Number(row.score)===Number(row.maximum)?'A':'B'):'C',matchingChoiceId:null,shortAnswerState:{shortAnswerId:row.question_id,shortAnswerAttemptId:row.id,shortAnswerStatus:row.status,shortAnswerScore:row.score==null?null:Number(row.score),maxMarks:Number(row.maximum)}});}
+    }
     let previous: SessionOrderItem[] = [];
     try { const parsed = JSON.parse(existing?.questionOrderJson || '[]'); if (Array.isArray(parsed)) previous = parsed; } catch { /* Recover from valid saved attempts. */ }
     const items = reconcileLectureStudyItems(previous, published, latestAnswers, existing?.shuffleOptions ?? shuffleOptions);
-    const score = scoreExamSession(published as Array<{id:number;correctAnswer:OptionKey}>, Object.fromEntries(items.map(item => [item.questionId, item.selectedCanonical])));
+    const score = quizScore(items);
     const values = { questionOrderJson: JSON.stringify(items), totalQuestions: score.totalQuestions,
       correctCount: score.correctCount, incorrectCount: score.incorrectCount, unansweredCount: score.unansweredCount, scorePercentage: score.scorePercentage };
     let session = existing;
@@ -3084,7 +3094,7 @@ export async function createPracticeOrExamSession(
       const pastAttempts = await getLatestAnsweredQuestions(userUid);
       const wrongIds = new Set<number>();
       for (const attempt of pastAttempts) {
-        if (!attempt.isCorrect && attempt.questionId !== null) wrongIds.add(attempt.questionId);
+        if (attempt.isCorrect===false && attempt.questionId !== null) wrongIds.add(attempt.questionId);
       }
 
       if (wrongIds.size === 0) {
@@ -3097,6 +3107,7 @@ export async function createPracticeOrExamSession(
     }
 
     const selection = selectPracticeQuestions(eligiblePool, {
+      prioritizeTagged: params.mode === 'study' && params.lectureIds?.length === 1,
       subjectIds: params.subjectIds,
       lectureIds: params.lectureIds,
       difficulties: params.difficulties,
@@ -3119,6 +3130,7 @@ export async function createPracticeOrExamSession(
     const orderItems: SessionOrderItem[] = selection.selectedQuestions.map((q, idx) => ({
       questionId: q.id,
       ...(q.matchingGroupId ? { isMatching: true } : {}),
+      ...(q.shortAnswerId?{shortAnswerId:q.shortAnswerId,maxMarks:q.shortAnswerMaxMarks}:{}),
       permutation: createOptionPermutation(
         !q.matchingGroupId && Boolean(params.shuffleOptions),
         Date.now() + idx * 97 + q.id
@@ -3211,7 +3223,7 @@ let questionMetadataCache: { expiresAt: number; rows: any[] } | null = null;
 function readQuestionMetadata() {
   return db.select({ id: questions.id, subjectId: questions.subjectId,
     lectureId: questions.lectureId, difficulty: questions.difficulty, tags: questions.tags,
-    specialTags: questions.specialTags, status: questions.status, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'` })
+    specialTags: questions.specialTags, status: questions.status, correctAnswer: questions.correctAnswer, shortAnswerId:questions.shortAnswerId,shortAnswerMaxMarks:questions.shortAnswerMaxMarks, matchingGroupId: sql<string>`${questions.matching}->>'groupId'` })
     .from(questions).where(eq(questions.status, 'published')).execute();
 }
 let questionMetadataRequest: ReturnType<typeof readQuestionMetadata> | null = null;
@@ -3409,6 +3421,7 @@ export async function getExamSessionForStudent(
     }
 
     const isExamActive = session.mode === 'exam' && session.status === 'in_progress';
+    const shortAttempts=await quizShortAnswerAttempts(userUid,windowItems,isExamActive);
 
     const formattedQuestions = orderItems
       .map((item, idx) => {
@@ -3418,13 +3431,21 @@ export async function getExamSessionForStudent(
         const index = options.batchOnly ? offset + idx : idx;
         if (!source) return options.batched ? {
           ...(item.isMatching ? {questionType:'matching'} : {}),
+          ...(item.shortAnswerId?{questionType:'short_answer',shortAnswerId:item.shortAnswerId,maxMarks:item.maxMarks,shortAnswerStatus:isExamActive?'saved':item.shortAnswerStatus,shortAnswerScore:isExamActive?undefined:item.shortAnswerScore,hasSavedAnswer:!!item.shortAnswerAttemptId}:{}),
           id: item.questionId, index, contentLoaded: false,
-          selectedDisplayed: item.selectedDisplayed, submitted: item.submitted,
+          selectedDisplayed: item.shortAnswerId?(item.shortAnswerAttemptId?(isExamActive?'C':item.selectedCanonical):null):item.selectedDisplayed, submitted: item.submitted,
           matchingChoiceId: item.matchingChoiceId ?? null,
           ...(!(session.mode === 'exam' && session.status === 'in_progress') && item.correctAnswer
             ? { correctDisplayedOption: resolveDisplayedOption(item.correctAnswer, item.permutation) } : {}),
         } : null;
 
+        if(item.shortAnswerId){
+          const attempt=shortAttempts.get(item.shortAnswerAttemptId!);
+          return {id:item.questionId,index,contentLoaded:true,questionType:'short_answer',shortAnswerId:item.shortAnswerId,maxMarks:item.maxMarks,
+            questionText:source.questionText,images:source.images||[],tags:source.tags||'',specialTags:source.specialTags||'',subjectTitle:sMap.get(liveQ?.subjectId)||snapshot?.subjectTitle,lectureTitle:lMap.get(liveQ?.lectureId)||snapshot?.lectureTitle,
+            lecturePdfUrl:liveQ?lPdfMap.get(liveQ.lectureId):null,shortAnswerAttempt:attempt,shortAnswerStatus:isExamActive?'saved':item.shortAnswerStatus,shortAnswerScore:isExamActive?undefined:item.shortAnswerScore,hasSavedAnswer:!!item.shortAnswerAttemptId,
+            selectedDisplayed:item.shortAnswerAttemptId?(isExamActive?'C':item.selectedCanonical):null,correctDisplayedOption:isExamActive?undefined:'A',submitted:item.submitted,isBookmarked:bookmarkedSet.has(item.questionId)};
+        }
         const canonicalQ: CanonicalQuestion = {
           id: item.questionId,
           subjectId: liveQ?.subjectId ?? 0,
@@ -3504,6 +3525,7 @@ export async function getExamSessionForStudent(
       incorrectCount: isExamActive ? 0 : session.incorrectCount,
       unansweredCount: session.unansweredCount,
       scorePercentage: isExamActive ? 0 : session.scorePercentage,
+      ...(!isExamActive&&orderItems.some(item=>item.shortAnswerId)?{quizScore:quizScore(orderItems).quizScore}:{}),
       timeLimitSeconds: session.timeLimitSeconds,
       elapsedSeconds:
         session.status === 'completed'
@@ -3552,6 +3574,7 @@ export async function saveSessionQuestionAnswer(
     if (deadline.isExpired) throw new ClientSafeError('Exam time limit has expired.', 409);
     const item: SessionOrderItem = row.item;
     if (!item) throw new ClientSafeError('Question does not belong to this session.', 400);
+    if(item.shortAnswerId)throw new ClientSafeError('Use the short-answer text field for this question.',400);
     if (row.mode !== 'exam' && item.submitted) return {
       id: sessionId, status: row.status, correctCount: row.correct_count,
       incorrectCount: row.incorrect_count, unansweredCount: row.unanswered_count,
@@ -3587,19 +3610,15 @@ export async function saveSessionQuestionAnswer(
         FROM exam_sessions s, jsonb_array_elements(s.question_order_json::jsonb) WITH ORDINALITY e(value, ordinality)
         WHERE s.id = ${sessionId} AND s.user_uid = ${userUid}
       ), totals AS (
-        SELECT count(*) FILTER (WHERE value->>'selectedCanonical' IS NULL)::int AS unanswered,
-               count(*) FILTER (WHERE value->>'selectedCanonical' = value->>'correctAnswer')::int AS correct,
-               count(*) FILTER (WHERE value->>'selectedCanonical' IS NOT NULL AND
-                 value->>'selectedCanonical' IS DISTINCT FROM value->>'correctAnswer')::int AS incorrect,
-               count(*)::int AS total FROM changed, jsonb_array_elements(items)
+        ${sql.raw(QUIZ_TOTALS_SQL)} FROM changed, jsonb_array_elements(items)
       )
       UPDATE exam_sessions SET question_order_json = changed.items::text,
         correct_count = totals.correct, incorrect_count = totals.incorrect,
         unanswered_count = totals.unanswered,
-        score_percentage = CASE WHEN totals.total > 0 THEN round(100.0 * totals.correct / totals.total)::int ELSE 0 END,
+        score_percentage = CASE WHEN totals.max_marks > 0 THEN round(100.0 * totals.earned_marks / totals.max_marks)::int ELSE 0 END,
         elapsed_seconds = ${elapsed}
       FROM changed, totals WHERE exam_sessions.id = ${sessionId} AND exam_sessions.user_uid = ${userUid}
-      RETURNING correct_count, incorrect_count, unanswered_count, score_percentage`);
+      RETURNING correct_count, incorrect_count, unanswered_count, score_percentage,totals.earned_marks,totals.max_marks,totals.pending_grading,totals.short_answers,totals.partial`);
     if (row.mode !== 'exam' || lockAnswer) {
       await tx.delete(questionAttempts).where(and(eq(questionAttempts.sessionId, sessionId),
         eq(questionAttempts.questionId, questionId), eq(questionAttempts.userUid, userUid)));
@@ -3618,6 +3637,7 @@ export async function saveSessionQuestionAnswer(
     return { id: sessionId, status: row.status, correctCount: row.mode === 'exam' ? 0 : counts.correct_count,
       incorrectCount: row.mode === 'exam' ? 0 : counts.incorrect_count, unansweredCount: counts.unanswered_count,
       scorePercentage: row.mode === 'exam' ? 0 : counts.score_percentage, elapsedSeconds: elapsed,
+      ...(row.mode!=='exam'&&counts.short_answers?{quizScore:sqlQuizSummary(counts)}:{}),
       updatedQuestionId: questionId, submitted: item.submitted, selectedDisplayed: item.selectedDisplayed, matchingChoiceId: item.matchingChoiceId ?? null };
   });
   return slim ? result : getExamSessionForStudent(userUid, sessionId);
@@ -3698,7 +3718,7 @@ export async function completeExamSession(
         if (deadlineStatus.isExpired) {
           let attemptedPostExpiryMutation = false;
           for (const item of orderItems) {
-            if (!item.isMatching && item.questionId in finalDisplayedAnswers) {
+            if (!item.isMatching && !item.shortAnswerId && item.questionId in finalDisplayedAnswers) {
               const disp = finalDisplayedAnswers[item.questionId] ?? null;
               if (disp !== item.selectedDisplayed) {
                 attemptedPostExpiryMutation = true;
@@ -3718,7 +3738,7 @@ export async function completeExamSession(
           }
         } else {
           for (const item of orderItems) {
-            if (!item.isMatching && item.questionId in finalDisplayedAnswers) {
+            if (!item.isMatching && !item.shortAnswerId && item.questionId in finalDisplayedAnswers) {
               const rawDisp = finalDisplayedAnswers[item.questionId];
               const validDisp =
                 rawDisp && OPTION_KEYS.includes(rawDisp) ? rawDisp : null;
@@ -3742,7 +3762,7 @@ export async function completeExamSession(
       // Grade with tiny keys; only answered questions need historical content snapshots.
       const keys = qIds.length ? await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer })
         .from(questions).where(inArray(questions.id, qIds)) : [];
-      const answeredIds = orderItems.filter(item => item.selectedCanonical != null).map(item => item.questionId);
+      const answeredIds = orderItems.filter(item => item.selectedCanonical != null||item.shortAnswerStatus==='cleared').map(item => item.questionId);
       const answeredQuestions = await loadSessionQuestions(sessionId, answeredIds, tx);
       const fullById = new Map(answeredQuestions.map(q => [q.id, q]));
       const dbQuestions = keys.map(key => fullById.get(key.id) || key);
@@ -3772,7 +3792,7 @@ export async function completeExamSession(
         }
       }
 
-      const score = scoreExamSession(questionsForScoring, canonicalAnswersMap);
+      const score = quizScore(orderItems);
       const finalElapsed = deadlineStatus.effectiveElapsedSeconds;
 
       // Conditional status transition from 'in_progress' -> 'completed'
@@ -3816,7 +3836,7 @@ export async function completeExamSession(
       const attemptRecords = [];
       for (const res of score.questionResults) {
         // Only record questions that were genuinely answered (skip untouched/unselected questions)
-        if (!res.selectedCanonical) continue;
+        if (!res.selectedCanonical&&orderItems.find(item=>item.questionId===res.questionId)?.shortAnswerStatus!=='cleared') continue;
 
         const q = qMap.get(res.questionId);
         if (!q) continue;
@@ -3843,6 +3863,7 @@ export async function completeExamSession(
           images: q.images || [],
           explanationImages: q.explanationImages || [],
           matching: q.matching || null,
+          ...(q.shortAnswerId?{shortAnswerId:q.shortAnswerId,shortAnswerMaxMarks:q.shortAnswerMaxMarks,shortAnswerState:(()=>{const item=orderItems.find(item=>item.questionId===q.id)!;return {shortAnswerId:item.shortAnswerId,shortAnswerAttemptId:item.shortAnswerAttemptId,shortAnswerStatus:item.shortAnswerStatus,shortAnswerScore:item.shortAnswerScore,maxMarks:item.maxMarks};})()}:{}),
           pageNumber: q.pageNumber ?? null,
           version: q.version,
         });
@@ -3855,6 +3876,7 @@ export async function completeExamSession(
           lectureId: q.lectureId,
           selectedOption: res.selectedCanonical,
           matchingChoiceId: orderItems.find(item => item.questionId === q.id)?.matchingChoiceId ?? null,
+          gradingStatus:orderItems.find(item=>item.questionId===q.id)?.shortAnswerStatus??null,
           correctOptionSnapshot: res.correctCanonical,
           isCorrect: res.isCorrect,
           questionSnapshotJson: snapshotJson,
@@ -3999,7 +4021,7 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
         questionId: questionAttempts.questionId,
         selectedOption: questionAttempts.selectedOption,
         matchingChoiceId: questionAttempts.matchingChoiceId,
-        isCorrect: questionAttempts.isCorrect,
+        isCorrect: sql<boolean|null>`CASE WHEN ${questionAttempts.gradingStatus} IS NOT NULL AND ${questionAttempts.gradingStatus} != 'graded' THEN NULL ELSE ${questionAttempts.isCorrect} END`.as('is_correct'),
         answeredAt: questionAttempts.answeredAt,
       })
       .from(questionAttempts)
@@ -4098,10 +4120,12 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
             ? 'unanswered'
             : latestAtt.selectedOption === null
             ? 'unanswered'
+            : latestAtt.isCorrect===null?'pending'
             : latestAtt.isCorrect
             ? 'correct'
             : 'incorrect',
           matching: q.matching || null,
+          shortAnswerId:q.shortAnswerId,
           matchingChoiceId: latestAtt?.matchingChoiceId ?? null,
           lastSelectedOption: latestAtt?.selectedOption ?? null,
         };
@@ -4140,10 +4164,12 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
           status:
             latestAtt.selectedOption === null
               ? 'unanswered'
+              : latestAtt.isCorrect===null?'pending'
               : latestAtt.isCorrect
               ? 'correct'
               : 'incorrect',
           matching: q.matching || null,
+          shortAnswerId:q.shortAnswerId,
           matchingChoiceId: latestAtt.matchingChoiceId ?? null,
           selectedOption: latestAtt.selectedOption,
           answeredAt: latestAtt.answeredAt,
@@ -4194,7 +4220,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
             subjectId: questionAttempts.subjectId,
             lectureId: questionAttempts.lectureId,
             selectedOption: questionAttempts.selectedOption,
-            isCorrect: questionAttempts.isCorrect,
+            isCorrect: sql<boolean|null>`CASE WHEN ${questionAttempts.gradingStatus} IS NOT NULL AND ${questionAttempts.gradingStatus} != 'graded' THEN NULL ELSE ${questionAttempts.isCorrect} END`.as('is_correct'),
             answeredAt: questionAttempts.answeredAt,
           })
           .from(questionAttempts)
@@ -4227,10 +4253,10 @@ export async function getStudentDashboardAnalytics(userUid: string) {
 
     const totalAnswersSubmitted = uniqueLatestAttempts.length;
     const totalCorrectAnswers = uniqueLatestAttempts.filter((a) => a.isCorrect).length;
-    const totalIncorrectAnswers = totalAnswersSubmitted - totalCorrectAnswers;
+    const totalIncorrectAnswers = uniqueLatestAttempts.filter(a=>a.isCorrect===false).length;
     const overallAccuracy =
       totalAnswersSubmitted > 0
-        ? Math.round((totalCorrectAnswers / totalAnswersSubmitted) * 100)
+        ? Math.round((totalCorrectAnswers / Math.max(1,totalCorrectAnswers+totalIncorrectAnswers)) * 100)
         : 0;
 
     const uniqueQuestionIds = new Set(
@@ -4249,9 +4275,9 @@ export async function getStudentDashboardAnalytics(userUid: string) {
         subjAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
       );
       const subjCorrect = subjAttempts.filter((a) => a.isCorrect).length;
-      const subjIncorrect = subjAttempts.length - subjCorrect;
+      const subjIncorrect = subjAttempts.filter(a=>a.isCorrect===false).length;
       const accuracy =
-        subjAttempts.length > 0 ? Math.round((subjCorrect / subjAttempts.length) * 100) : 0;
+        subjAttempts.length > 0 ? Math.round((subjCorrect / Math.max(1,subjCorrect+subjIncorrect)) * 100) : 0;
       const latestAttempt = subjAttempts[0]?.answeredAt ?? null;
 
       const lectureBreakdown = allLectures
@@ -4264,7 +4290,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
             lectAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
           );
           const lectCorrect = lectAttempts.filter((a) => a.isCorrect).length;
-          const lectIncorrect = lectAttempts.length - lectCorrect;
+          const lectIncorrect = lectAttempts.filter(a=>a.isCorrect===false).length;
           return {
             lectureId: lect.id,
             title: lect.title,
@@ -4279,7 +4305,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
             incorrectAnswers: lectIncorrect,
             accuracyPercentage:
               lectAttempts.length > 0
-                ? Math.round((lectCorrect / lectAttempts.length) * 100)
+                ? Math.round((lectCorrect / Math.max(1,lectCorrect+lectIncorrect)) * 100)
                 : 0,
             lastAttemptAt: lectAttempts[0]?.answeredAt ?? null,
           };
@@ -4314,7 +4340,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       };
     });
 
-    const topicPerformance = computeTopicPerformance(attemptsWithTags);
+    const topicPerformance = computeTopicPerformance(attemptsWithTags.filter(a=>a.isCorrect!==null).map(a=>({...a,isCorrect:a.isCorrect as boolean})));
 
     const seenLectureIds = new Set<number>();
     const deduplicatedSessions: typeof userSessions = [];
@@ -5078,6 +5104,12 @@ export async function upsertQuestionAdmin(
         .from(questions)
         .where(eq(questions.id, payload.id));
       const matching = existing[0]?.matching;
+      if(existing[0]?.shortAnswerId){
+        if(payload.subjectId!==existing[0].subjectId||payload.lectureId!==existing[0].lectureId)throw new ClientSafeError('A short-answer question must stay with its existing lecture or section.',400);
+        const {pool}=await import('./index.ts');const client=await pool.connect();
+        try{await client.query('BEGIN');await client.query("UPDATE public.short_answer_questions SET status=$1,definition=jsonb_set(jsonb_set(jsonb_set(definition,'{status}',to_jsonb($1::text)),'{question_text}',to_jsonb($2::text)),'{tags}',$3::jsonb) WHERE id=$4",[payload.status,payload.questionText.trim(),JSON.stringify(parseSpecialTags(payload.tags||'')),existing[0].shortAnswerId]);await syncShortAnswerQuizEntries(client,existing[0].lectureId);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+        await logAdminAction(verifiedAdmin.uid,verifiedAdmin.email,'UPDATE_SHORT_ANSWER_QUIZ_ENTRY','question',payload.id,'Updated short-answer publication and public content; saved answer snapshots unchanged.');invalidateCatalogCache();return (await db.select().from(questions).where(eq(questions.id,payload.id)))[0];
+      }
       if (matching && payload.matchingChoiceId !== undefined && !matching.choices.some(choice=>choice.id===payload.matchingChoiceId)) throw new ClientSafeError('Choose a valid matching answer key.',400);
       if (matching && payload.correctAnswer !== 'A') throw new ClientSafeError('Use the matching answer selector to edit this numbered label.',400);
       const updatedMatching = matching ? {...matching,correctChoiceId:payload.matchingChoiceId ?? matching.correctChoiceId} : null;
@@ -5636,6 +5668,8 @@ export async function resetLectureProgress(
     const qIds = lectureQuestions.map((q) => q.id);
 
     await db.transaction(async (tx) => {
+      await tx.update(shortAnswerAttempts).set({excludedFromQuizProgress:true}).where(and(eq(shortAnswerAttempts.userUid,targetUserUid),sql`${shortAnswerAttempts.questionId} IN (SELECT id FROM public.short_answer_questions WHERE lecture_id=${lectureId})`));
+
       // Delete question attempts linked to these sessions or matching questions for this lecture
       if (sessionIds.length > 0) {
         await tx
@@ -5921,7 +5955,18 @@ export async function executeCsvImportAdmin(
         const finalSpecialTags = parseSpecialTags(override?.specialTags ?? row.specialTags).join(', ');
         const finalTags = parseSpecialTags(override?.tags ?? row.tags).join(', ');
 
+        let shortAnswerId:number|undefined;
+        const shortDefinition=(row as JsonQuestionRow).shortAnswerDefinition;
+        if(shortDefinition){
+          const definition={...shortDefinition,tags:parseSpecialTags(finalTags),status:row.status,...((row as JsonQuestionRow).images?.length?{images:(row as JsonQuestionRow).images}:{})};
+          const identity=definition.images?.length?{...definition,images:definition.images.map(image=>({id:image.id,alt:image.alt}))}:definition;
+          const contentHash=crypto.createHash('sha256').update(JSON.stringify({...identity,status:undefined})).digest('hex');
+          const [saved]=await tx.insert(shortAnswerQuestions).values({lectureId:destLectureId,definition,contentHash,maxScore:definition.rubric.reduce((sum,p)=>sum+p.marks,0),status:row.status}).onConflictDoNothing().returning({id:shortAnswerQuestions.id});
+          if(!saved){skippedCount++;continue;}shortAnswerId=saved.id;
+        }
+
         pendingQuestions.push({
+          ...(shortAnswerId?{shortAnswerId,shortAnswerMaxMarks:shortDefinition!.rubric.reduce((sum,p)=>sum+p.marks,0)}:{}),
           subjectId: destSubjectId,
           lectureId: destLectureId,
           questionText: row.questionText,

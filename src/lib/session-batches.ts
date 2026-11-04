@@ -7,7 +7,7 @@ export function questionBatchOffset(index: number) {
 /** Study content already includes explanations; retain it when submission returns a paged review. */
 export function mergeCompletedStudy(previous: any, completed: any) {
   if (previous.id !== completed.id || previous.mode === 'exam' || !completed.questionBatch) return completed;
-  const loaded = new Map(previous.questions.filter((q: any) => q.contentLoaded !== false).map((q: any) => [q.id, q]));
+  const loaded = new Map(previous.questions.filter((q: any) => q.contentLoaded !== false&&q.questionType!=='short_answer').map((q: any) => [q.id, q]));
   return { ...completed, questions: completed.questions.map((q: any) => q.contentLoaded === false && loaded.has(q.id)
     ? { ...(loaded.get(q.id) as any), ...q, contentLoaded: true } : q) };
 }

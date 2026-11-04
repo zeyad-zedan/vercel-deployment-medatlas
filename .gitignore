@@ -30,6 +30,8 @@ tools/*
 !tools/short-answer-portal.ts
 !tools/short-answer-portal-client.ts
 !tools/short-answer-portal.html
+!tools/quiz-portal.html
+!tools/short-answer-builder.ts
 start-pdf-tool.bat
 start-remote-tunnel.bat
 *.bat

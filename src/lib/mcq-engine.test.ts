@@ -11,7 +11,26 @@ import {
   parseAndValidateCsvQuestions,
   getSampleCsvTemplate,
   CanonicalQuestion,
+  prioritizeTaggedQuestions,
 } from './mcq-engine';
+
+test('tag priority is stable, recognizes both tag fields, and ignores empty separators', () => {
+  const pool = [{id:1,tags:' ,;|، '},{id:2,tags:'Bone'},{id:3,specialTags:'Important'},{id:4,tags:''},{id:5,tags:'Old Exams'}];
+  assert.deepEqual(prioritizeTaggedQuestions(pool).map(q=>q.id),[2,3,5,1,4]);
+  assert.deepEqual(pool.map(q=>q.id),[1,2,3,4,5]);
+});
+
+test('tagged questions take priority before count selection and remain first after shuffling', () => {
+  const pool = Array.from({length:12},(_,index)=>({id:index+1,subjectId:1,lectureId:10,difficulty:'Easy',status:'published',tags:index>=8?'Important':''}));
+  for(let seed=1;seed<=12;seed++){
+    const limited=selectPracticeQuestions(pool,{requestedCount:3,shuffleQuestions:true,seed,prioritizeTagged:true});
+    assert.ok(limited.selectedQuestions.every(q=>q.tags==='Important'));
+    const full=selectPracticeQuestions(pool,{shuffleQuestions:true,seed,prioritizeTagged:true});
+    assert.ok(full.selectedQuestions.slice(0,4).every(q=>q.tags==='Important'));
+    assert.equal(new Set(full.selectedQuestions.map(q=>q.id)).size,12);
+  }
+  assert.deepEqual(selectPracticeQuestions(pool,{requestedCount:3,shuffleQuestions:false}).selectedQuestions.map(q=>q.id),[1,2,3]);
+});
 
 const SAMPLE_QUESTION: CanonicalQuestion = {
   id: 101,

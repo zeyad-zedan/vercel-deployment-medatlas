@@ -140,7 +140,7 @@ export const DashboardView: React.FC<{
       {/* Summary KPI Grid: Total, Unique, Correct, Incorrect, Accuracy, Unanswered */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5 font-mono-tabular">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <p className="text-xs font-sans text-slate-500 font-medium">Total MCQs</p>
+          <p className="text-xs font-sans text-slate-500 font-medium">Total questions</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">
             {summary.totalPublishedQuestions}
           </p>
@@ -417,7 +417,7 @@ export const DashboardView: React.FC<{
                           }
                           className="text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
                         >
-                          Solve MCQs
+                          Start quiz
                         </button>
                       </td>
                     </tr>
@@ -465,7 +465,7 @@ export const DashboardView: React.FC<{
                   <div className="space-y-0.5">
                     <p className="font-semibold text-slate-900">{sess.title}</p>
                     <p className="text-slate-500">
-                      Mode: {sess.mode.toUpperCase()} · {sess.totalQuestions} MCQs ·{' '}
+                      Mode: {sess.mode.toUpperCase()} · {sess.totalQuestions} questions ·{' '}
                       {new Date(sess.startedAt).toLocaleDateString()}
                     </p>
                   </div>
@@ -569,7 +569,7 @@ export const SubjectsAndLecturesView: React.FC<{
         <div className="ma-library-totals" aria-label="Curriculum totals">
           <div><strong>{moduleSubjects.length}</strong><span>Subjects</span></div>
           <div><strong>{lectureCount}</strong><span>Lectures</span></div>
-          <div><strong>{questionCount.toLocaleString()}</strong><span>MCQs</span></div>
+          <div><strong>{questionCount.toLocaleString()}</strong><span>questions</span></div>
         </div>
       </header>
       <div className="ma-library-toolbar">
@@ -633,7 +633,7 @@ export const SubjectsAndLecturesView: React.FC<{
                 className="ma-subject group">
                 <summary className="ma-subject-summary">
                   <span className="ma-subject-icon" aria-hidden="true"><BookOpen size={22} strokeWidth={1.6} /></span>
-                  <span className="ma-subject-heading"><span className="ma-eyebrow">Subject {String(subjectIndex + 1).padStart(2, '0')}</span><span className="ma-subject-title">{subject.title}</span><span className="ma-subject-meta">{sortedLectures.length} lectures <span aria-hidden="true">·</span> {subject.questionCount || 0} MCQs</span></span>
+                  <span className="ma-subject-heading"><span className="ma-eyebrow">Subject {String(subjectIndex + 1).padStart(2, '0')}</span><span className="ma-subject-title">{subject.title}</span><span className="ma-subject-meta">{sortedLectures.length} lectures <span aria-hidden="true">·</span> {subject.questionCount || 0} questions</span></span>
                   <span className="ma-subject-progress"><span>{Math.min(100, Math.round((subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100))}% completed</span><span className="ma-progress-track"><span style={{width: `${Math.min(100, (subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100)}%`}} /></span></span>
                   <ChevronDown className="ma-subject-chevron" size={19} aria-hidden="true" />
                 </summary>
@@ -722,7 +722,7 @@ export const SubjectsAndLecturesView: React.FC<{
                           </div>
 
                           <div className="ma-lecture-metrics grid grid-cols-3 gap-4 text-xs">
-                            <div><span className="ma-metric-label">Question bank</span><strong className="ma-metric-value">{totalQuestions} <small>MCQs</small></strong></div>
+                            <div><span className="ma-metric-label">Question bank</span><strong className="ma-metric-value">{totalQuestions} <small>questions</small></strong></div>
                             <div><span className="ma-metric-label" title="Unique questions answered across study, custom practice, and submitted exams">Completed</span><strong className="ma-metric-value">{attemptedQuestions}<small> / {totalQuestions}</small></strong></div>
                             <div><span className="ma-metric-label">Accuracy</span><strong className="ma-metric-value">{accuracy}</strong></div>
                           </div>
@@ -1031,10 +1031,10 @@ export const CustomPracticeView: React.FC<{
       mode: sessionMode,
       title:
         sessionMode === 'exam'
-          ? `Custom Timed Exam (${questionCount} MCQs)`
+          ? `Custom Timed Exam (${questionCount} questions)`
           : onlyMistakes
-          ? `Review Mistakes Practice (${questionCount} MCQs)`
-          : `Custom Practice Session (${questionCount} MCQs)`,
+          ? `Review Mistakes Practice (${questionCount} questions)`
+          : `Custom Practice Session (${questionCount} questions)`,
       subjectIds: selectedSubjectIds.length > 0 ? selectedSubjectIds : undefined,
       lectureIds: selectedLectureIds.length > 0 ? selectedLectureIds : undefined,
       difficulties: selectedDifficulties.length > 0 ? selectedDifficulties : undefined,
@@ -1080,7 +1080,7 @@ export const CustomPracticeView: React.FC<{
                 >
                   <span>{s.title}</span>
                   <span className="font-mono-tabular text-slate-500">
-                    {s.questionCount} MCQs
+                    {s.questionCount} questions
                   </span>
                 </button>
               );
@@ -1111,7 +1111,7 @@ export const CustomPracticeView: React.FC<{
                 >
                   <span className="truncate pr-2">{l.title}</span>
                   <span className="font-mono-tabular shrink-0">
-                    {l.questionCount} MCQs
+                    {l.questionCount} questions
                   </span>
                 </button>
               );
@@ -1648,7 +1648,7 @@ export const MockExamsView: React.FC<{
                   </div>
                   <div className="pt-3 mt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-mono-tabular text-slate-600">
                     <span>{m.subjects?.length || 0} Subjects</span>
-                    <span>{m.questionCount || 0} MCQs</span>
+                    <span>{m.questionCount || 0} questions</span>
                   </div>
                 </button>
               );
@@ -1729,7 +1729,7 @@ export const MockExamsView: React.FC<{
                     <span className="text-xs truncate">{s.title}</span>
                   </div>
                   <span className="text-[11px] font-mono-tabular text-slate-500 shrink-0">
-                    {s.questionCount || 0} MCQs
+                    {s.questionCount || 0} questions
                   </span>
                 </div>
               );
@@ -1905,7 +1905,7 @@ export const MockExamsView: React.FC<{
                       : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  {num} MCQs
+                  {num} questions
                 </button>
               ))}
               {totalAvailableInSelection > 0 && (
@@ -2188,9 +2188,10 @@ export const BookmarksView: React.FC<{
 
                 {isOpen && (
                   <div className="pt-4 border-t border-slate-100 space-y-3 text-xs">
+                    {item.shortAnswerId&&<p>Short-answer question. Open its lecture or practical quiz to view your saved answer and grading.</p>}
                     {item.matching && <MatchingAnswerReview matching={item.matching} choiceId={item.matchingChoiceId}/>}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {(!item.matching ? ['A', 'B', 'C', 'D'] as const : []).map((optKey) => {
+                      {(!item.matching&&!item.shortAnswerId ? ['A', 'B', 'C', 'D'] as const : []).map((optKey) => {
                         const text = item[`option${optKey}`];
                         const isCorrect = item.correctAnswer === optKey;
                         return (
@@ -2214,7 +2215,7 @@ export const BookmarksView: React.FC<{
                       })}
                     </div>
 
-                    <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
+                    {!item.shortAnswerId&&<div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
                       <p className="font-bold text-slate-900">
                         {item.matching ? 'Explanation' : `Explanation (Correct Answer: ${item.correctAnswer})`}:
                       </p>
@@ -2222,7 +2223,7 @@ export const BookmarksView: React.FC<{
                         {item.explanation}
                       </p>
                       <QuestionImages images={item.explanationImages}/>
-                    </div>
+                    </div>}
                   </div>
                 )}
               </div>
@@ -2277,7 +2278,7 @@ export const ProgressHistoryView: React.FC<{
           return <article key={session.id} className="ma-session-card">
             <div className="flex items-center justify-between gap-3"><span className="ma-eyebrow">{session.mode === 'exam' ? 'Mock exam' : session.mode === 'custom' ? 'Custom practice' : 'Lecture study'}</span><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${completed?'bg-emerald-50 text-emerald-800':'bg-slate-100 text-slate-600'}`}>{completed?'Completed':active?'In progress':'Archived'}</span></div>
             <div><h3 className="mt-4 text-base font-bold leading-relaxed">{session.title}</h3><p className="mt-1 text-xs text-slate-500">{session.subjectTitle} · {session.lectureTitle}</p></div>
-            <div className="my-5"><div className="mb-2 flex justify-between text-xs text-slate-500"><span>{answered} / {session.totalQuestions} MCQs solved</span><span>{percent}%</span></div><span className="ma-progress-track"><span style={{width:`${percent}%`}}/></span></div>
+            <div className="my-5"><div className="mb-2 flex justify-between text-xs text-slate-500"><span>{answered} / {session.totalQuestions} questions answered</span><span>{percent}%</span></div><span className="ma-progress-track"><span style={{width:`${percent}%`}}/></span></div>
             <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
               <span className="text-xs text-slate-500">{completed ? `Score: ${session.scorePercentage}%` : `${Math.floor((session.elapsedSeconds || 0)/60)} min studied`}</span>
               <button type="button" onClick={()=>onOpenSession(session.id)} className="inline-flex items-center gap-2 rounded-lg bg-[var(--ma-brand)] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[var(--ma-brand-hover)]">{completed?'Review answers':active?'Continue learning':'View session'}<ArrowRight size={14}/></button>

@@ -1,0 +1,24 @@
+{
+  "questions": [
+    {
+      "question_type": "mcq",
+      "question_text": "Which cells form bone?",
+      "options": {"A": "Osteoblasts", "B": "Osteoclasts", "C": "Neurons", "D": "Erythrocytes"},
+      "correct_answer": "A",
+      "explanation": "Osteoblasts produce bone matrix.",
+      "tags": ["Bone"],
+      "status": "draft"
+    },
+    {
+      "question_type": "short_answer",
+      "question_text": "Name two functions of bone.",
+      "model_answer": "Support and protection.",
+      "rubric": [
+        {"description": "Support of the body", "marks": 1},
+        {"description": "Protection of organs", "marks": 1}
+      ],
+      "tags": ["Bone"],
+      "status": "draft"
+    }
+  ]
+}

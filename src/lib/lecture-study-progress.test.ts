@@ -12,6 +12,55 @@ const { db, pool, questions, lectures, examSessions, questionAttempts, bookmarks
 const repo = await import('../db/repository.ts');
 after(async () => { await pool.end(); });
 
+test('fresh lecture prioritizes tags while resume preserves order, answers, and option permutations', () => {
+  const published=[{id:1,correctAnswer:'A',hasTags:false},{id:2,correctAnswer:'B',hasTags:true},{id:3,correctAnswer:'C',hasTags:false},{id:4,correctAnswer:'D',hasTags:true}];
+  const fresh=reconcileLectureStudyItems([],published,[],true);
+  assert.deepEqual(fresh.map(q=>q.questionId),[2,4,1,3]);
+  const historical=reconcileLectureStudyItems([],published.map(q=>({...q,hasTags:false})),[],true);
+  const before=structuredClone(historical);
+  const resumed=reconcileLectureStudyItems(historical,published,[{questionId:1,selectedOption:'A'}],true);
+  assert.deepEqual(resumed.map(q=>q.questionId),[1,2,3,4]);
+  assert.deepEqual(resumed.map(q=>q.permutation),before.map(q=>q.permutation));
+  assert.equal(resumed[0].selectedCanonical,'A');
+  assert.equal(resumed[0].submitted,true);
+  assert.deepEqual(historical,before);
+});
+
+test('lecture tag priority reaches the database without changing saved progress or bookmarks', {skip:!enabled}, async()=>{
+  await repo.ensureSeededDatabase();
+  const marker=crypto.randomUUID(),uid=`tag-priority-${marker}`;
+  let lectureId:number|undefined;
+  try{
+    const [base]=await db.select().from(questions).where(eq(questions.status,'published')).limit(1);
+    const [lecture]=await db.insert(lectures).values({subjectId:base.subjectId,title:`Tag priority ${marker}`,description:"Disposable tag priority test"}).returning();lectureId=lecture.id;
+    const inserted=await db.insert(questions).values(Array.from({length:10},(_,index)=>({...base,id:undefined,lectureId:lecture.id,questionBankId:null,shortAnswerId:null,matchingGroupId:null,tags:index===7?'Topic':'',specialTags:index===9?'Important':'',questionText:`Tag priority ${marker} ${index}`,contentHash:`${marker}-${index}`}))).returning({id:questions.id});
+    repo.invalidateCatalogCache();
+    const opened=(await repo.createPracticeOrExamSession(uid,{mode:'study',lectureIds:[lectureId],batched:true})).session;
+    const expected=[inserted[7].id,inserted[9].id,...inserted.filter((_,i)=>i!==7&&i!==9).map(q=>q.id)];
+    assert.deepEqual(opened.questions.map((q:any)=>q.id),expected);
+    assert.equal(opened.questions.filter((q:any)=>q.contentLoaded).length,6);
+    await repo.saveSessionQuestionAnswer(uid,opened.id,opened.questions[0].id,opened.questions[0].correctDisplayedOption,true,0,true);
+    await repo.toggleBookmarkForStudent(uid,opened.questions[0].id,undefined,true);
+    const answersBefore=await db.select().from(questionAttempts).where(eq(questionAttempts.userUid,uid));
+    await db.update(questions).set({tags:'New priority tag'}).where(eq(questions.id,inserted[0].id));repo.invalidateCatalogCache();
+    const resumed=(await repo.createPracticeOrExamSession(uid,{mode:'study',lectureIds:[lectureId],batched:true})).session;
+    assert.equal(resumed.id,opened.id);assert.deepEqual(resumed.questions.map((q:any)=>q.id),expected);
+    assert.equal(resumed.questions[0].submitted,true);assert.equal(resumed.questions[0].isBookmarked,true);
+    assert.deepEqual(await db.select().from(questionAttempts).where(eq(questionAttempts.userUid,uid)),answersBefore);
+    assert.equal((await db.select().from(bookmarks).where(eq(bookmarks.userUid,uid))).length,1);
+    const filtered=(await repo.createPracticeOrExamSession(uid,{mode:'study',lectureIds:[lectureId],requestedCount:2,shuffleQuestions:true})).session;
+    assert.ok(filtered.questions.every((q:any)=>[inserted[0].id,inserted[7].id,inserted[9].id].includes(q.id)));
+    const exam=(await repo.createPracticeOrExamSession(uid,{mode:'exam',lectureIds:[lectureId],shuffleQuestions:false})).session;
+    const custom=(await repo.createPracticeOrExamSession(uid,{mode:'custom',lectureIds:[lectureId],shuffleQuestions:false})).session;
+    assert.deepEqual(exam.questions.map((q:any)=>q.id),custom.questions.map((q:any)=>q.id));
+    assert.ok(![inserted[0].id,inserted[7].id,inserted[9].id].includes(exam.questions[0].id));
+  }finally{
+    await db.delete(bookmarks).where(eq(bookmarks.userUid,uid));await db.delete(examSessions).where(eq(examSessions.userUid,uid));
+    if(lectureId){await db.delete(questions).where(eq(questions.lectureId,lectureId));await db.delete(lectures).where(eq(lectures.id,lectureId));}
+    repo.invalidateCatalogCache();
+  }
+});
+
 test('cumulative study restores canonical answers through shuffled options and excludes filtered practice', () => {
   assert.equal(isWholeLectureStudy({ mode: 'study', lectureIds: [1] }), true);
   for (const changes of [{ onlyMistakes: true }, { requestedCount: 5 }, { difficulties: ['Hard'] }, { tagFilter: 'topic' }, { specialTags: ['book'] }, { mode: 'exam' }, { mode: 'custom' }]) {

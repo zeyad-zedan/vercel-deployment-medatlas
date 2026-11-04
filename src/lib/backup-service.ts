@@ -588,6 +588,8 @@ export async function testRestoreBackup(
           images JSONB NOT NULL DEFAULT '[]'::jsonb,
           explanation_images JSONB NOT NULL DEFAULT '[]'::jsonb,
           matching JSONB,
+          short_answer_id INTEGER UNIQUE,
+          short_answer_max_marks INTEGER NOT NULL DEFAULT 1,
           page_number INTEGER,
           status TEXT NOT NULL DEFAULT 'published',
           version INTEGER NOT NULL DEFAULT 1,
@@ -626,6 +628,7 @@ export async function testRestoreBackup(
           lecture_id INTEGER,
           selected_option TEXT,
           matching_choice_id TEXT,
+          grading_status TEXT,
           correct_option_snapshot TEXT NOT NULL,
           is_correct BOOLEAN NOT NULL DEFAULT FALSE,
           question_snapshot_json TEXT NOT NULL,
@@ -671,6 +674,7 @@ export async function testRestoreBackup(
           id SERIAL PRIMARY KEY,user_uid TEXT NOT NULL REFERENCES "${isolatedSchema}".users(uid) ON DELETE CASCADE,
           question_id INTEGER NOT NULL REFERENCES "${isolatedSchema}".short_answer_questions(id) ON DELETE CASCADE,
           answer TEXT NOT NULL,answer_hash TEXT NOT NULL,snapshot JSONB NOT NULL,status TEXT NOT NULL,
+          excluded_from_quiz_progress BOOLEAN NOT NULL DEFAULT FALSE,
           result JSONB,error_code TEXT,model TEXT,lease_id TEXT,grade_started_at TIMESTAMPTZ,retry_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(user_uid,question_id,answer_hash)
         );

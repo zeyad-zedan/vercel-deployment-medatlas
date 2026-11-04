@@ -1,3 +1,4 @@
+import {installShortAnswerBuilder} from './short-answer-builder.ts';
 import { getSampleJsonTemplate, type JsonValidationReport, type JsonQuestionRow } from '../src/lib/json-import.ts';
 import { parseSpecialTags } from '../src/lib/mcq-engine.ts';
 import { expandMatchingQuestion } from '../src/lib/matching-questions.ts';
@@ -127,7 +128,8 @@ function rowDetails(row:JsonQuestionRow) {
     if(populated)return;populated=true;
     if(row.imageFiles.length)details.append(imageFigures(row.imageFiles,'Question figure'));
     const answers=make('div',undefined,'answers');
-    if(row.matching)for(const choice of row.matching.choices)answers.append(make('div',`${choice.text}${row.matching.correctChoiceId===choice.id?' ✓ Correct match':''}`,`answer${row.matching.correctChoiceId===choice.id?' correct':''}`));
+    if(row.shortAnswerDefinition){answers.append(make('p','Model answer: '+row.shortAnswerDefinition.model_answer));for(const point of row.shortAnswerDefinition.rubric)answers.append(make('p',`${point.marks} mark(s): ${point.description}`));}
+    else if(row.matching)for(const choice of row.matching.choices)answers.append(make('div',`${choice.text}${row.matching.correctChoiceId===choice.id?' ✓ Correct match':''}`,`answer${row.matching.correctChoiceId===choice.id?' correct':''}`));
     else for(const key of ['A','B','C','D'] as const)answers.append(make('div',`${key}. ${row[`option${key}`]}${row.correctAnswer===key?' ✓ Correct answer':''}`,`answer${row.correctAnswer===key?' correct':''}`));
     details.append(answers,make('p',row.explanation,'explanation'));
     for(const key of ['A','B','C','D'] as const){const text=row[`explanation${key}`];if(text)details.append(make('p',`${key}: ${text}`,'explanation'));}
@@ -254,7 +256,7 @@ const matchingWizard=guidedUpload('matching',['Image and instructions','Numbered
   if(step===0){if(!assets.has(element<HTMLSelectElement>('matching-image').value))throw new Error('Choose your numbered image first.');if(!element<HTMLInputElement>('matching-instructions').value.trim())throw new Error('Add instructions for the student.');}
   if(step===1){const rows=[...element('matching-pairs').children],numbers=new Set<string>();if(!rows.length)throw new Error('Add at least one numbered label.');for(const row of rows){const number=row.querySelector<HTMLInputElement>('[data-field="number"]')!.value.trim().toUpperCase(),answer=row.querySelector<HTMLInputElement>('[data-field="answer"]')!.value.trim();if(!/^[1-9]\d{0,2}[A-Z]?$/.test(number)||numbers.has(number))throw new Error('Use unique numbers such as 1, 2, or 3A.');if(!answer)throw new Error(`Enter the correct name for label ${number}.`);numbers.add(number);}}
 },step=>{if(step===2)element('matching-summary').textContent=`${element('matching-pairs').children.length} labels · ${element<HTMLSelectElement>('matching-image').value}`;});
-element('open-matching').addEventListener('click',()=>{if(busy)return;element('matching-builder').hidden=false;if(!element('matching-pairs').children.length){addMatchingLabel();addMatchingLabel();}renderMatchingImages();matchingWizard.reset();element('matching-builder').scrollIntoView({behavior:'smooth',block:'start'});});
+element('open-matching').addEventListener('click',()=>{if(busy)return;element('matching-builder').hidden=false;element('sa-guide').hidden=true;if(!element('matching-pairs').children.length){addMatchingLabel();addMatchingLabel();}renderMatchingImages();matchingWizard.reset();element('matching-builder').scrollIntoView({behavior:'smooth',block:'start'});});
 element('close-matching').addEventListener('click',()=>{element('matching-builder').hidden=true;});
 element('matching-add-label').addEventListener('click',addMatchingLabel);
 element('matching-image').addEventListener('change',renderMatchingImages);
@@ -278,5 +280,8 @@ element('matching-add-json').addEventListener('click',()=>{
   }catch(error){element('matching-error').textContent=(error as Error).message;element('matching-error').hidden=false;message((error as Error).message,'error');}
 });
 const creator=installDestinationCreator(lecture,async saved=>{await loadLectures();lecture.value=String(saved.id);invalidate();message(`${saved.contentType==='practical'?'Section':'Lecture'} created and selected. Add your questions next.`);});
+const shortBuilder=installShortAnswerBuilder({source,selectImages:selectFiles,image:name=>assets.get(name),changed:invalidate,notice:message});
+element<HTMLSelectElement>('question-type').onchange=event=>{const type=(event.target as HTMLSelectElement).value;if(type==='short_answer')shortBuilder.open();else if(type==='matching'){element('sa-guide').hidden=true;element('open-matching').click();}else{element('sa-guide').hidden=true;element('matching-builder').hidden=true;}};
+if(new URLSearchParams(window.location.search).get('type')==='short_answer')shortBuilder.open();
 void loadLectures().catch(error=>message(error.message,'error'));
 if(new URLSearchParams(window.location.search).get('matching')==='1')element('open-matching').click();

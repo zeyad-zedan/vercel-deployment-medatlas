@@ -58,6 +58,13 @@ export function parseSpecialTags(raw?: string | null): string[] {
   return result;
 }
 
+/** Stable partition: tagging changes priority, never IDs, answer keys, or within-bucket order. */
+export function prioritizeTaggedQuestions<T extends {tags?:string|null;specialTags?:string|null;hasTags?:boolean}>(questions:readonly T[]):T[]{
+  const tagged:T[]=[],ordinary:T[]=[];
+  for(const question of questions){const hasTags=question.hasTags??(parseSpecialTags(question.tags).length>0||parseSpecialTags(question.specialTags).length>0);(hasTags?tagged:ordinary).push(question);}
+  return [...tagged,...ordinary];
+}
+
 export interface QuestionTagBadge {
   label: string;
   isSpecial: boolean;
@@ -864,6 +871,7 @@ export function scoreExamSession(
 }
 
 export interface QuestionSelectionCriteria {
+  prioritizeTagged?:boolean;
   subjectIds?: number[];
   lectureIds?: number[];
   difficulties?: DifficultyLevel[];
@@ -1022,6 +1030,7 @@ export function selectPracticeQuestions<
     orderedPool = [...fresh, ...recent];
   }
 
+  if(criteria.prioritizeTagged)orderedPool=prioritizeTaggedQuestions(orderedPool);
   let selectedQuestions = orderedPool.slice(0, Math.min(requestedCount, totalAvailable));
   if (criteria.shuffleQuestions && selectedQuestions.length > 1) {
     selectedQuestions = shuffleArray(
@@ -1029,6 +1038,7 @@ export function selectPracticeQuestions<
       criteria.seed !== undefined ? criteria.seed + 997 : undefined
     );
   }
+  if(criteria.prioritizeTagged)selectedQuestions=prioritizeTaggedQuestions(selectedQuestions);
   let shortfallNotice: string | null = null;
 
   if (totalAvailable === 0) {

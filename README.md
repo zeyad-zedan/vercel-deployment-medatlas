@@ -242,3 +242,18 @@ On either question upload page, select the target lecture or practical section, 
 This updates existing question IDs and preserves publication status, choices, answer keys, marking guides, original import identity, progress and bookmarks. Historical answer snapshots/grades remain unchanged; newly loaded question content uses the edited images. A revision check rejects overwriting concurrent edits. All files are validated and stored on Telegram using the existing upload path; PostgreSQL receives only protected-file metadata. No schema migration, student polling or new student-side request is added. Editor list/detail/image routes are served by the private bot-linked upload portal, not the student web server. The upload pages keep guided forms and JSON imports; switching between Upload and Edit does not clear an in-progress JSON batch.
 
 Database integration tests share fixtures (including the portal owner), so the full test command runs files sequentially to avoid one test temporarily removing another test's owner account.
+
+### Mixed quizzes
+
+MCQs, numbered matching labels and short answers share the same lecture/section quiz, question navigator and six-question batches. The separate student Short Answers navigation item is removed; old `/short-answers` links open Lectures. The upload page offers an inline question-type choice and guided builders. Old short-answer upload links redirect to the written-question builder on that same page. JSON imports may mix `mcq`, `matching` and `short_answer` entries in one questions array.
+
+Apply `supabase/migrations/20261104203408_mixed_quiz_short_answers.sql` with this code release. It adds public quiz-bank entries linked to the existing private short-answer definitions without changing existing question IDs or deleting saved answers/grades. Model answers/rubrics stay in the private table. Imports, publication and image edits synchronize the linked quiz entry. The student quiz retrieves written responses only for its loaded six-question window. Legacy saved written answers remain accessible inside the new quiz.
+
+Typing stays local and does not call the database per keystroke. Save answer stores the response without a Gemini key. Quiz submission saves dirty written responses before finalizing; failed saves block finalization and retain local drafts. Gemini grading is explicit and uses the student's own encrypted key. Mock exam grading is blocked until submission, including the legacy grading endpoint for an answer linked to an active exam. Images are never sent to Gemini. Grades are reused for the same saved answer; historical quiz responses remain tied to their original immutable attempt.
+
+MCQs/matching labels are worth one mark each; written questions use their rubric marks and can receive partial credit. Results show earned/available marks and explicitly label ungraded saved responses as pending/provisional. Pending responses are not counted as wrong in progress analytics. The mixed-quiz migration is additive and must be applied with the student code release.
+
+
+### Tagged questions first
+
+Fresh lecture Study sets prioritize questions with topic tags or special source tags (for example, Important or Old Exams). Ordering stays stable within each group. Filtered lecture Study sets apply the priority before the requested-count limit and preserve it when shuffling. Mock exams and custom practice keep their existing ordering rules. Resuming an existing study set preserves its order, answers, option permutations and bookmarks; newly published questions append without moving existing questions. The cumulative-study query returns only a tag-presence boolean, and question content still loads six at a time.

@@ -1,3 +1,5 @@
+import {useQuizTextSaves} from '../lib/quiz-text-drafts.tsx';
+import {ShortAnswerQuestion,QuizMarks} from './ShortAnswerQuestion.tsx';
 import { MatchingQuestion, MatchingAnswerReview } from './MatchingQuestion.tsx';
 import { useSessionImagePrefetch } from './QuestionImages.tsx';
 import { useSessionBatches } from '../lib/use-session-batches.ts';
@@ -44,6 +46,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   api,
 }) => {
   const [session, setSession] = useState<any>(initialSession);
+  const textSaves=useQuizTextSaves();
   useSessionImagePrefetch(session.questions);
   const saves = useAnswerSaving(session, () => {});
   const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
@@ -82,6 +85,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   const currentQ = questions[currentIndex] || null;
 
   const localSelectionsRef = useRef(localSelections);
+  const handleShortAnswer=(question:any,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===question.maxMarks?'A':'B'):'C';setLocalSelections(previous=>{const next={...previous,[question.id]:pick};localSelectionsRef.current=next;return next;});const updated={...question,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||question.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick};setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===question.id?updated:q)}));setReviewingQuestion((previous:any)=>previous?.id===question.id?updated:previous);};
   useEffect(() => {
     if (currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
   }, [session.id, currentQ?.id, currentIndex]);
@@ -195,7 +199,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
         session.timeLimitSeconds !== null
           ? Math.max(0, session.timeLimitSeconds - rem)
           : 60;
-      if (rem > 0) await saves.flush();
+      if (rem > 0) {await saves.flush();await textSaves.flush();}
       const res = await api.completeSession(session.id, localSelectionsRef.current, elapsed);
       saves.finish();
       setSession(res.session);
@@ -236,7 +240,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
       const userPick = q.matchingChoiceId ? q.selectedDisplayed : localSelections[q.id] || q.selectedDisplayed;
       const isCorrect = userPick && userPick === q.correctDisplayedOption;
       if (resultsFilter === 'correct') return isCorrect;
-      if (resultsFilter === 'wrong') return userPick && !isCorrect;
+      if (resultsFilter === 'wrong') return userPick && !isCorrect && !(q.questionType==='short_answer'&&q.shortAnswerStatus!=='graded');
       if (resultsFilter === 'notanswered') return !userPick;
       return true;
     });
@@ -270,7 +274,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                     className="text-[11px] font-bold uppercase tracking-wider"
                     style={{ color: isPassed ? '#20a95b' : '#d9534f' }}
                   >
-                    {isPassed ? 'Passed' : 'Failed'}
+                    {session.quizScore?.pendingGradingCount?'Awaiting grading':isPassed ? 'Passed' : 'Failed'}
                   </span>
                 </div>
               </div>
@@ -279,13 +283,13 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             {/* Fraction Box */}
             <div className="text-center space-y-2">
               <div className="text-xs font-bold text-[#456] uppercase tracking-wider">
-                Overall Exam Score
+                Overall Quiz Score
               </div>
               <div className="inline-flex items-center justify-center bg-[#eaf7ef] border border-[#cdeedb] rounded-xl px-8 py-3">
                 <div className="flex flex-col items-center">
-                  <span className="text-3xl font-extrabold text-[#1f8c4d]">{correctCount}</span>
+                  <span className="text-3xl font-extrabold text-[#1f8c4d]">{session.quizScore?.earnedMarks??correctCount}</span>
                   <div className="w-12 h-0.5 bg-[#1f8c4d] my-1 rounded" />
-                  <span className="text-3xl font-extrabold text-[#1f8c4d]">{totalQuestions}</span>
+                  <span className="text-3xl font-extrabold text-[#1f8c4d]">{session.quizScore?.maxMarks??totalQuestions}</span>
                 </div>
               </div>
               <p className="text-xs text-slate-500 font-mono-tabular">
@@ -294,7 +298,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
             </div>
           </div>
 
-          {/* 4 Stats Grid */}
+          <QuizMarks score={session.quizScore}/>{/* 4 Stats Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-white border border-[#dde6ee] rounded-lg p-3 text-center">
               <div className="text-xl font-bold text-[#20a95b]">{correctCount}</div>
@@ -418,7 +422,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                               : 'bg-[#d9534f]'
                           }`}
                         >
-                          {isUnanswered ? '—' : isCorrect ? '✓' : '✗'}
+                          {q.questionType==='short_answer'&&q.shortAnswerStatus!=='graded'&&q.hasSavedAnswer?'Pending':isUnanswered ? '—' : isCorrect ? '✓' : '✗'}
                         </span>
                       </td>
                       <td className="py-3 px-4 max-w-xs font-semibold text-slate-800">
@@ -444,14 +448,14 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       <td className="py-3 px-4 font-mono-tabular font-bold text-slate-700">
                         {userPick ? (
                           <span className={isCorrect ? 'text-[#20a95b]' : 'text-[#d9534f]'}>
-                            {q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matchingChoiceId)?.text || 'Answered' : userPick}
+                            {q.questionType==='short_answer'?(q.shortAnswerStatus==='graded'?`${q.shortAnswerScore??q.shortAnswerAttempt?.result?.score??0}/${q.maxMarks} marks`:'Saved · awaiting grading'):q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matchingChoiceId)?.text || 'Answered' : userPick}
                           </span>
                         ) : (
                           <span className="text-slate-400 italic">None</span>
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono-tabular font-bold text-[#20a95b]">
-                        {q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matching.correctChoiceId)?.text || 'Open review' : q.correctDisplayedOption}
+                        {q.questionType==='short_answer'?'Open review':q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matching.correctChoiceId)?.text || 'Open review' : q.correctDisplayedOption}
                       </td>
                       <td className="py-3 px-4 text-right">
                         <button
@@ -510,14 +514,14 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               </div>
 
               <div className="font-semibold text-slate-900 text-sm leading-relaxed">
-                {reviewingQuestion.questionText}
+                {reviewingQuestion.questionType!=='short_answer'&&reviewingQuestion.questionText}
               </div>
-              <QuestionImages images={reviewingQuestion.images}/>
+              {reviewingQuestion.questionType==='short_answer'?<ShortAnswerQuestion key={reviewingQuestion.id} question={reviewingQuestion} sessionId={session.id} exam completed onSaved={result=>handleShortAnswer(reviewingQuestion,result)}/>:<QuestionImages images={reviewingQuestion.images}/>}
                   <QuestionReportButton key={reviewingQuestion.id} questionId={reviewingQuestion.id}/>
 
               {reviewingQuestion.matching && <MatchingAnswerReview matching={reviewingQuestion.matching} choiceId={reviewingQuestion.matchingChoiceId}/>}
               <div className="space-y-2">
-                {(!reviewingQuestion.matching ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
+                {(!reviewingQuestion.matching&&reviewingQuestion.questionType!=='short_answer' ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
                   const isCorrect = key === reviewingQuestion.correctDisplayedOption;
                   const isUserPick =
                     (localSelections[reviewingQuestion.id] || reviewingQuestion.selectedDisplayed) === key;
@@ -757,13 +761,13 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       className="font-semibold text-slate-900 leading-relaxed"
                       style={{ fontSize: currentFontSize }}
                     >
-                      {!currentQ.matching && currentQ.questionText}
+                      {!currentQ.matching && currentQ.questionType!=='short_answer' && currentQ.questionText}
                     </div>
-                    {currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} exam onSelect={handleMatchingChoice}
+                    {currentQ.questionType==='short_answer'?<ShortAnswerQuestion key={currentQ.id} question={currentQ} sessionId={session.id} exam disabled={completing} onSaved={result=>handleShortAnswer(currentQ,result)}/>:currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} exam onSelect={handleMatchingChoice}
                       onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <QuestionImages images={currentQ.images}/>}
 
                     <div className="space-y-3 pt-2">
-                      {(!currentQ.matching ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
+                      {(!currentQ.matching&&currentQ.questionType!=='short_answer' ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {
                         const optText = currentQ.options[key];
                         if (!optText) return null;
                         const isSelected = selectedKey === key;

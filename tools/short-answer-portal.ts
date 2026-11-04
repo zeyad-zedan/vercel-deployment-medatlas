@@ -8,7 +8,7 @@ export async function handleShortAnswerPortal(req:IncomingMessage,res:ServerResp
  if(!['/short-answers','/sa-assets/client.js','/api/sa-portal/preview','/api/sa-portal/execute','/api/sa-portal/manage'].includes(url.pathname))return false;
  const json=(status:number,value:any)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
  try{
-  if(req.method==='GET'&&url.pathname==='/short-answers'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(await fs.readFile(fileURLToPath(new URL('./short-answer-portal.html',import.meta.url))));return true;}
+  if(req.method==='GET'&&url.pathname==='/short-answers'){res.writeHead(302,{Location:'/mcqs?type=short_answer'});res.end();return true;}
   if(req.method==='GET'&&url.pathname==='/sa-assets/client.js'){script??=build({entryPoints:[fileURLToPath(new URL('./short-answer-portal-client.ts',import.meta.url))],bundle:true,write:false,minify:true,platform:'browser',target:'es2022'}).then(result=>result.outputFiles[0].contents).catch(e=>{script=undefined;throw e;});res.writeHead(200,{'Content-Type':'text/javascript'});res.end(await script);return true;}
   if(req.method==='POST'&&url.pathname.startsWith('/api/sa-portal/')){
    if(req.headers['x-medatlas-portal']!=='1'){json(403,{error:'Open this action from the upload portal.'});return true;}

@@ -690,6 +690,8 @@ export const api = {
   },
 
   getGeminiKeyStatus: () => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key'),
+  saveQuizShortAnswer:(sessionId:number,questionId:number,answer:string)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer`,{method:'POST',body:JSON.stringify({questionId,answer})}),
+  gradeQuizShortAnswer:(sessionId:number,questionId:number)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer/grade`,{method:'POST',body:JSON.stringify({questionId,consent:true})}),
   shortAnswerCatalog: () => apiRequest<any>('/api/short-answers/catalog'),
   shortAnswerQuestions: (lectureId:number,after?:number) => apiRequest<any>(`/api/short-answers/questions?lectureId=${lectureId}${after?'&after='+after:''}`),
   shortAnswerHistory: (before?:number) => apiRequest<any>('/api/short-answers/history'+(before?'?before='+before:'')),

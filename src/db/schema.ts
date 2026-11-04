@@ -64,6 +64,7 @@ export const shortAnswerAttempts = pgTable('short_answer_attempts', {
   id:serial('id').primaryKey(),userUid:text('user_uid').notNull().references(()=>users.uid,{onDelete:'cascade'}),
   questionId:integer('question_id').notNull().references(()=>shortAnswerQuestions.id,{onDelete:'cascade'}),
   answer:text('answer').notNull(),answerHash:text('answer_hash').notNull(),snapshot:jsonb('snapshot').notNull(),status:text('status').notNull().default('saved'),
+  excludedFromQuizProgress:boolean('excluded_from_quiz_progress').notNull().default(false),
   result:jsonb('result'),errorCode:text('error_code'),model:text('model'),leaseId:text('lease_id'),gradeStartedAt:timestamp('grade_started_at',{withTimezone:true}),retryAt:timestamp('retry_at',{withTimezone:true}),
   createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),updatedAt:timestamp('updated_at',{withTimezone:true}).notNull().defaultNow(),
 },table=>[uniqueIndex('short_answer_attempts_owner_question_hash').on(table.userUid,table.questionId,table.answerHash),index('short_answer_attempts_owner_question').on(table.userUid,table.questionId,table.id),index('short_answer_attempts_owner_started').on(table.userUid,table.gradeStartedAt)]);
@@ -193,6 +194,8 @@ export const questions = pgTable('questions', {
   images: jsonb('images').$type<QuestionImage[]>().notNull().default([]),
   explanationImages: jsonb('explanation_images').$type<QuestionImage[]>().notNull().default([]),
   matching: jsonb('matching').$type<MatchingQuestionDefinition>(),
+  shortAnswerId: integer('short_answer_id').references(()=>shortAnswerQuestions.id,{onDelete:'cascade'}).unique(),
+  shortAnswerMaxMarks: integer('short_answer_max_marks').notNull().default(1),
   pageNumber: integer('page_number'),
   status: text('status').notNull().default('published'), // 'draft' | 'published' | 'archived'
   version: integer('version').notNull().default(1),
@@ -235,6 +238,7 @@ export const questionAttempts = pgTable(
     lectureId: integer('lecture_id'),
     selectedOption: text('selected_option'), // 'A' | 'B' | 'C' | 'D' | null
     matchingChoiceId: text('matching_choice_id'),
+    gradingStatus:text('grading_status'),
     correctOptionSnapshot: text('correct_option_snapshot').notNull(),
     isCorrect: boolean('is_correct').notNull().default(false),
     questionSnapshotJson: text('question_snapshot_json').notNull(),
