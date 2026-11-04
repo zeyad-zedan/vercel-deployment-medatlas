@@ -7,7 +7,57 @@ import { createProtectedDocumentRouter } from '../middleware/protected-documents
 import { createBoundedRateLimiter } from '../middleware/rate-limit.ts';
 import { buildSimpleMultiPagePdf } from './pdf-generator.ts';
 import { isPdfPortalOriginAllowed } from './pdf-portal-access.ts';
-import { cachedDocumentSource } from './document-renderer.ts';
+import { cachedDocumentSource, cachedUnwatermarkedDocumentPage, DocumentPageCache } from './document-renderer.ts';
+import { fetchDocumentPage } from './document-page-client.ts';
+
+test('page cache deduplicates renders, expires, evicts within byte/page budgets and retries failed loads', async () => {
+  let now=0,loads=0;
+  const cache=new DocumentPageCache(8,2,10,()=>now);
+  const load=async()=>{loads++;return {totalPages:2,image:Buffer.alloc(5)};};
+  const [a,b]=await Promise.all([cache.getOrRender('a',load),cache.getOrRender('a',load)]);
+  assert.equal(loads,1);assert.equal(a,b);
+  await cache.getOrRender('b',load);await cache.getOrRender('a',load);assert.equal(loads,3,'Byte budget evicts the first image.');
+  now=11;await cache.getOrRender('a',load);assert.equal(loads,4,'Expired images must render again.');
+  const pages=new DocumentPageCache(100,2,10,()=>now);
+  await pages.getOrRender('a',load);await pages.getOrRender('b',load);await pages.getOrRender('a',load);await pages.getOrRender('c',load);
+  const before=loads;await pages.getOrRender('a',load);assert.equal(loads,before);await pages.getOrRender('b',load);assert.equal(loads,before+1,'Least recently used page is evicted.');
+  await assert.rejects(pages.getOrRender('failed',async()=>{throw new Error('retry');}));
+  assert.ok((await pages.getOrRender('failed',load)).image);
+});
+
+test('a warm unwatermarked page skips source loading, and a replaced Telegram file gets a fresh render',async()=>{
+  const pdf=buildSimpleMultiPagePdf({title:'Cached PDF',module:'Test',lectureNumber:1,pages:[{pageNumber:1,heading:'One',bulletPoints:['Cache only the image.']}]});
+  let loads=0;const loader=async()=>{loads++;return pdf;};
+  const [a,b]=await Promise.all([cachedUnwatermarkedDocumentPage('page-cache-immutable-file',1,loader),cachedUnwatermarkedDocumentPage('page-cache-immutable-file',1,loader)]);
+  assert.equal(loads,1);assert.equal(a,b);
+  assert.equal(await cachedUnwatermarkedDocumentPage('page-cache-immutable-file',1,async()=>{throw Error('Must not refetch a cached image.');}),a);
+  await cachedUnwatermarkedDocumentPage('page-cache-replacement-file',1,loader);assert.equal(loads,2);
+});
+
+test('viewer gets the image and page count in one authenticated request, with no ahead-of-time downloads',async()=>{
+  const original=globalThis.fetch,requests:any[]=[];
+  globalThis.fetch=(async(url:any,init:any)=>{requests.push({url,init});return new Response('webp',{headers:{'Content-Type':'image/webp','X-Document-Total-Pages':'12'}});}) as typeof fetch;
+  try{
+    const controller=new AbortController();const page=await fetchDocumentPage('/api/documents/test-reference',4,'private-token',controller.signal);
+    assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/documents/test-reference/pages/4');
+    assert.equal(requests[0].init.headers.Authorization,'Bearer private-token');assert.equal(requests[0].init.cache,'no-store');assert.equal(requests[0].init.signal,controller.signal);
+    assert.equal(page.totalPages,12);assert.equal(page.pageNumber,4);
+    await assert.rejects(fetchDocumentPage('/api/documents/test-reference',1,null,controller.signal),/sign in/);
+    await assert.rejects(fetchDocumentPage('https://external.invalid/file.pdf',1,'token',controller.signal),/Reopen/);
+    assert.equal(requests.length,1);
+  }finally{globalThis.fetch=original;}
+});
+
+test('viewer clamps stale slide references once and never retries revoked access or invalid image responses',async()=>{
+  const original=globalThis.fetch,requests:string[]=[];let denied=false,invalid=false;
+  globalThis.fetch=(async(url:any)=>{requests.push(String(url));if(denied)return Response.json({error:'Sign in.'},{status:401});if(String(url).endsWith('/9'))return Response.json({error:'Page not found.'},{status:404,headers:{'X-Document-Total-Pages':'2'}});return new Response('preview',{headers:{'Content-Type':invalid?'application/pdf':'image/webp','X-Document-Total-Pages':'2'}});}) as typeof fetch;
+  try{
+    const signal=new AbortController().signal,page=await fetchDocumentPage('/api/documents/test-ref',9,'token',signal);
+    assert.equal(page.pageNumber,2);assert.deepEqual(requests,['/api/documents/test-ref/pages/9','/api/documents/test-ref/pages/2']);
+    denied=true;await assert.rejects(fetchDocumentPage('/api/documents/test-ref',1,'token',signal),/Sign in/);assert.equal(requests.length,3);
+    denied=false;invalid=true;await assert.rejects(fetchDocumentPage('/api/documents/test-ref',1,'token',signal),/Invalid page preview/);
+  }finally{globalThis.fetch=original;}
+});
 
 test('original fetches are deduplicated and bounded before loading more Telegram files', async () => {
   let release!: () => void;
@@ -75,6 +125,7 @@ test('protected viewing keeps originals private with watermarks off or on, contr
     assert.match(metadata.headers.get('cache-control')!,/no-store/);
     const first=await request('/pages/1');
     assert.equal(first.status,200);assert.equal(first.headers.get('content-type'),'image/webp');
+    assert.equal(first.headers.get('X-Document-Total-Pages'),'1');
     assert.equal(first.headers.get('access-control-allow-origin'),null);
     assert.equal(first.headers.get('vercel-cdn-cache-control'),'no-store');
     const firstBytes=Buffer.from(await first.arrayBuffer());
@@ -89,7 +140,7 @@ test('protected viewing keeps originals private with watermarks off or on, contr
     assert.notDeepEqual(markedA,markedB,'Viewers cannot disable account watermarks via request parameters.');
     assert.equal(loads,1,'Telegram original is reused server-side.');
     assert.equal((await request('/pages/0')).status,400);
-    assert.equal((await request('/pages/2')).status,404);
+    const outOfRange=await request('/pages/2');assert.equal(outOfRange.status,404);assert.equal(outOfRange.headers.get('X-Document-Total-Pages'),'1');
     assert.equal((await request('','a',{'sec-fetch-site':'cross-site'})).status,403);
     assert.equal((await fetch(origin+'/api/documents/guessed-reference',{headers:{Authorization:'Bearer test-a'}})).status,404);
     published=false;

@@ -906,20 +906,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         </div>
       )}
 
-      {/* 2. THE MAIN MCQ WORKSPACE FLANKED BY NAVIGATION ARROWS */}
-      <div className="relative flex items-start gap-1 sm:gap-2.5 lg:gap-3.5">
-        {/* Left Arrow Button Beside MCQ (Sticky to stay in view) */}
-        <button
-          type="button"
-          onClick={handlePrevQuestion}
-          disabled={currentIndex === 0}
-          aria-label="Previous Question"
-          title="Previous Question (Keyboard: ←)"
-          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[var(--ma-brand)] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
-        >
-          <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
-        </button>
-
+      {/* Main question workspace; navigation stays anchored to the viewport. */}
+      <div className="relative">
         {/* Central Workspace Container: Switches to 2-Column Split when Slide Reference is Open! */}
         <div className="flex-1 min-w-0">
           <div
@@ -1235,9 +1223,23 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           </div>
         </div>
 
-        {/* Right Arrow Button Beside MCQ (Sticky to stay in view) */}
+      </div>
+
+      {!confirmSubmitModal && !pdfModalOpen && <nav className="ma-question-navigation" aria-label="Question navigation">
         <button
           type="button"
+          onClick={handlePrevQuestion}
+          disabled={currentIndex === 0 || completingSession}
+          aria-label="Previous Question"
+          title="Previous Question (Keyboard: ←)"
+          className="ma-question-navigation-previous"
+        >
+          <ChevronLeft className="w-4 h-4 shrink-0" /><span>Previous</span>
+        </button>
+        <span className="ma-question-navigation-count">{currentIndex + 1} / {questions.length}</span>
+        <button
+          type="button"
+          disabled={completingSession}
           onClick={
             currentIndex < questions.length - 1
               ? handleNextQuestion
@@ -1259,11 +1261,11 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
               ? 'Finish Session'
               : 'Finish Review'
           }
-          className="sticky top-44 shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-slate-200 bg-white hover:bg-sky-50 text-slate-700 hover:text-[var(--ma-brand)] shadow-sm hover:shadow-md disabled:opacity-20 disabled:pointer-events-none flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer z-10"
+          className="ma-question-navigation-next"
         >
-          <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
+          <span>{currentIndex < questions.length - 1 ? 'Next' : !isCompleted ? 'Finish' : 'Close review'}</span><ChevronRight className="w-4 h-4 shrink-0" />
         </button>
-      </div>
+      </nav>}
 
       {/* Confirmation Dialog if Unanswered Questions Remain */}
       {confirmSubmitModal && (

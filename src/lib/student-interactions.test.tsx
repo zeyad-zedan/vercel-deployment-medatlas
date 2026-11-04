@@ -102,3 +102,44 @@ test('one upload page offers all types and its guided short-answer builder appen
  (host().querySelector('#sa-rubric textarea') as HTMLTextAreaElement).value='Support of the body';(host().querySelector('#sa-guide-next') as HTMLButtonElement).click();(host().querySelector('#sa-guide-finish') as HTMLButtonElement).click();
  const batch=JSON.parse(source.value);assert.equal(batch.questions.length,2);assert.equal(batch.questions[0].question_type,'mcq');assert.equal(batch.questions[1].question_type,'short_answer');assert.equal(batch.questions[1].model_answer,'Support.');assert.equal(changed,1);
 });
+
+
+test('study navigation stays outside long question content without saving or refetching answers',async()=>{
+ reset();let saves=0;
+ const questions=[1,2].map((id,index)=>({id:8800+id,index,contentLoaded:true,questionText:`Long question ${id}: `+'Clinical detail. '.repeat(100),options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A',explanation:'Explanation. '.repeat(150),submitted:false,selectedDisplayed:null,images:[]}));
+ const session={id:99101,title:'Persistent navigation',mode:'study',status:'in_progress',questions,totalQuestions:2,correctCount:0,incorrectCount:0,unansweredCount:2,elapsedSeconds:0};
+ api.submitQuestionAnswer=async()=>{saves++;return {session:{id:session.id,correctCount:1,unansweredCount:1}};};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<McqSessionPlayer initialSession={session} onExit={()=>{}} onSessionCompleted={()=>{}}/>));
+  const dock=host().querySelector('nav[aria-label="Question navigation"]');assert.ok(dock);assert.equal(dock.closest('.ma-question-card'),null);assert.equal(findButton('Previous Question').disabled,true);
+  await act(async()=>{dom.window.dispatchEvent(new dom.window.Event('scroll'));});await click('Next Question');
+  assert.ok(host().querySelector('nav[aria-label="Question navigation"]'));assert.match(text(),/Long question 2/);assert.equal(findButton('Previous Question').disabled,false);
+  await click('Previous Question');assert.match(text(),/Long question 1/);assert.equal(saves,0,'Navigation does not save or refetch question content.');
+  await click('Next Question');await click('Finish Session');assert.ok(host().querySelector('[role="dialog"]'));assert.equal(host().querySelector('nav[aria-label="Question navigation"]'),null,'The dock must not overlap submission dialogs.');
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('PDF canvas displays a page from one request and retries the page without a metadata waterfall',async()=>{
+ reset();
+ const {PdfCanvasViewer}=await import('../components/PdfViewerModal.tsx'),{setAuthToken}=await import('./api.ts');
+ const oldImage=Object.getOwnPropertyDescriptor(globalThis,'Image'),oldObserver=Object.getOwnPropertyDescriptor(globalThis,'ResizeObserver');
+ const oldContext=dom.window.HTMLCanvasElement.prototype.getContext;
+ const requests:string[]=[];let fail=true,draws=0;
+ class PreviewImage{naturalWidth=1600;naturalHeight=2200;onload:any;onerror:any;set src(_value:string){queueMicrotask(()=>this.onload?.());}}
+ Object.defineProperty(globalThis,'Image',{configurable:true,value:PreviewImage});
+ Object.defineProperty(globalThis,'ResizeObserver',{configurable:true,value:class{observe(){}disconnect(){}}});
+ dom.window.HTMLCanvasElement.prototype.getContext=(()=>({setTransform(){},drawImage(){draws++;}})) as any;
+ globalThis.fetch=(async(url:any)=>{requests.push(String(url));return fail?Response.json({error:'Temporary failure.'},{status:503}):new Response('preview',{headers:{'Content-Type':'image/webp','X-Document-Total-Pages':'12'}});}) as typeof fetch;
+ setAuthToken('pdf-test-token');const root=createRoot(host());
+ try{
+  await act(async()=>root.render(<PdfCanvasViewer pdfUrl="/api/documents/canvas-test" pageNumber={3} zoomPercent={100}/>));
+  assert.match(text(),/Temporary failure/);assert.deepEqual(requests,['/api/documents/canvas-test/pages/3']);
+  fail=false;await click('Retry page');assert.equal(requests.length,2);assert.ok(host().querySelector('canvas[aria-label*="page 3 of 12"]'));assert.ok(draws>0);
+  await act(async()=>root.render(<PdfCanvasViewer pdfUrl="/api/documents/canvas-test" pageNumber={4} zoomPercent={100}/>));
+  assert.equal(requests.length,3);assert.equal(requests[2],'/api/documents/canvas-test/pages/4');
+  await act(async()=>root.render(<PdfCanvasViewer pdfUrl="/api/documents/canvas-test" pageNumber={4} zoomPercent={150}/>));assert.equal(requests.length,3,'Zoom redraws locally.');
+ }finally{
+  await act(async()=>root.unmount());setAuthToken(null);globalThis.fetch=realFetch;dom.window.HTMLCanvasElement.prototype.getContext=oldContext;
+  for(const [name,descriptor] of [['Image',oldImage],['ResizeObserver',oldObserver]] as const){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete(globalThis as any)[name];}
+ }
+});

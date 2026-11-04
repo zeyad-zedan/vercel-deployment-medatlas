@@ -178,3 +178,42 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
 }
+
+
+/* Outside the question card: long explanations and slide panels cannot scroll these controls away. */
+.ma-study-player { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+.ma-question-navigation {
+  position: fixed;
+  right: 16px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  background: var(--ma-surface, #fff);
+  border: 1px solid var(--ma-border);
+  border-radius: var(--ma-radius-card);
+  box-shadow: 0 4px 18px rgba(20, 45, 40, .12);
+}
+.ma-question-navigation button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--ma-radius-control);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.ma-question-navigation button:disabled { opacity: .4; cursor: not-allowed; }
+.ma-question-navigation button:focus-visible { outline: 2px solid var(--ma-brand); outline-offset: 2px; }
+.ma-question-navigation-previous { background: var(--ma-canvas); color: var(--ma-ink); }
+.ma-question-navigation-next { background: var(--ma-brand); color: #fff; }
+.ma-question-navigation-next:hover:not(:disabled) { background: var(--ma-brand-hover); }
+.ma-question-navigation-count { flex-shrink: 0; color: var(--ma-muted); font-size: 12px; font-variant-numeric: tabular-nums; }

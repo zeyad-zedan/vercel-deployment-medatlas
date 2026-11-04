@@ -1,7 +1,7 @@
 import { Router, type RequestHandler } from 'express';
 import type { AuthRequest } from './auth.ts';
 import { resolveDocumentReference } from '../lib/protected-document-reference.ts';
-import { cachedDocumentSource, renderDocument, DocumentViewError } from '../lib/document-renderer.ts';
+import { cachedDocumentSource, cachedUnwatermarkedDocumentPage, preloadDocumentRenderer, renderDocument, DocumentViewError } from '../lib/document-renderer.ts';
 
 export function createProtectedDocumentRouter(deps: {
   authenticate: RequestHandler;
@@ -30,14 +30,25 @@ export function createProtectedDocumentRouter(deps: {
       if (!meta?.telegramFileId) return res.status(404).json({ error: 'Document not available.' });
       const page = req.params.page;
       if (page !== undefined && !/^[1-9]\d{0,4}$/.test(String(page))) return res.status(400).json({ error: 'Invalid page.' });
-      const source = await cachedDocumentSource(meta.telegramFileId, () => deps.fetchSource(meta.telegramFileId!));
-      const result = await renderDocument(source, page ? Number(page) : undefined, req.user!.uid, meta.watermarksEnabled === true);
+      const loadSource = async () => {
+        // Initialize PDF.js while Telegram downloads, rather than waiting for the whole file first.
+        const [, source] = await Promise.all([preloadDocumentRenderer(),
+          cachedDocumentSource(meta.telegramFileId!, () => deps.fetchSource(meta.telegramFileId!))]);
+        return source;
+      };
+      const result = page && meta.watermarksEnabled !== true
+        ? await cachedUnwatermarkedDocumentPage(meta.telegramFileId, Number(page), loadSource)
+        : await renderDocument(await loadSource(), page ? Number(page) : undefined, req.user!.uid, meta.watermarksEnabled === true);
       if (!page) return res.json({ totalPages: result.totalPages });
       res.set({ 'Content-Type': 'image/webp', 'Content-Disposition': 'inline; filename="study-page.webp"',
+        'X-Document-Total-Pages': String(result.totalPages),
         'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" });
       return res.send(result.image);
     } catch (error) {
-      if (error instanceof DocumentViewError) return res.status(error.status).json({ error: error.message });
+      if (error instanceof DocumentViewError) {
+        if (error.totalPages) res.set('X-Document-Total-Pages', String(error.totalPages));
+        return res.status(error.status).json({ error: error.message });
+      }
       console.warn('[DOCUMENT_VIEW_FAILED]', { name: error instanceof Error ? error.name : 'unknown' });
       return res.status(503).json({ error: 'The protected viewer is temporarily unavailable. Please retry.' });
     }

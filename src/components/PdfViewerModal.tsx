@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCcw, FileText, X, AlertCircle, Maximize2, Presentation, Loader2 } from 'lucide-react';
 import { getAuthToken } from '../lib/api.ts';
+import { fetchDocumentPage } from '../lib/document-page-client.ts';
 
 interface PdfCanvasViewerProps {
   pdfUrl: string;
@@ -10,62 +11,46 @@ interface PdfCanvasViewerProps {
   className?: string;
 }
 
-// This client only receives watermarked images. Original PDF bytes, PDF.js,
+// This client only receives page images. Original PDF bytes, PDF.js,
 // Telegram credentials, and source file URLs stay on the server.
 export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({pdfUrl, pageNumber, zoomPercent, onTotalPagesResolved, className = ''}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const totalCallback = useRef(onTotalPagesResolved);
   const [totalPages, setTotalPages] = useState<number | null>(null);
-  const [resolvedReference, setResolvedReference] = useState<string | null>(null);
+  const lastLoaded = useRef<{reference:string;page:number;totalPages:number;image:HTMLImageElement;token:string|null;retry:number}|null>(null);
+  const [displayedPage, setDisplayedPage] = useState(pageNumber);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => { totalCallback.current = onTotalPagesResolved; }, [onTotalPagesResolved]);
 
-  const documentRequest = useCallback(async (url: string, signal: AbortSignal) => {
-    const token = getAuthToken();
-    if (!token) throw new Error('Please sign in to view this lecture.');
-    if (!/^\/api\/documents\/[A-Za-z0-9_-]+(?:\/pages\/[1-9]\d*)?$/.test(url)) {
-      throw new Error('Reopen this lecture from the Lectures page to load its protected viewer.');
-    }
-    const response = await fetch(url, {signal, cache:'no-store', credentials:'same-origin', headers:{Authorization:`Bearer ${token}`}});
-    if (!response.ok) {
-      const body = await response.json().catch(()=>null);
-      throw new Error(body?.error || 'This page could not be loaded. Please retry.');
-    }
-    return response;
-  }, []);
-
   useEffect(() => {
-    const abort = new AbortController();
-    setTotalPages(null); setResolvedReference(null); setError(null); setLoading(true); setImage(null);
-    documentRequest(pdfUrl, abort.signal).then(r=>r.json()).then(meta=>{
-      if (!Number.isInteger(meta.totalPages) || meta.totalPages < 1) throw new Error('Document information is unavailable.');
-      if (!abort.signal.aborted) { setTotalPages(meta.totalPages); setResolvedReference(pdfUrl); totalCallback.current?.(meta.totalPages); }
-    }).catch(err=>{if (!abort.signal.aborted) {setError(err.message);setLoading(false);}});
-    return ()=>abort.abort();
-  }, [pdfUrl, documentRequest, retry]);
-
-  useEffect(() => {
-    if (!totalPages || resolvedReference !== pdfUrl) return;
-    const abort = new AbortController();
-    let objectUrl: string | undefined;
-    const targetPage = Math.min(Math.max(1, pageNumber), totalPages);
-    setLoading(true); setError(null); setImage(null);
-    documentRequest(`${pdfUrl}/pages/${targetPage}`, abort.signal).then(async response=>{
-      if (response.headers.get('content-type')?.split(';')[0] !== 'image/webp') throw new Error('Invalid page preview.');
-      const blob = await response.blob();
-      if (abort.signal.aborted) return;
-      objectUrl = URL.createObjectURL(blob);
-      const preview = new Image();
-      preview.onload=()=>{if (!abort.signal.aborted) {setImage(preview);setLoading(false);} if(objectUrl)URL.revokeObjectURL(objectUrl);};
-      preview.onerror=()=>{if (!abort.signal.aborted) {setError('Page preview could not be displayed.');setLoading(false);} if(objectUrl)URL.revokeObjectURL(objectUrl);};
+    const token=getAuthToken(), last=lastLoaded.current;
+    if(last?.reference===pdfUrl&&last.page===pageNumber&&last.token===token&&last.retry===retry){
+      setImage(last.image);setTotalPages(last.totalPages);setDisplayedPage(last.page);setError(null);setLoading(false);return;
+    }
+    if(last?.reference!==pdfUrl||last?.token!==token)lastLoaded.current=null;
+    const abort=new AbortController();
+    let objectUrl:string|undefined;
+    setLoading(true);setError(null);setImage(null);
+    fetchDocumentPage(pdfUrl,pageNumber,token,abort.signal).then(({blob,totalPages:total,pageNumber:actual})=>{
+      if(abort.signal.aborted)return;
+      objectUrl=URL.createObjectURL(blob);
+      const preview=new Image();
+      preview.onload=()=>{
+        if(!abort.signal.aborted){
+          lastLoaded.current={reference:pdfUrl,page:actual,totalPages:total,image:preview,token,retry};
+          setTotalPages(total);setDisplayedPage(actual);setImage(preview);setLoading(false);totalCallback.current?.(total);
+        }
+        if(objectUrl)URL.revokeObjectURL(objectUrl);
+      };
+      preview.onerror=()=>{if(!abort.signal.aborted){setError('Page preview could not be displayed.');setLoading(false);}if(objectUrl)URL.revokeObjectURL(objectUrl);};
       preview.src=objectUrl;
-    }).catch(err=>{if (!abort.signal.aborted) {setError(err.message);setLoading(false);}});
+    }).catch(err=>{if(!abort.signal.aborted){setError(err.message);setLoading(false);}});
     return ()=>{abort.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};
-  }, [pdfUrl, pageNumber, totalPages, resolvedReference, documentRequest]);
+  },[pdfUrl,pageNumber,retry]);
 
   useEffect(() => {
     const container=containerRef.current;
@@ -88,7 +73,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({pdfUrl, pageNum
   return <div ref={containerRef} className={`ma-document-surface w-full h-full min-h-0 relative overflow-auto bg-slate-950 flex flex-col items-center p-3 sm:p-4 select-none ${className}`} onContextMenu={event=>event.preventDefault()}>
     {error?<div role="alert" className="my-auto max-w-md p-8 text-center space-y-4"><AlertCircle className="mx-auto w-9 h-9 text-rose-400"/><h4 className="text-sm font-bold text-white">Page unavailable</h4><p className="text-xs text-slate-300">{error}</p><button type="button" onClick={()=>setRetry(value=>value+1)} className="rounded-lg bg-white px-4 py-2 text-xs font-semibold text-slate-900">Retry page</button></div>:
       loading?<div role="status" className="my-auto p-8 text-center space-y-3"><Loader2 className="mx-auto w-8 h-8 text-emerald-300 animate-spin"/><p className="text-xs text-slate-300">Preparing your protected page…</p></div>:
-      <canvas ref={canvasRef} role="img" aria-label={`Lecture page ${pageNumber} of ${totalPages}. Personal study preview.`} onDragStart={event=>event.preventDefault()} className="my-auto shrink-0 rounded-lg bg-white shadow-2xl"/>}
+      <canvas ref={canvasRef} role="img" aria-label={`Lecture page ${displayedPage} of ${totalPages}. Personal study preview.`} onDragStart={event=>event.preventDefault()} className="my-auto shrink-0 rounded-lg bg-white shadow-2xl"/>}
   </div>;
 };
 
@@ -118,6 +103,8 @@ export const PdfViewerModal: React.FC<PdfViewerModalProps> = ({
 
   const handleTotalPages = useCallback((total: number) => {
     setTotalPages((prev) => (prev === total ? prev : total));
+    setCurrentPage(prev=>Math.min(prev,total));
+    setPageInput(prev=>String(Math.min(Number(prev)||1,total)));
   }, []);
 
   useEffect(() => {
@@ -365,6 +352,8 @@ export const PdfSlideViewer: React.FC<PdfSlideViewerProps> = ({
 
   const handleTotalPages = useCallback((total: number) => {
     setTotalPages((prev) => (prev === total ? prev : total));
+    setCurrentPage(prev=>Math.min(prev,total));
+    setPageInput(prev=>String(Math.min(Number(prev)||1,total)));
   }, []);
 
   useEffect(() => {

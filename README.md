@@ -257,3 +257,17 @@ MCQs/matching labels are worth one mark each; written questions use their rubric
 ### Tagged questions first
 
 Fresh lecture Study sets prioritize questions with topic tags or special source tags (for example, Important or Old Exams). Ordering stays stable within each group. Filtered lecture Study sets apply the priority before the requested-count limit and preserve it when shuffling. Mock exams and custom practice keep their existing ordering rules. Resuming an existing study set preserves its order, answers, option permutations and bookmarks; newly published questions append without moving existing questions. The cumulative-study query returns only a tag-presence boolean, and question content still loads six at a time.
+
+
+### PDF viewer performance
+
+The viewer requests its page image directly; `X-Document-Total-Pages` returns the count in that same response. The metadata endpoint remains compatible with older clients. Out-of-range slide references recover once using the available page count. Page retries and zoom keep their existing behavior; zoom redraws locally.
+
+With watermarks off, rendered WebP pages reuse a private in-process LRU cache (24 MB / 128 pages, 10-minute TTL). Concurrent requests for the same Telegram file/page share one render. A cached page skips both PDF downloading and rendering. Immutable Telegram file IDs separate replaced files. PDF.js initialization overlaps a required Telegram source download. Metadata counts reuse the already parsed source where available. Watermarked account-specific images bypass the shared cache. Every page request still authenticates the user, checks current lecture availability and reads the current watermark setting before any cache lookup. Responses remain private/no-store; original PDF and Telegram URLs remain server-only. No speculative next-page downloading, schema change, storage migration or student-progress write is added. Cold server instances still depend on Telegram download time.
+
+Study/review Next and Previous controls live in a fixed bottom navigation bar, outside question/explanation content. Safe-area spacing and reserved bottom padding prevent content from being hidden. PDF and submission dialogs hide the bar; navigation uses the existing handlers and adds no network requests.
+
+
+### Visitor analytics
+
+Vercel Web Analytics (`@vercel/analytics/react`) records visits and page views on the deployed site. Enable Web Analytics for the existing Vercel project before the release. Localhost and temporary Cloudflare previews do not send analytics. The client removes query strings and fragments and groups `/session/:id` as `/session`; API/document URLs are excluded. No answer text, API key, username or custom student event is sent. Analytics uses Vercel endpoints and adds no Supabase queries or tables. View visitors, page views and traffic breakdowns in the project's Analytics dashboard; collection starts after setup rather than backfilling old visits.

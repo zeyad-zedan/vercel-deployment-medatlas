@@ -11,7 +11,81 @@ let sourceBytes = 0;
 const loads = new Map<string, Promise<Buffer>>();
 
 export class DocumentViewError extends Error {
-  constructor(message: string, public status = 503) { super(message); }
+  constructor(message: string, public status = 503, public totalPages?: number) { super(message); }
+}
+
+type RenderedDocument = { totalPages: number; image?: Buffer };
+
+/** Private process memory only. Access and watermark policy are checked before every lookup. */
+export class DocumentPageCache {
+  private entries = new Map<string, { value: RenderedDocument; expires: number }>();
+  private pending = new Map<string, Promise<RenderedDocument>>();
+  private bytes = 0;
+  constructor(private maxBytes = 24 * 1024 * 1024, private maxPages = 128,
+    private ttlMs = 10 * 60_000, private now = Date.now) {}
+
+  private remove(key: string) {
+    const entry = this.entries.get(key);
+    if (entry) { this.bytes -= entry.value.image?.length || 0; this.entries.delete(key); }
+  }
+
+  getOrRender(key: string, render: () => Promise<RenderedDocument>): Promise<RenderedDocument> {
+    const hit = this.entries.get(key);
+    if (hit && hit.expires > this.now()) {
+      this.entries.delete(key); this.entries.set(key, hit);
+      return Promise.resolve(hit.value);
+    }
+    this.remove(key);
+    const pending = this.pending.get(key);
+    if (pending) return pending;
+    const loading = Promise.resolve().then(render).then(value => {
+      const size = value.image?.length || 0;
+      if (size > 0 && size <= this.maxBytes && this.maxPages > 0) {
+        for (const [id, entry] of this.entries) if (entry.expires <= this.now()) this.remove(id);
+        while (this.entries.size && (this.bytes + size > this.maxBytes || this.entries.size >= this.maxPages)) {
+          this.remove(this.entries.keys().next().value!);
+        }
+        this.entries.set(key, { value, expires: this.now() + this.ttlMs }); this.bytes += size;
+      }
+      return value;
+    }).finally(() => this.pending.delete(key));
+    this.pending.set(key, loading);
+    return loading;
+  }
+}
+
+const pageCache = new DocumentPageCache();
+const fingerprints = new WeakMap<Buffer, string>();
+const pageCounts = new WeakMap<Buffer, number>();
+const metadataLoads = new WeakMap<Buffer, Promise<RenderedDocument>>();
+let pdfJs: Promise<typeof import('pdfjs-dist/legacy/build/pdf.mjs')> | undefined;
+
+export function preloadDocumentRenderer() {
+  if (!pdfJs) pdfJs = import('pdfjs-dist/legacy/build/pdf.mjs').catch(error => { pdfJs = undefined; throw error; });
+  return pdfJs;
+}
+
+/** Telegram file IDs are immutable. A hit need not download or parse the source PDF. */
+export function cachedUnwatermarkedDocumentPage(fileId: string, page: number, loadSource: () => Promise<Buffer>) {
+  return pageCache.getOrRender(`telegram:${fileId}:${page}`, async () => renderUncachedDocument(await loadSource(), page));
+}
+
+export function renderDocument(source: Buffer, pageNumber?: number, viewerUid?: string, watermarksEnabled = false): Promise<RenderedDocument> {
+  if (pageNumber === undefined) {
+    const totalPages = pageCounts.get(source);
+    if (totalPages) return Promise.resolve({ totalPages });
+    const pending = metadataLoads.get(source);
+    if (pending) return pending;
+    const loading = renderUncachedDocument(source).finally(() => metadataLoads.delete(source));
+    metadataLoads.set(source, loading);
+    return loading;
+  }
+  if (!Number.isInteger(pageNumber) || pageNumber < 1) return Promise.reject(new DocumentViewError('Page not found.', 404));
+  // Account-specific pixels must never use the shared, unwatermarked cache.
+  if (watermarksEnabled) return renderUncachedDocument(source, pageNumber, viewerUid, true);
+  let fingerprint = fingerprints.get(source);
+  if (!fingerprint) { fingerprint = createHash('sha256').update(source).digest('hex'); fingerprints.set(source, fingerprint); }
+  return pageCache.getOrRender(`${fingerprint}:${pageNumber}`, () => renderUncachedDocument(source, pageNumber));
 }
 
 /** Bounded waits absorb short bursts without increasing rendering concurrency. */
@@ -69,11 +143,11 @@ export async function cachedDocumentSource(key: string, loader: () => Promise<Bu
 }
 
 // PDF bytes and PDF.js execute only on the server. There is no raw-file response.
-export async function renderDocument(source: Buffer, pageNumber?: number, viewerUid?: string, watermarksEnabled = false) {
+async function renderUncachedDocument(source: Buffer, pageNumber?: number, viewerUid?: string, watermarksEnabled = false): Promise<RenderedDocument> {
   return renderQueue.run(async () => {
   let task: any;
   try {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const { getDocument } = await preloadDocumentRenderer();
     task = getDocument({ data: new Uint8Array(source),
       cMapUrl: path.join(assetsRoot, 'cmaps').replaceAll('\\', '/') + '/', cMapPacked: true,
       standardFontDataUrl: path.join(assetsRoot, 'standard_fonts').replaceAll('\\', '/') + '/',
@@ -81,8 +155,9 @@ export async function renderDocument(source: Buffer, pageNumber?: number, viewer
       useSystemFonts: false, enableXfa: false, maxImageSize: 24_000_000,
     });
     const doc = await task.promise;
+    pageCounts.set(source, doc.numPages);
     if (!pageNumber) return { totalPages: doc.numPages };
-    if (pageNumber < 1 || pageNumber > doc.numPages) throw new DocumentViewError('Page not found.', 404);
+    if (pageNumber < 1 || pageNumber > doc.numPages) throw new DocumentViewError('Page not found.', 404, doc.numPages);
     const page = await doc.getPage(pageNumber);
     const unit = page.getViewport({ scale: 1 });
     const scale = Math.min(1600 / unit.width, 2200 / unit.height, 3);
