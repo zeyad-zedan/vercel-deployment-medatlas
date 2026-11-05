@@ -661,7 +661,7 @@ app.all('/api/auth/gemini-key', requireAuth, async (req: AuthRequest, res) => {
     if(req.method==='PUT') {
       if(!keys.studentKeyStorageAvailable())return res.status(503).json({error:'Secure key storage is temporarily unavailable. Please try again later.'});
       const value=typeof req.body?.apiKey==='string'?req.body.apiKey.trim():req.body?.apiKey;
-      if(!keys.validStudentGeminiKey(value))return res.status(400).json({error:'Enter a complete Gemini API key from Google AI Studio.'});
+      if(!keys.validStudentGeminiKey(value))return res.status(400).json({error:'Paste the complete key copied from Google AI Studio, without quotes, spaces, or an API-key assignment.'});
       return res.json(await keys.saveStudentGeminiKey(uid,value));
     }
     res.setHeader('Allow','GET, PUT, DELETE');return res.status(405).json({error:'Method not allowed.'});

@@ -119,6 +119,20 @@ test('study navigation stays outside long question content without saving or ref
  }finally{await act(async()=>root.unmount());}
 });
 
+test('Gemini settings preserve long pasted keys and show actionable save failures without losing the input',async()=>{
+ reset();const {GeminiKeySettings}=await import('../components/GeminiKeySettings.tsx');
+ const longKey='AQ.'+'T'.repeat(320);let received='',fail=true;
+ api.getGeminiKeyStatus=async()=>({configured:false,maskedKey:null,updatedAt:null,available:true});
+ api.saveGeminiKey=async(value:string)=>{received=value;if(fail)throw Error('Secure key storage is temporarily unavailable. Please try again later.');return {configured:true,maskedKey:'••••TTTT',updatedAt:null,available:true};};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<GeminiKeySettings/>));
+  assert.ok((host().querySelector('#student-gemini-key') as HTMLInputElement).maxLength>=longKey.length);
+  await change('#student-gemini-key',' '+longKey+' ');await click('Save key');assert.equal(received,longKey);
+  assert.match(text(),/Secure key storage is temporarily unavailable/);assert.equal((host().querySelector('#student-gemini-key') as HTMLInputElement).value.trim(),longKey);
+  fail=false;await click('Save key');assert.match(text(),/API key saved securely/);assert.match(text(),/••••TTTT/);assert.equal(host().querySelector('#student-gemini-key'),null);
+ }finally{await act(async()=>root.unmount());}
+});
+
 test('PDF canvas displays a page from one request and retries the page without a metadata waterfall',async()=>{
  reset();
  const {PdfCanvasViewer}=await import('../components/PdfViewerModal.tsx'),{setAuthToken}=await import('./api.ts');

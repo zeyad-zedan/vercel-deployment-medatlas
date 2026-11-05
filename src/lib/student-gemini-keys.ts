@@ -1,6 +1,7 @@
 import {createCipheriv,createDecipheriv,randomBytes} from 'node:crypto';
 import {eq} from 'drizzle-orm';
 import {db,studentGeminiKeys} from '../db/index.ts';
+export { validStudentGeminiKey } from './gemini-key-input.ts';
 
 function encryptionKey() {
   const value=process.env.STUDENT_API_KEY_ENCRYPTION_KEY || '';
@@ -27,7 +28,6 @@ export async function getStudentGeminiKeyStatus(uid:string) {
   const [row]=await db.select({suffix:studentGeminiKeys.keySuffix,updatedAt:studentGeminiKeys.updatedAt}).from(studentGeminiKeys).where(eq(studentGeminiKeys.userUid,uid)).limit(1);
   return {configured:Boolean(row),maskedKey:row?`••••${row.suffix}`:null,updatedAt:row?.updatedAt??null,available:studentKeyStorageAvailable()};
 }
-export function validStudentGeminiKey(value:unknown):value is string {return typeof value==='string'&&/^AIza[A-Za-z0-9_-]{35}$/.test(value);}
 export async function saveStudentGeminiKey(uid:string,value:string) {
   const encryptedKey=encryptStudentGeminiKey(uid,value);
   await db.insert(studentGeminiKeys).values({userUid:uid,encryptedKey,keySuffix:value.slice(-4)})

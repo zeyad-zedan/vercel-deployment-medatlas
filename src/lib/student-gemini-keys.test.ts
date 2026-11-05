@@ -8,6 +8,11 @@ process.env.STUDENT_API_KEY_ENCRYPTION_KEY=randomBytes(32).toString('hex');
 const {db,pool,users,studentGeminiKeys}=await import('../db/index.ts');
 const keys=await import('./student-gemini-keys.ts');
 after(()=>pool.end());
+
+test('key input supports long authorization keys without assuming a provider prefix or fixed length',()=>{
+ for(const value of ['AIza'+'A'.repeat(35),'AQ.'+'B'.repeat(300),'new-format.'+'C'.repeat(80)])assert.equal(keys.validStudentGeminiKey(value),true);
+ for(const value of ['',null,123,'short','AQ.'+'B'.repeat(4096),'AQ.'+'B'.repeat(30)+'\r\nheader:value','GEMINI_API_KEY='+'A'.repeat(50),'"AQ.'+'B'.repeat(100)+'"'])assert.equal(keys.validStudentGeminiKey(value),false);
+});
 test('student secrets use randomized authenticated encryption bound to their account',()=>{
  const value='AIza'+randomBytes(26).toString('base64url').slice(0,35);
  assert.equal(keys.validStudentGeminiKey(value),true);assert.equal(keys.validStudentGeminiKey('not-a-key'),false);
@@ -29,7 +34,7 @@ test('authenticated key save/replace/remove persists per account without exposin
  const origin=`http://127.0.0.1:${(server.address() as any).port}`;
  const token=(id:string)=>createServerSessionToken({uid:id,email:id+'@example.invalid',emailVerified:true});
  const request=(id:string|null,method='GET',body?:any)=>fetch(origin+'/api/auth/gemini-key',{method,headers:{...(id?{Authorization:`Bearer ${token(id)}`} : {}),'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
- const key='AIza'+randomBytes(26).toString('base64url').slice(0,35),replacement='AIza'+randomBytes(26).toString('base64url').slice(0,35);
+ const key='AIza'+randomBytes(26).toString('base64url').slice(0,35),replacement='AQ.'+randomBytes(240).toString('base64url');
  try{
   await db.insert(users).values([uid,other].map(id=>({uid:id,email:id+'@example.invalid',displayName:'Disposable key test'})));
   assert.equal((await request(null)).status,401);
@@ -40,7 +45,7 @@ test('authenticated key save/replace/remove persists per account without exposin
   const [row]=await db.select().from(studentGeminiKeys).where(eq(studentGeminiKeys.userUid,uid));
   assert.ok(!JSON.stringify(row).includes(key));assert.equal(await keys.readStudentGeminiKeyForGrading(uid),key);
   assert.equal((await(await request(uid)).json()).maskedKey,'••••'+key.slice(-4));
-  assert.equal((await request(uid,'PUT',{apiKey:replacement})).status,200);assert.equal(await keys.readStudentGeminiKeyForGrading(uid),replacement);
+  assert.equal((await request(uid,'PUT',{apiKey:'  '+replacement+'\n'})).status,200);assert.equal(await keys.readStudentGeminiKeyForGrading(uid),replacement);
   const {createEncryptedBackup,testRestoreBackup}=await import('./backup-service.ts');
   const {envelope}=await createEncryptedBackup();assert.equal((await testRestoreBackup(envelope)).status,'verified');
   const secret=process.env.STUDENT_API_KEY_ENCRYPTION_KEY;delete process.env.STUDENT_API_KEY_ENCRYPTION_KEY;
