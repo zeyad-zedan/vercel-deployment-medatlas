@@ -1459,8 +1459,8 @@ app.post(
   }
 );
 
-const imageReadLimiter = createBoundedRateLimiter({scope:'question-image-read',maxRequests:240,windowMs:60000,maxKeys:5000,keyGenerator:(req)=>String((req as AuthRequest).user?.uid || normalizeClientIp(req))});
-const imageUploadLimiter = createBoundedRateLimiter({scope:'question-image-upload',maxRequests:150,windowMs:600000,maxKeys:100,keyGenerator:(req)=>String((req as AuthRequest).user?.uid)});
+const imageReadLimiter = createBoundedRateLimiter({scope:'question-image-read',maxRequests:240,windowMs:60000,maxKeys:5000,store:sharedRateLimitStore,degradedModePolicy:rateLimitDegradedPolicy,keyGenerator:(req)=>String((req as AuthRequest).user?.uid || normalizeClientIp(req))});
+const imageUploadLimiter = createBoundedRateLimiter({scope:'question-image-upload',maxRequests:150,windowMs:600000,maxKeys:100,store:sharedRateLimitStore,degradedModePolicy:rateLimitDegradedPolicy,keyGenerator:(req)=>String((req as AuthRequest).user?.uid)});
 app.post('/api/admin/import/image', requireAuth, requireAdmin, imageUploadLimiter, express.raw({type:'application/octet-stream',limit:'2mb'}), async(req:AuthRequest,res)=>{
   const fileName=String(req.query.name || '');
   if(!validImageFileName(fileName) || !Buffer.isBuffer(req.body))return res.status(400).json({error:'Choose a PNG, JPEG, or WebP file up to 2 MB.'});
