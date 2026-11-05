@@ -54,7 +54,7 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
   let saved=await api('/answers',{questionId,answer:'Support and protection',userUid:other});const id=saved.data.attempt.id;
   assert.equal(providerCalls,0);assert.equal(saved.data.attempt.status,'saved');assert.equal((await api('/answers/'+id,undefined,other)).status,404);
   assert.equal((await api(`/answers/${id}/grade`,{})).status,400);
-  const missing=await api(`/answers/${id}/grade`,{consent:true});assert.match(missing.data.attempt.error,/Add your Gemini/);assert.equal(providerCalls,0);
+  const missing=await api(`/answers/${id}/grade`,{consent:true});assert.match(missing.data.attempt.error,/Add your Gemini/);assert.equal(missing.data.attempt.errorCode,'KEY_MISSING');assert.equal(providerCalls,0);
   await keys.saveStudentGeminiKey(uid,fakeKey);await pool.query('UPDATE public.short_answer_attempts SET retry_at=null WHERE id=$1',[id]);
   mode='wait';const signal=new Promise<void>(r=>{started=r;});const first=api(`/answers/${id}/grade`,{consent:true});await signal;
   const second=await api(`/answers/${id}/grade`,{consent:true});assert.equal(second.data.attempt.status,'grading');assert.equal(providerCalls,1);release!();const graded=await first;

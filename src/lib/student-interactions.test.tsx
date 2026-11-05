@@ -157,3 +157,41 @@ test('PDF canvas displays a page from one request and retries the page without a
   for(const [name,descriptor] of [['Image',oldImage],['ResizeObserver',oldObserver]] as const){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete(globalThis as any)[name];}
  }
 });
+
+
+test('missing Gemini key opens the Arabic illustrated guide, saves the key and resumes grading without losing the answer',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');
+ const answer='Support and protection',secret='AQ.'+'K'.repeat(240);let gradedCalls=0,savedKey=false,keyFails=true,keyWrites=0;
+ const saved={id:701,answer,status:'saved',maxScore:1,result:null};
+ api.saveQuizShortAnswer=async()=>({attempt:saved,session:{}});
+ api.gradeQuizShortAnswer=async()=>{gradedCalls++;return {attempt:savedKey?{...saved,status:'graded',modelAnswer:'Support and protection',result:{score:1,maxScore:1,feedback:'Well done',points:[]}}:{...saved,status:'failed',errorCode:'KEY_MISSING',error:'Add your Gemini API key.'},session:{}};};
+ api.getGeminiKeyStatus=async()=>{throw Error('No per-grade key status polling.');};
+ api.saveGeminiKey=async(value:string)=>{keyWrites++;assert.equal(value,secret);if(keyFails)throw Object.assign(Error('storage unavailable'),{status:503});savedKey=true;return {configured:true,maskedKey:'••••KKKK',available:true,updatedAt:null};};
+ const root=createRoot(host());const question={id:701,questionType:'short_answer',maxMarks:1,questionText:'Name bone functions.',images:[]};
+ const dialog=()=>dom.window.document.querySelector('[role="dialog"]') as HTMLElement;
+ try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={question} sessionId={99122} onSaved={()=>{}}/>));
+  await change('textarea',answer);await click('Save & grade');await act(async()=>{await new Promise(resolve=>setTimeout(resolve,70));});
+  assert.ok(dialog());assert.equal(dialog().getAttribute('lang'),null);assert.equal(dialog().parentElement?.getAttribute('lang'),'ar');assert.match(dialog().textContent||'',/أهلاً يا صديقي/);
+  assert.equal(dialog().querySelector('a[href="https://t.me/MedAtlasMCQ?direct"]')?.textContent?.trim(),'ابعتلنا على تليجرام');assert.ok(dialog().querySelector('a[href="https://aistudio.google.com/apikey"]'));
+  for(let index=1;index<=5;index++){
+   assert.equal(dialog().querySelector('img')?.getAttribute('src'),`/tutorials/gemini/step-${index}.svg`);
+   if(index<5)await act(async()=>{const next=[...dialog().querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes('الخطوة اللي بعدها'));assert.ok(next);next.click();});
+  }
+  await act(async()=>{const input=dialog().querySelector('input')!;Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value')!.set!.call(input,secret);input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});
+  const save=()=>[...dialog().querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes('احفظ المفتاح'))!;
+  await act(async()=>save().click());assert.match(dialog().textContent||'',/حفظ المفاتيح مش متاح مؤقتًا/);assert.equal(dialog().querySelector('input')?.value,secret);assert.equal(gradedCalls,1);
+  keyFails=false;await act(async()=>save().click());assert.equal(keyWrites,2);assert.equal(dialog(),null);assert.equal(gradedCalls,2);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,answer);assert.match(text(),/Well done/);assert.ok(!text().includes(secret));
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('quota failures do not open key setup, and closing setup preserves the saved response',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');let code='QUOTA';
+ const saved={id:702,answer:'My saved answer',status:'failed',maxScore:1,result:null};
+ api.saveQuizShortAnswer=async()=>({attempt:saved,session:{}});api.gradeQuizShortAnswer=async()=>({attempt:{...saved,errorCode:code,error:code},session:{}});
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={{id:702,maxMarks:1,questionText:'Question',images:[]}} sessionId={99123} onSaved={()=>{}}/>));await change('textarea','My saved answer');await click('Save & grade');assert.equal(dom.window.document.querySelector('[role="dialog"]'),null);
+  code='KEY_MISSING';await click('Retry grading');await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});assert.ok(dom.window.document.querySelector('[role="dialog"]'));
+  await act(async()=>dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true})));assert.equal(dom.window.document.querySelector('[role="dialog"]'),null);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'My saved answer');assert.match(text(),/افتح شرح إضافة مفتاح/);
+ }finally{await act(async()=>root.unmount());}
+});
