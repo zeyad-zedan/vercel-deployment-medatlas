@@ -23,7 +23,7 @@ async function click(name:string){await act(async()=>{findButton(name).click();}
 async function change(selector:string,value:string){const input=host().querySelector(selector) as HTMLInputElement;assert.ok(input,`Missing input ${selector}`);await act(async()=>{const proto=input.tagName==='TEXTAREA'?dom.window.HTMLTextAreaElement.prototype:input.tagName==='SELECT'?dom.window.HTMLSelectElement.prototype:dom.window.HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value')!.set!.call(input,value);input.dispatchEvent(new dom.window.Event(input.tagName==='SELECT'?'change':'input',{bubbles:true}));});}
 function reset(){Object.assign(api,realApi);dom.window.localStorage.clear();host().replaceChildren();}
 
-test('short-answer student interaction restores drafts, saves independently, grades with consent and reopens saved feedback',async()=>{
+test('short-answer student interaction restores drafts, saves independently, grades directly and reopens saved feedback',async()=>{
  reset();let saveFails=true,gradeCalls=0,saveCalls=0,imageCalls=0;const q={id:11,question:'Name two bone functions.',max_score:2,images:[{id:'figure',alt:'Bone figure',source:'/api/question-images/fixture'}]};let saved:any=null;
  api.shortAnswerCatalog=async()=>({lectures:[{id:82,title:'Bones',subject:'Anatomy',contentType:'practical',lectureNumber:1,count:1}]});
  api.shortAnswerQuestions=async()=>({questions:[q],nextCursor:null});
@@ -34,10 +34,10 @@ test('short-answer student interaction restores drafts, saves independently, gra
  dom.window.localStorage.setItem('medatlas_sa_draft_student_11','Support and protection');const root=createRoot(host());
  try{
   await act(async()=>{root.render(<ShortAnswersView userUid="student" initialLectureId={82}/>);});assert.match(text(),/Name two bone functions/);assert.equal((host().querySelector('select') as HTMLSelectElement).value,'82');
-  await click('Name two bone functions.2 marks');assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'Support and protection');assert.equal(findButton('Save & grade').disabled,true);assert.equal(gradeCalls,0);assert.equal(imageCalls,1);
+  await click('Name two bone functions.2 marks');assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'Support and protection');assert.equal(findButton('Save & grade').disabled,false);assert.equal(host().querySelector('input[type=checkbox]'),null);assert.equal(gradeCalls,0);assert.equal(imageCalls,1);
   await click('Save answer');assert.match(text(),/Network unavailable/);assert.equal(dom.window.localStorage.getItem('medatlas_sa_draft_student_11'),'Support and protection');
   saveFails=false;await click('Save answer');assert.match(text(),/Answer saved to your account/);assert.equal(gradeCalls,0);assert.equal(dom.window.localStorage.getItem('medatlas_sa_draft_student_11'),null);
-  await act(async()=>{(host().querySelector('input[type=checkbox]') as HTMLInputElement).click();});await click('Save & grade');assert.equal(gradeCalls,1);assert.match(text(),/2\/2 marks/);assert.match(text(),/Both correct/);assert.equal(findButton('Save & grade').disabled,true);
+  await click('Save & grade');assert.equal(gradeCalls,1);assert.match(text(),/2\/2 marks/);assert.match(text(),/Both correct/);assert.equal(findButton('Save & grade').disabled,true);
   await change('#sa-answer','A revised answer');assert.doesNotMatch(text(),/Both correct/);assert.equal(dom.window.localStorage.getItem('medatlas_sa_draft_student_11'),'A revised answer');
   await click('My answer history');await click('Name two bone functions.2/2 marks · '+new Date().toLocaleDateString());assert.match(text(),/Both correct/);assert.equal(gradeCalls,1,'Opening saved feedback must not call Gemini.');assert.equal(saveCalls,3);
  }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
@@ -87,7 +87,7 @@ test('short answers live inside the quiz and Submit saves typed text before comp
  api.completeSession=async()=>{events.push('submit quiz');assert.equal(written,'My written response');return {session:{...session,status:'completed',quizScore:{earnedMarks:0,maxMarks:4,shortAnswerCount:1,pendingGradingCount:1},questions:[{...short,hasSavedAnswer:true,submitted:true,selectedDisplayed:'C',shortAnswerStatus:'saved',shortAnswerAttempt:{id:77,answer:written,status:'saved'}},mcq]}};};
  const root=createRoot(host());try{
   await act(async()=>root.render(<McqSessionPlayer initialSession={session} onExit={()=>{}} onSessionCompleted={result=>{finished=result;}}/>));assert.ok(host().querySelector('textarea'));assert.match(text(),/Short answer · 3 marks/);await change('textarea','My written response');assert.equal(events.length,0,'Typing must not create per-keystroke database traffic.');
-  await click('Next Question');await click('Finish Quiz');await click('Confirm & Submit');await click('Previous Question');assert.deepEqual(events,['save text','submit quiz']);assert.equal(finished.status,'completed');assert.match(text(),/awaiting grading/);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'My written response');assert.equal(findButton('Grade saved answer').disabled,true,'Google calls require consent.');
+  await click('Next Question');await click('Finish Quiz');await click('Confirm & Submit');await click('Previous Question');assert.deepEqual(events,['save text','submit quiz']);assert.equal(finished.status,'completed');assert.match(text(),/awaiting grading/);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'My written response');assert.equal(findButton('Grade saved answer').disabled,false,'Grading needs no checkbox.');
  }finally{await act(async()=>root.unmount());}
 });
 
