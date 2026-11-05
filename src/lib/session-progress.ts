@@ -21,6 +21,7 @@ export function readSessionDrafts(session: any): Record<number, OptionKey> {
     const answers = stored.version === 1 ? stored.answers : stored;
     const result: Record<number, OptionKey> = {};
     for (const question of session.questions || []) {
+      if (question.shortAnswerId || question.questionType === 'short_answer') continue;
       const answer = answers?.[question.id];
       if (!OPTION_KEYS.includes(answer)) continue;
       if (session.mode !== 'exam' && question.submitted) continue;
@@ -69,6 +70,7 @@ export function readSessionMatchingDrafts(session: any): Record<number,string> {
     const stored = JSON.parse(localStorage.getItem(`medatlas_session_draft_answers_${session.id}`) || '{}');
     const drafts: Record<number,string> = {};
     for (const q of session.questions || []) {
+      if (q.shortAnswerId || q.questionType === 'short_answer') continue;
       const choice = stored.matchingChoices?.[q.id];
       if (typeof choice !== 'string' || !/^c[1-9]\d{0,2}$/.test(choice)) continue;
       if (session.mode !== 'exam' && q.submitted) continue;

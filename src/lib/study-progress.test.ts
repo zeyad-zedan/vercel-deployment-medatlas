@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AnswerSaveQueue, type AnswerToSave } from './answer-saves.ts';
-import { getResumeQuestionIndex, readSessionDrafts, rememberSessionQuestion } from './session-progress.ts';
+import { getResumeQuestionIndex, readSessionDrafts, readSessionMatchingDrafts, rememberSessionQuestion } from './session-progress.ts';
 
 test('rapid exam changes save in order and only acknowledge the latest selection', async () => {
   const requests: AnswerToSave[] = [];
@@ -92,4 +92,11 @@ test('resume uses the exact question ID even when answered questions or ordering
     assert.deepEqual(readSessionDrafts({ ...session, mode: 'exam' }), { 10: 'C' });
     assert.deepEqual(readSessionDrafts({ ...session, status: 'completed' }), {});
   } finally { globalThis.localStorage = previous; }
+});
+
+
+test('converted short answers never replay former matching drafts',()=>{
+ const previous=globalThis.localStorage;
+ globalThis.localStorage={getItem:()=>JSON.stringify({version:1,answers:{1:'A',2:'B'},matchingChoices:{1:'c2'}})} as any;
+ try{const session={id:1,mode:'study',status:'in_progress',questions:[{id:1,questionType:'short_answer',shortAnswerId:8},{id:2}]};assert.deepEqual(readSessionDrafts(session),{2:'B'});assert.deepEqual(readSessionMatchingDrafts(session),{});}finally{globalThis.localStorage=previous;}
 });
