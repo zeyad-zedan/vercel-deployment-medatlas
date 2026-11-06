@@ -96,3 +96,20 @@ test('successful grade survives a failed lease release; no blind provider retry 
  await assert.rejects(createPoolGrader(other.store,async()=>{calls++;throw new Error('secret upstream error');})(question,'Support',readGradingPool(config(1))),(e:any)=>e.code==='UNAVAILABLE'&&!String(e).includes('secret'));
  assert.equal(calls,2);
 });
+
+test('replacing a key cannot bypass a running project lease',async()=>{
+ const {store,advance}=fixture();
+ const old=readGradingPool(JSON.stringify([{key:fakeKey(1),project:'same-project',rpm:10000,concurrency:1}]));
+ const replacement=readGradingPool(JSON.stringify([{key:fakeKey(2),project:'same-project',rpm:10000,concurrency:1}]));
+ let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+ const running=createPoolGrader(store,async()=>{await gate;return success();})(question,'Support',old);
+ await new Promise(r=>setImmediate(r));advance(10);
+ try{await assert.rejects(createPoolGrader(store,success)(question,'Support',replacement),(e:any)=>e.code==='POOL_BUSY');}
+ finally{release();await running;}
+ await createPoolGrader(store,success)(question,'Support',replacement);
+});
+
+test('a shared model-access failure never asks the student to change their Google project',async()=>{
+ const {store}=fixture();
+ await assert.rejects(createPoolGrader(store,async()=>{throw new GradingError('MODEL_UNAVAILABLE',15);})(question,'Support',readGradingPool(config(1))),(e:any)=>e.code==='POOL_MODEL_UNAVAILABLE');
+});

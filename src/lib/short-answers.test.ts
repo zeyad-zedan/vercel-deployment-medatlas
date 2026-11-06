@@ -8,6 +8,19 @@ process.env.NODE_ENV='test';process.env.STUDENT_API_KEY_ENCRYPTION_KEY=randomByt
 const enabled=/^postgres(?:ql)?:\/\/[^/]*@(?:localhost|127\.0\.0\.1):/.test(process.env.DATABASE_URL||'');
 const {db,pool,users,subjects,lectures}=await import('../db/index.ts');
 after(()=>pool.end());
+test('enabling the pool suppresses historical personal-key setup prompts and preserves the fallback',async()=>{
+ const {publicShortAnswerAttempt}=await import('./short-answer-service.ts');
+ const previous=process.env.GEMINI_GRADING_POOL;
+ const row={id:1,question_id:1,status:'failed',snapshot:{question_text:'Question',rubric:[]},error_code:'KEY_MISSING'};
+ try{
+  process.env.GEMINI_GRADING_POOL='configured-on-server';
+  const shared=publicShortAnswerAttempt(row);
+  assert.equal(shared.errorCode,'POOL_RETRY');assert.doesNotMatch(shared.error||'',/Add your Gemini|Profile & Settings/);
+  for(const code of ['KEY_OR_ACCESS','QUOTA','MODEL_UNAVAILABLE'])assert.match(publicShortAnswerAttempt({...row,error_code:code}).errorCode||'',/^POOL_/);
+  delete process.env.GEMINI_GRADING_POOL;
+  const personal=publicShortAnswerAttempt(row);assert.equal(personal.errorCode,'KEY_MISSING');assert.match(personal.error||'',/Add your Gemini/);
+ }finally{if(previous===undefined)delete process.env.GEMINI_GRADING_POOL;else process.env.GEMINI_GRADING_POOL=previous;}
+});
 test('marking guides validate and grades reject missing, duplicated, inflated and fractional points',()=>{
  const [q]=parseShortAnswerBatch(shortAnswerTemplate);assert.equal(q.rubric.length,3);
  const result={feedback:'Two correct functions.',points:q.rubric.map((p,i)=>({id:p.id,awarded:i<2?1:0,feedback:i<2?'Correct.':'Missing.'}))};

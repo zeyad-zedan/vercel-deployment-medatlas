@@ -4,7 +4,7 @@ import {gradeWithGemini,GradingError,shortAnswerModel} from './gemini-short-answ
 import type {ShortAnswerDefinition} from './short-answer-model.ts';
 
 type Entry={key:string;id:string;project:string;rpm:number;concurrency:number};
-type KeyState={lease?:string;until:number;used:number;blocked:number};
+type KeyState={lease?:string;project?:string;until:number;used:number;blocked:number};
 type ProjectState={next:number;blocked:number};
 export type PoolState={keys:Record<string,KeyState>;projects:Record<string,ProjectState>};
 export type PoolStore=<T>(model:string,change:(state:PoolState,now:number)=>T)=>Promise<T>;
@@ -56,12 +56,12 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
    for(const [id,project] of Object.entries(state.projects))if(Math.max(project.next,project.blocked)<now-86400000)delete state.projects[id];
    const ready=entries.filter(entry=>{
     const key=state.keys[entry.id],project=state.projects[entry.project];
-    const active=entries.filter(other=>other.project===entry.project&&(state.keys[other.id]?.until||0)>now).length;
+    const active=Object.entries(state.keys).filter(([id,key])=>(key.project??entries.find(other=>other.id===id)?.project)===entry.project&&key.until>now).length;
     return (!key||Math.max(key.until,key.blocked)<=now)&&(!project||Math.max(project.next,project.blocked)<=now)&&active<entry.concurrency;
    }).sort((a,b)=>(state.keys[a.id]?.used||0)-(state.keys[b.id]?.used||0)||a.id.localeCompare(b.id));
    const entry=ready[0];
    if(!entry)return null;
-   state.keys[entry.id]={lease,until:now+30000,used:now,blocked:0};
+   state.keys[entry.id]={lease,project:entry.project,until:now+30000,used:now,blocked:0};
    state.projects[entry.project]={next:now+Math.ceil(60000/entry.rpm),blocked:state.projects[entry.project]?.blocked||0};
    return entry;
   });
@@ -70,7 +70,7 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
   try{return await grade(claim.key,question,answer);}
   catch(error){
    failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
-   const code=failure.code==='QUOTA'?'POOL_QUOTA':failure.code==='KEY_OR_ACCESS'?'POOL_ACCESS':failure.code;
+   const code=failure.code==='QUOTA'?'POOL_QUOTA':failure.code==='KEY_OR_ACCESS'?'POOL_ACCESS':failure.code==='MODEL_UNAVAILABLE'?'POOL_MODEL_UNAVAILABLE':failure.code;
    throw new GradingError(code,failure.delaySeconds||15);
   }finally{
    // Preserve a valid grade even if releasing the lease fails. The 30s lease expires on its own.
