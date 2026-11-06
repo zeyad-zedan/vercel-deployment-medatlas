@@ -15,8 +15,11 @@ export async function gradeWithGemini(apiKey:string,question:ShortAnswerDefiniti
       })});
   }catch{throw new GradingError('TIMEOUT',15);}
   if(!response.ok){
+    const retry=response.headers.get('retry-after');
+    const seconds=retry&&/^\d+(?:\.\d+)?$/.test(retry)?Math.ceil(Number(retry)):retry?Math.ceil((Date.parse(retry)-Date.now())/1000):60;
+    const quotaDelay=Number.isFinite(seconds)?Math.max(60,Math.min(seconds,86400)):60;
     await response.body?.cancel();
-    throw new GradingError(response.status===429?'QUOTA':response.status===400||response.status===401||response.status===403?'KEY_OR_ACCESS':response.status===404?'MODEL_UNAVAILABLE':'UNAVAILABLE',response.status===429?60:15);
+    throw new GradingError(response.status===429?'QUOTA':response.status===400||response.status===401||response.status===403?'KEY_OR_ACCESS':response.status===404?'MODEL_UNAVAILABLE':'UNAVAILABLE',response.status===429?quotaDelay:15);
   }
   try{
     const data=await response.json();

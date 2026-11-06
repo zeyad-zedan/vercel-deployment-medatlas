@@ -1,13 +1,14 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {pool} from '../db/index.ts';
-import {readStudentGeminiKeyForGrading} from './student-gemini-keys.ts';
-import {gradeWithGemini,GradingError} from './gemini-short-answer.ts';
+import {gradeWithConfiguredCredentials} from './gemini-grading-pool.ts';
+import {GradingError} from './gemini-short-answer.ts';
 import {parseShortAnswerBatch,type ShortAnswerDefinition} from './short-answer-model.ts';
 import {validImageFileName,type ImportImageFile,type QuestionImage} from './question-images.ts';
 import {imageForStorage} from './telegram-question-images.ts';
 import {syncShortAnswerQuizEntries} from './short-answer-quiz-links.ts';
 export class ShortAnswerError extends Error {constructor(message:string,public status=400){super(message);}}
 export const gradingMessages:Record<string,string>={KEY_MISSING:'Add your Gemini API key in Profile & Settings, then retry.',KEY_OR_ACCESS:'Google rejected the key or model access. Check your key and Google project settings.',QUOTA:'Your Google quota is currently exhausted. Your answer is saved. Wait for your quota to reset, then retry.',TIMEOUT:'Google took too long to respond. Your answer is saved; you can retry.',MODEL_UNAVAILABLE:'This grading model is unavailable to your Google project. Contact the site administrator.',UNAVAILABLE:'Grading is temporarily unavailable. Your answer is saved.',INVALID_RESPONSE:'Google returned an incomplete or invalid grade. Your answer is saved; retry shortly.'};
+Object.assign(gradingMessages,{POOL_BUSY:'Grading is busy or cooling down. Your answer is saved; retry shortly.',POOL_QUOTA:'The grading service has reached its Google quota. Your answer is saved; retry later.',POOL_ACCESS:'A grading credential needs administrator attention. Your answer is saved; retry shortly.',POOL_CONFIG:'The grading service needs administrator setup. Your answer is saved.'});
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const numericId=(value:unknown)=>{const id=Number(value);if(!Number.isSafeInteger(id)||id<1)throw new ShortAnswerError('Invalid question or attempt.');return id;};
 export function publicShortAnswerAttempt(row:any){return {id:row.id,questionId:row.question_id,question:row.snapshot.question_text,maxScore:row.result?.maxScore??row.snapshot.rubric?.reduce((sum:number,point:any)=>sum+point.marks,0),images:row.snapshot.images||[],answer:row.answer,status:row.status,result:row.result,model:row.model,createdAt:row.created_at,retryAt:row.retry_at,errorCode:row.error_code??null,error:row.error_code?gradingMessages[row.error_code]||gradingMessages.UNAVAILABLE:null,...(row.status==='graded'?{modelAnswer:row.snapshot.model_answer}: {})};}
@@ -46,8 +47,7 @@ export async function gradeShortAnswer(uid:string,id:unknown){
   await client.query('COMMIT');
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  try{
-  const key=await readStudentGeminiKeyForGrading(uid);if(!key)throw new GradingError('KEY_MISSING');
-  const {grade,model}=await gradeWithGemini(key,row.snapshot as ShortAnswerDefinition,row.answer);
+  const {grade,model}=await gradeWithConfiguredCredentials(uid,row.snapshot as ShortAnswerDefinition,row.answer);
   await pool.query(`UPDATE public.short_answer_attempts SET status='graded',result=$1::jsonb,model=$2,lease_id=null,error_code=null,retry_at=null,updated_at=now() WHERE id=$3 AND user_uid=$4 AND lease_id=$5`,[JSON.stringify(grade),model,attemptId,uid,lease]);
  }catch(error){const failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
   await pool.query(`UPDATE public.short_answer_attempts SET status='failed',error_code=$1,retry_at=now()+($2*interval '1 second'),lease_id=null,updated_at=now() WHERE id=$3 AND user_uid=$4 AND lease_id=$5`,[failure.code,failure.delaySeconds,attemptId,uid,lease]);

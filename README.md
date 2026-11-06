@@ -197,6 +197,8 @@ The PDF portal shares the MCQ page's local design system and provides subject dr
 
 ### Student-owned Gemini API keys
 
+**Shared grading pool:** configure the server-only `GEMINI_GRADING_POOL` Vercel Secret to use up to 20 authorized keys for all students. When empty, the personal-key flow below remains active. See [secure setup and project quota grouping](docs/gemini-grading-pool.md). Pool credentials never enter client responses or the database. Apply `supabase/migrations/20261106044218_gemini_grading_pool.sql` before enabling it.
+
 Profile & Settings provides optional Save, Replace and Remove controls for a student's own Gemini API key. Keys are not validated against Google on save and saving consumes no provider quota. Short-answer grading uses only the authenticated student's stored key; their Google project's quota and billing apply.
 
 Apply `supabase/migrations/20261104022545_student_gemini_keys.sql` before enabling this backend. Configure a dedicated server-only `STUDENT_API_KEY_ENCRYPTION_KEY` containing 64 random hexadecimal characters (32 bytes), separate from session and backup secrets. Do not expose it through Vite variables or commit it. The app uses AES-256-GCM with a fresh IV and the student's account ID as authenticated context. There is no plaintext-key retrieval endpoint; the settings API reads only saved status, the final four characters and update time. It is queried only when opening settings or after key changes, not during MCQ activity.

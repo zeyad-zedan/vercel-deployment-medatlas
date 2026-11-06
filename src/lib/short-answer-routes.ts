@@ -12,7 +12,7 @@ shortAnswerRouter.use(async(req:AuthRequest,res,next)=>{
   if(req.method==='POST'&&req.path==='/answers')return res.json({attempt:await service.saveShortAnswer(uid,req.body?.questionId,req.body?.answer)});
   const match=req.path.match(/^\/answers\/(\d+)(\/grade)?$/);
   if(match&&req.method==='GET'&&!match[2])return res.json({attempt:await service.getShortAnswerAttempt(uid,match[1])});
-  if(match&&req.method==='POST'&&match[2]){if(req.body?.consent!==true)return res.status(400).json({error:'Confirm using your Gemini key to send this answer to Google for grading.'});return res.json({attempt:await service.gradeShortAnswer(uid,match[1])});}
+  if(match&&req.method==='POST'&&match[2]){if(req.body?.consent!==true)return res.status(400).json({error:'Confirm sending this answer to Google for grading.'});return res.json({attempt:await service.gradeShortAnswer(uid,match[1])});}
   next();
  }catch(error){
   if(error instanceof service.ShortAnswerError)return res.status(error.status).json({error:error.message});
