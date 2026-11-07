@@ -2870,6 +2870,7 @@ async function openLectureStudy(userUid: string, lectureId: number, shuffleOptio
     )).orderBy(sql`CASE WHEN ${examSessions.status} = 'in_progress' THEN 0 ELSE 1 END`,
       desc(sql`${examSessions.totalQuestions} - ${examSessions.unansweredCount}`), desc(examSessions.startedAt), desc(examSessions.id)).limit(1).for('update');
     const published = await tx.select({ id: questions.id, correctAnswer: questions.correctAnswer, matchingGroupId: sql<string>`${questions.matching}->>'groupId'`,shortAnswerId:questions.shortAnswerId,shortAnswerMaxMarks:questions.shortAnswerMaxMarks,
+      hasOldExams: sql<boolean>`regexp_replace(COALESCE(${questions.tags},'')||','||COALESCE(${questions.specialTags},''), '[[:space:]]', '', 'g') ~* '(^|[,;|،])oldexams?($|[,;|،])'`,
       hasTags: sql<boolean>`regexp_replace(COALESCE(${questions.tags},'')||','||COALESCE(${questions.specialTags},''), '[[:space:],;|،]', '', 'g') <> ''` }).from(questions)
       .where(and(eq(questions.lectureId, lectureId), eq(questions.status, 'published'))).orderBy(asc(questions.id));
     if (!published.length) throw new ClientSafeError('No published questions are available for this lecture.', 400);

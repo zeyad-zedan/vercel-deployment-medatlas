@@ -59,10 +59,10 @@ export function parseSpecialTags(raw?: string | null): string[] {
 }
 
 /** Stable partition: tagging changes priority, never IDs, answer keys, or within-bucket order. */
-export function prioritizeTaggedQuestions<T extends {tags?:string|null;specialTags?:string|null;hasTags?:boolean}>(questions:readonly T[]):T[]{
-  const tagged:T[]=[],ordinary:T[]=[];
-  for(const question of questions){const hasTags=question.hasTags??(parseSpecialTags(question.tags).length>0||parseSpecialTags(question.specialTags).length>0);(hasTags?tagged:ordinary).push(question);}
-  return [...tagged,...ordinary];
+export function prioritizeTaggedQuestions<T extends {tags?:string|null;specialTags?:string|null;hasTags?:boolean;hasOldExams?:boolean}>(questions:readonly T[]):T[]{
+  const exams:T[]=[],tagged:T[]=[],ordinary:T[]=[];
+  for(const question of questions){const tags=[...parseSpecialTags(question.tags),...parseSpecialTags(question.specialTags)];const oldExams=question.hasOldExams??tags.some(tag=>/^old\s*exams?$/i.test(tag));const hasTags=question.hasTags??tags.length>0;(oldExams?exams:hasTags?tagged:ordinary).push(question);}
+  return [...exams,...tagged,...ordinary];
 }
 
 export interface QuestionTagBadge {
