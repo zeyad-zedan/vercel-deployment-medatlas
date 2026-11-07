@@ -9,7 +9,7 @@ export default function PracticalView({catalog,dashboardData,onStartSession,onSh
  const linkedLectureId=useLectureLinkId();
  const linkedSubjectId=subjects.find((subject:any)=>subject.lectures.some((lecture:any)=>lecture.id===linkedLectureId))?.id;
  useEffect(()=>{if(linkedLectureId)setSearch('');},[linkedLectureId]);
- useScrollToLecture(linkedLectureId,Boolean(linkedSubjectId));
+ useScrollToLecture(linkedLectureId,Boolean(linkedSubjectId&&!search.trim()));
  const query=search.trim().toLocaleLowerCase();
  const visible=subjects.map((subject:any)=>({...subject,lectures:subject.lectures.filter((section:any)=>`${subject.title} ${section.title}`.toLocaleLowerCase().includes(query))})).filter((subject:any)=>subject.lectures.length);
  const button='inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed';

@@ -527,7 +527,7 @@ export const SubjectsAndLecturesView: React.FC<{
   useEffect(()=>{
     if(linkedSubjectId){setSelectedModuleId('all');setLectureSearch('');setExpandedSubjectIds(previous=>previous.has(linkedSubjectId)?previous:new Set([...previous,linkedSubjectId]));}
   },[linkedLectureId,linkedSubjectId]);
-  useScrollToLecture(linkedLectureId,Boolean(linkedSubjectId&&expandedSubjectIds.has(linkedSubjectId)));
+  useScrollToLecture(linkedLectureId,Boolean(linkedSubjectId&&expandedSubjectIds.has(linkedSubjectId)&&!search&&selectedModuleId==='all'));
   const [expandedNotesLectureId, setExpandedNotesLectureId] = useState<number | null>(null);
   const [activePdf, setActivePdf] = useState<{ url: string; title: string; initialPage?: number } | null>(null);
   const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
