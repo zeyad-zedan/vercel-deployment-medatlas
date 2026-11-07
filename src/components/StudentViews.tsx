@@ -90,7 +90,7 @@ export const DashboardView: React.FC<{
       {/* Header & Primary Action */}
       <PageHeading eyebrow="Your workspace" title="A little progress, every day."
         description="Pick up where you left off, explore a lecture, or revisit a question.">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
           {summary.totalIncorrectAnswers > 0 && (
             <button
               type="button"
@@ -110,23 +110,23 @@ export const DashboardView: React.FC<{
           <button
             type="button"
             onClick={() => onNavigateTab('lectures')}
-            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Start studying
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigateTab('lectures')}
-            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Lectures
           </button>
           <button
             type="button"
             onClick={() => onNavigateTab('practical')}
-            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Practical
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('lectures')}
+            className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Start studying
           </button>
         </div>
       </PageHeading>
