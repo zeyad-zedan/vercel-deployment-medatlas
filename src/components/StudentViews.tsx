@@ -112,6 +112,13 @@ export const DashboardView: React.FC<{
             onClick={() => onNavigateTab('lectures')}
             className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
+            Start studying
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('lectures')}
+            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
             Lectures
           </button>
           <button
