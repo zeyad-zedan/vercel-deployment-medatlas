@@ -4310,6 +4310,9 @@ export async function getStudentDashboardAnalytics(userUid: string) {
                 ? Math.round((lectCorrect / Math.max(1,lectCorrect+lectIncorrect)) * 100)
                 : 0,
             lastAttemptAt: lectAttempts[0]?.answeredAt ?? null,
+            activeSessionId: userSessions.find(session => session.lectureId === lect.id && session.mode !== 'exam' && session.status === 'in_progress')?.id ?? null,
+            reviewSessionId: (userSessions.find(session => session.lectureId === lect.id && session.status === 'completed')
+              ?? userSessions.find(session => session.lectureId === lect.id && session.mode !== 'exam' && session.totalQuestions > session.unansweredCount))?.id ?? null,
           };
         });
 

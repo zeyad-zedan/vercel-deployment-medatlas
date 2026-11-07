@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 const PracticalView=lazy(()=>import('./components/PracticalView.tsx'));
 import {catalogByContentType} from './lib/lecture-kinds.ts';
+import {subjectLibraryTab} from './lib/subject-library.ts';
 import {
   BookOpen,
   Bookmark,
@@ -632,7 +633,9 @@ export default function App() {
                   onNavigateTab={setActiveTab}
                   onOpenSubject={(subjectId) => {
                     setSelectedSubjectId(subjectId);
-                    setActiveTab('lectures');
+                    const subject = catalog?.subjects?.find((item: any) => item.id === subjectId)
+                      ?? dashboardData?.subjectProgress?.find((item: any) => item.subjectId === subjectId);
+                    setActiveTab(subjectLibraryTab(subject?.title ?? ''));
                   }}
                 />
               )}
@@ -654,7 +657,7 @@ export default function App() {
 
 
               {activeTab === 'practical' && (
-                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} onStartSession={handleStartSession}/></Suspense>
+                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} initialSelectedSubjectId={selectedSubjectId} onStartSession={handleStartSession} onOpenSession={handleOpenExistingSession}/></Suspense>
               )}
 
               {activeTab === 'practice' && (

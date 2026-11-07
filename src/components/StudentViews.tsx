@@ -5,6 +5,7 @@ import { GeminiKeySettings } from './GeminiKeySettings.tsx';
 import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
 import { groupLectureModules } from '../lib/lecture-modules.ts';
 import {useLectureLinkId,useScrollToLecture} from '../lib/use-lecture-link.ts';
+import {subjectLibraryTab} from '../lib/subject-library.ts';
 import { ExamCompletionGate } from '../lib/exam-completion.ts';
 import { QuestionReportButton } from './QuestionReportButton.tsx';
 import { BookmarkButton } from './BookmarkButton.tsx';
@@ -214,7 +215,7 @@ export const DashboardView: React.FC<{
               Your subjects
             </h2>
             <p className="text-xs text-slate-500">
-              Choose a subject to browse its lectures and question banks.
+              Choose a subject to browse its lectures, practical sections and question banks.
             </p>
           </div>
           <button
@@ -240,12 +241,12 @@ export const DashboardView: React.FC<{
               <button
                 type="button"
                 key={subj.subjectId}
-                aria-label={`Browse ${subj.title} lectures`}
+                aria-label={`Browse ${subj.title} ${subjectLibraryTab(subj.title)==='practical'?'practical sections':'lectures'}`}
                 onClick={() => {
                   if (onOpenSubject) {
                     onOpenSubject(subj.subjectId);
                   } else {
-                    onNavigateTab('lectures');
+                    onNavigateTab(subjectLibraryTab(subj.title));
                   }
                 }}
                 className="bg-white rounded-xl border border-slate-200 hover:border-[var(--ma-brand)] p-5 flex flex-col justify-between transition-colors cursor-pointer group text-left"

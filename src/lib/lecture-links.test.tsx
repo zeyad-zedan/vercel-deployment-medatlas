@@ -9,7 +9,7 @@ const previous=new Map<string,PropertyDescriptor|undefined>();
 for(const [name,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,localStorage:dom.window.localStorage,IS_REACT_ACT_ENVIRONMENT:true})){previous.set(name,Object.getOwnPropertyDescriptor(globalThis,name));Object.defineProperty(globalThis,name,{configurable:true,writable:true,value});}
 let scrolled:string[]=[];dom.window.HTMLElement.prototype.scrollIntoView=function(){scrolled.push(this.id);};
 const {createRoot}=await import('react-dom/client');
-const {SubjectsAndLecturesView}=await import('../components/StudentViews.tsx');
+const {SubjectsAndLecturesView,DashboardView}=await import('../components/StudentViews.tsx');
 const {default:PracticalView}=await import('../components/PracticalView.tsx');
 after(()=>{dom.window.close();for(const [name,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete(globalThis as any)[name];}});
 test('lecture links validate identifiers and preserve the correct library route',()=>{
@@ -36,5 +36,28 @@ test('a practical-section link expands the right subject without starting study 
  try{
   await act(async()=>root.render(<PracticalView dashboardData={{}} catalog={{subjects:[{id:45,title:'Anatomy',lectures:[section]}],lectures:[section]}} onStartSession={()=>starts++}/>));
   assert.equal(host.querySelector('#lecture-76')?.closest('details')?.open,true);assert.ok(scrolled.includes('lecture-76'));assert.equal(starts,0);assert.equal(host.querySelector('[role=dialog]'),null);
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('home subject cards send Anatomy and Histology to practical while theory subjects keep lectures',async()=>{
+ dom.window.history.replaceState({},'', '/');
+ const host=dom.window.document.getElementById('root')!,root=createRoot(host),tabs:string[]=[];
+ try{
+  await act(async()=>root.render(<DashboardView loading={false} dashboardData={{subjectProgress:['Anatomy','Histology','Biochemistry'].map((title,i)=>({subjectId:i+1,title,lectures:[]}))}} onNavigateTab={tab=>tabs.push(tab)} onStartQuickSession={()=>{throw new Error('Browsing must not start a quiz');}} onOpenSession={()=>{throw new Error('Browsing must not resume a quiz');}}/>));
+  for(const title of ['Anatomy','Histology','Biochemistry']){
+   const button=(Array.from(host.querySelectorAll('button')) as HTMLButtonElement[]).find(node=>node.getAttribute('aria-label')?.startsWith(`Browse ${title} `));assert.ok(button);
+   await act(async()=>button.click());
+  }
+  assert.deepEqual(tabs,['practical','practical','lectures']);
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('a home subject selection expands its practical sections without starting a quiz',async()=>{
+ dom.window.history.replaceState({},'', '/practical');
+ const host=dom.window.document.getElementById('root')!,root=createRoot(host);let starts=0;
+ const section={id:76,title:'Scapula',lectureNumber:1,contentType:'practical',questionCount:30};
+ try{
+  await act(async()=>root.render(<PracticalView dashboardData={{}} initialSelectedSubjectId={45} catalog={{subjects:[{id:45,title:'Anatomy',lectures:[section]}],lectures:[section]}} onStartSession={()=>starts++}/>));
+  assert.equal(host.querySelector('#lecture-76')?.closest('details')?.open,true);assert.equal(starts,0);
  }finally{await act(async()=>root.unmount());}
 });

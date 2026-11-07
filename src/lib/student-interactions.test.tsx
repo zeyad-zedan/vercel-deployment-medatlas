@@ -48,6 +48,21 @@ test('practical student controls select the section and start the existing study
  try{await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3}]}]}} onStartSession={params=>{started=params;}}/>));assert.match(text(),/3\/8 questions/);assert.ok(![...host().querySelectorAll('button')].some(b=>b.textContent==='Short Answers'));await click('Continue section');assert.deepEqual(started.lectureIds,[82]);await change('input[type=search]','No match');assert.match(text(),/No sections match/);}finally{await act(async()=>root.unmount());}
 });
 
+test('practical restart creates a separate attempt while continue and review open their saved sessions',async()=>{
+ reset();const starts:any[]=[],opened:number[]=[],section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8};
+ const progress={lectureId:82,uniqueQuestionsAttempted:3,activeSessionId:102,reviewSessionId:101};
+ const root=createRoot(host());
+ try{
+  await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[progress]}]}} onStartSession={params=>{starts.push(params);}} onOpenSession={id=>{opened.push(id);}}/>));
+  await click('Continue section');await click('Review answers');assert.deepEqual(opened,[102,101]);assert.equal(starts.length,0);
+  await click('Restart session');assert.equal(starts.length,0);assert.match(text(),/previous answers, grades, progress and bookmarks will stay saved/);
+  await click('Cancel');assert.equal(starts.length,0);
+  await click('Restart session');await click('Start fresh attempt');
+  assert.deepEqual(starts,[{mode:'study',lectureIds:[82],requestedCount:8,title:'Bones — Fresh attempt'}]);
+  assert.equal(progress.reviewSessionId,101);assert.equal(progress.uniqueQuestionsAttempted,3);assert.match(text(),/3\/8 questions/);
+ }finally{await act(async()=>root.unmount());}
+});
+
 test('matching student choices and bookmarks save immediately and six-question navigation fetches only the next batch',async()=>{
  reset();const choices=[{id:'c1',text:'Head'},{id:'c2',text:'Shaft'}];const questions=Array.from({length:8},(_,i)=>({id:i+1,index:i,questionText:`Label ${i+1}`,contentLoaded:i<6,questionType:'matching',matching:i<6?{groupId:'bone',number:String(i+1),prompt:'Match numbered bones',choices,correctChoiceId:'c1'}:undefined,selectedDisplayed:null,submitted:false,isBookmarked:false,images:[],options:{A:'Correct',B:'Incorrect',C:'None',D:'None'},correctDisplayedOption:'A',explanation:'Bone explanation'}));
  const session={id:99001,title:'Bones section',mode:'study',status:'in_progress',questions,totalQuestions:8,correctCount:0,incorrectCount:0,unansweredCount:8,elapsedSeconds:0,remainingSeconds:null,questionBatch:{size:6,offset:0}};const answers:any[]=[],bookmarks:any[]=[],batches:number[]=[];
