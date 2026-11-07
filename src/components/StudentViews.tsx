@@ -4,6 +4,7 @@ import { AcademicProfileFields } from './AcademicProfileFields.tsx';
 import { GeminiKeySettings } from './GeminiKeySettings.tsx';
 import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
 import { groupLectureModules } from '../lib/lecture-modules.ts';
+import {useLectureLinkId,useScrollToLecture} from '../lib/use-lecture-link.ts';
 import { ExamCompletionGate } from '../lib/exam-completion.ts';
 import { QuestionReportButton } from './QuestionReportButton.tsx';
 import { BookmarkButton } from './BookmarkButton.tsx';
@@ -514,6 +515,8 @@ export const SubjectsAndLecturesView: React.FC<{
   isAdmin = false,
 }) => {
   const subjects = catalog?.subjects || [];
+  const linkedLectureId=useLectureLinkId();
+  const linkedSubjectId=subjects.find((subject:any)=>subject.lectures?.some((lecture:any)=>lecture.id===linkedLectureId))?.id;
   const [lectureSearch, setLectureSearch] = useState('');
   const search = lectureSearch.trim().toLocaleLowerCase();
   const modules = catalog?.modules || [];
@@ -521,6 +524,10 @@ export const SubjectsAndLecturesView: React.FC<{
   const [selectedModuleId, setSelectedModuleId] = useState<number | 'all'>('all');
   const [expandedSubjectIds, setExpandedSubjectIds] = useState<Set<number>>(() =>
     new Set(typeof initialSelectedSubjectId === 'number' ? [initialSelectedSubjectId] : []));
+  useEffect(()=>{
+    if(linkedSubjectId){setSelectedModuleId('all');setLectureSearch('');setExpandedSubjectIds(previous=>previous.has(linkedSubjectId)?previous:new Set([...previous,linkedSubjectId]));}
+  },[linkedLectureId,linkedSubjectId]);
+  useScrollToLecture(linkedLectureId,Boolean(linkedSubjectId&&expandedSubjectIds.has(linkedSubjectId)));
   const [expandedNotesLectureId, setExpandedNotesLectureId] = useState<number | null>(null);
   const [activePdf, setActivePdf] = useState<{ url: string; title: string; initialPage?: number } | null>(null);
   const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
@@ -702,7 +709,8 @@ export const SubjectsAndLecturesView: React.FC<{
                       return (
                         <div
                           key={lect.id}
-                          className="ma-lecture-card space-y-4"
+                          id={`lecture-${lect.id}`}
+                          className="ma-lecture-card space-y-4 scroll-mt-24"
                         >
                           {/* Lecture Title & Details */}
                           <div className="space-y-1">

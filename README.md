@@ -274,6 +274,10 @@ Study/review Next and Previous controls live in a fixed bottom navigation bar, o
 
 Vercel Web Analytics (`@vercel/analytics/react`) records visits and page views on the deployed site. Enable Web Analytics for the existing Vercel project before the release. Localhost and temporary Cloudflare previews do not send analytics. The client removes query strings and fragments and groups `/session/:id` as `/session`; API/document URLs are excluded. No answer text, API key, username or custom student event is sent. Analytics uses Vercel endpoints and adds no Supabase queries or tables. View visitors, page views and traffic breakdowns in the project's Analytics dashboard; collection starts after setup rather than backfilling old visits.
 
+### Lecture directory and direct links
+
+`/lecture-directory.html` lists the published lectures, question banks and practical sections. A lecture link such as `/lectures?lecture=92#lecture-92` opens its subject and scrolls to the lecture card; practical links use `/practical?lecture=76#lecture-76`. Links do not start a quiz or open a PDF automatically. The directory is a static publication snapshot and should be refreshed when entries are added or renamed. Run `npm run test:lecture-links` to check link parsing and library navigation.
+
 
 ### Arabic Gemini setup guide
 
