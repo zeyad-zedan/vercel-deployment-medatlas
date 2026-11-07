@@ -16,7 +16,7 @@ import {
 
 test('tag priority is stable, recognizes both tag fields, and ignores empty separators', () => {
   const pool = [{id:1,tags:' ,;|، '},{id:2,tags:'Bone'},{id:3,specialTags:'Important'},{id:4,tags:''},{id:5,tags:'Old Exams'}];
-  assert.deepEqual(prioritizeTaggedQuestions(pool).map(q=>q.id),[5,2,3,1,4]);
+  assert.deepEqual(prioritizeTaggedQuestions(pool).map(q=>q.id),[3,5,2,1,4]);
   assert.deepEqual(pool.map(q=>q.id),[1,2,3,4,5]);
 });
 
@@ -24,6 +24,11 @@ test('old exams precede course-tagged questions with full rows and lightweight r
  const rows=[{id:1,tags:'Biochemistry, L19'},{id:2,tags:'Biochemistry, Old Exams'},{id:3,tags:'Biochemistry',specialTags:'Old Exams'},{id:4,tags:''}];
  assert.deepEqual(prioritizeTaggedQuestions(rows).map(q=>q.id),[2,3,1,4]);
  assert.deepEqual(prioritizeTaggedQuestions([{id:1,hasTags:true,hasOldExams:false},{id:2,hasTags:true,hasOldExams:true},{id:3,hasTags:false,hasOldExams:false}]).map(q=>q.id),[2,1,3]);
+});
+
+test('important revision questions precede old exams and generic tags without dropping any items',()=>{
+ const rows=[{id:1,tags:'Anatomy'},{id:2,specialTags:'Old Exams'},{id:3,tags:'Anatomy, Important'},{id:4,hasImportant:true,hasTags:true},{id:5}];
+ assert.deepEqual(prioritizeTaggedQuestions(rows).map(q=>q.id),[3,4,2,1,5]);
 });
 
 test('tagged questions take priority before count selection and remain first after shuffling', () => {
