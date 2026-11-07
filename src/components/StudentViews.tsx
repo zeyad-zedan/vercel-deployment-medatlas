@@ -112,7 +112,14 @@ export const DashboardView: React.FC<{
             onClick={() => onNavigateTab('lectures')}
             className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            start studying
+            Lectures
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('practical')}
+            className="order-first w-full sm:order-none sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Practical
           </button>
         </div>
       </PageHeading>
@@ -126,7 +133,7 @@ export const DashboardView: React.FC<{
               Welcome to your Medical Curriculum &amp; Question Bank!
             </p>
             <p className="text-slate-600 leading-relaxed">
-              You haven't attempted any questions yet. Choose a module card below or select start studying to browse your lectures and begin tracking your progress.
+              You haven't attempted any questions yet. Choose a subject card below, or select Lectures or Practical to begin studying and tracking your progress.
             </p>
           </div>
         </div>
