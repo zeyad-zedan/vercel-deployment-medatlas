@@ -8,6 +8,13 @@
   },
   "headers": [
     {
+      "source": "/impulse/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+        { "key": "Cache-Control", "value": "private, no-store" }
+      ]
+    },
+    {
       "source": "/lectures/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "private, no-store, max-age=0" }]
     },
@@ -23,6 +30,14 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/impulse/upload",
+      "destination": "/impulse/index.html"
+    },
+    {
+      "source": "/impulse/quiz/:slug",
+      "destination": "/impulse/index.html"
+    },
     {
       "source": "/__/auth/(.*)",
       "destination": "https://pivotal-bedrock-c01dl.firebaseapp.com/__/auth/$1"
