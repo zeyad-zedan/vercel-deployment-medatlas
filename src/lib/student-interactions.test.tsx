@@ -243,3 +243,21 @@ test('study navigator collapses on downward scrolling, expands upwards, and does
   await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:30});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'true');assert.equal(reads,0);
  }finally{await act(async()=>root.unmount());if(previousY)Object.defineProperty(dom.window,'scrollY',previousY);}
 });
+
+
+test('mobile touch direction ignores an image layout adjustment and permits a deliberate reverse gesture',async()=>{
+ reset();api.syncSessionProgress=async()=>({success:true});
+ const q={id:188,index:0,questionText:'Image question',images:[],options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A'};
+ const root=createRoot(host()),prior=Object.getOwnPropertyDescriptor(dom.window,'scrollY');
+ const scroll=(y:number)=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:y});window.dispatchEvent(new dom.window.Event('scroll'));};
+ const touch=(type:string,y:number)=>{const event=new dom.window.Event(type);Object.defineProperty(event,'touches',{value:[{clientY:y}]});window.dispatchEvent(event);};
+ try{
+  Object.defineProperty(dom.window,'scrollY',{configurable:true,value:0});
+  await act(async()=>root.render(<McqSessionPlayer initialSession={{id:188001,mode:'study',status:'in_progress',questions:[q],totalQuestions:1}} onExit={()=>{}} onSessionCompleted={()=>{}}/>));
+  const open=()=>host().querySelector('button[aria-controls="study-question-navigator"]')!.getAttribute('aria-expanded');
+  await act(async()=>{touch('touchstart',600);touch('touchmove',500);scroll(180);});assert.equal(open(),'false');
+  await act(async()=>{await new Promise(r=>setTimeout(r,370));});
+  await act(async()=>scroll(90));assert.equal(open(),'false','Image loading must not override the downward touch direction.');
+  await act(async()=>{touch('touchmove',590);scroll(10);});assert.equal(open(),'true');
+ }finally{await act(async()=>root.unmount());if(prior)Object.defineProperty(dom.window,'scrollY',prior);}
+});

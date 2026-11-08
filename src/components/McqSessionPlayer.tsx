@@ -81,12 +81,21 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
   useEffect(()=>{
     let lastY=window.scrollY,direction=0,travel=0,settleUntil=0;
+    let touchY=0,intentDirection=0,intentUntil=0;
+    const wheel=(event:WheelEvent)=>{if(event.deltaY){intentDirection=Math.sign(event.deltaY);intentUntil=performance.now()+700;}};
+    const touchStart=(event:TouchEvent)=>{touchY=event.touches[0]?.clientY??0;};
+    const touchMove=(event:TouchEvent)=>{
+      const next=event.touches[0]?.clientY??touchY,delta=touchY-next;touchY=next;
+      if(delta){intentDirection=Math.sign(delta);intentUntil=performance.now()+1000;}
+    };
     const followScroll=()=>{
-      const nextY=Math.max(0,window.scrollY),delta=nextY-lastY;
+      const maximum=document.documentElement.scrollHeight-window.innerHeight;
+      const nextY=Math.max(0,maximum>0?Math.min(window.scrollY,maximum):window.scrollY),delta=nextY-lastY;
       lastY=nextY;
       // Header resizing and browser scroll anchoring are not a new gesture.
       if(performance.now()<settleUntil||delta===0)return;
       const nextDirection=Math.sign(delta);
+      if(performance.now()<intentUntil&&intentDirection!==nextDirection){travel=0;direction=0;return;}
       if(nextDirection!==direction){direction=nextDirection;travel=0;}
       travel+=Math.abs(delta);
       const shouldOpen=nextY<24||(direction<0&&travel>=64);
@@ -97,7 +106,10 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
       }
     };
     window.addEventListener('scroll',followScroll,{passive:true});
-    return()=>window.removeEventListener('scroll',followScroll);
+    window.addEventListener('wheel',wheel,{passive:true});
+    window.addEventListener('touchstart',touchStart,{passive:true});
+    window.addEventListener('touchmove',touchMove,{passive:true});
+    return()=>{window.removeEventListener('scroll',followScroll);window.removeEventListener('wheel',wheel);window.removeEventListener('touchstart',touchStart);window.removeEventListener('touchmove',touchMove);};
   },[]);
   const batches = useSessionBatches(session, setSession, currentIndex, service);
 
@@ -613,7 +625,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
       {/* 1. HIGH-EFFICIENCY STICKY COMMAND BAR (Header + Navigator Unified) */}
       <div
         ref={panelAndMcqRef}
-        className="ma-study-command sticky z-20 scroll-mt-24 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-xs px-3 py-2 sm:px-4 sm:py-2.5 space-y-2 transition-all"
+        className="ma-study-command sticky z-20 scroll-mt-24 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-xs px-3 py-2 sm:px-4 sm:py-2.5 ma-study-command-animated"
       >
         {/* Top Control Line */}
         <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
@@ -649,8 +661,12 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           </div>
 
           <button type="button" aria-expanded={navigatorOpen} aria-controls="study-question-navigator" onClick={()=>setNavigatorOpen(open=>!open)} className="ml-auto px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg whitespace-nowrap">{navigatorOpen?'Hide questions':`Questions (${currentIndex+1}/${questions.length})`}</button>
-          {/* Right: Tools & Timer */}
-          <div style={{display:navigatorOpen?undefined:'none'}} className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        </div>
+
+        <div className="ma-nav-collapse" data-open={navigatorOpen} aria-hidden={!navigatorOpen} inert={!navigatorOpen}>
+          <div className="ma-nav-collapse-content">
+{/* Right: Tools & Timer */}
+          <div className="flex flex-wrap items-center justify-end gap-2 py-2">
             {/* Flag Button */}
             <button
               type="button"
@@ -736,10 +752,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
               </button>
             )}
           </div>
-        </div>
-
         {/* Bottom Control Line: Continuous Single-Row MCQ Numbers Strip + Micro Legend */}
-        <div id="study-question-navigator" style={{display:navigatorOpen?undefined:'none'}} className="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+        <div id="study-question-navigator" className="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
           {/* Micro Legend & Counter */}
           <div className="hidden lg:flex items-center gap-2.5 text-[11px] text-slate-500 font-medium shrink-0">
             <span className="font-bold text-slate-800">
@@ -856,6 +870,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           {/* Quick Progress text */}
           <div className="shrink-0 text-[11px] text-slate-500 font-mono-tabular">
             <span>{answeredCount}/{questions.length} Solved</span>
+          </div>
+        </div>
           </div>
         </div>
       </div>

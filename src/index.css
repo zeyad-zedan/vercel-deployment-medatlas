@@ -42,3 +42,15 @@
 .ma-grade-point-missed { background:#fff5f4; border-color:#ebc3bf; color:#993f36; }
 .ma-grade-model { margin-top:20px; padding:14px; border:1px solid #d9e2e5; border-radius:8px; background:#f7f9fa; color:#243b45; }
 @media(max-width:640px) { .ma-grade-summary,.ma-grade-body { padding:16px; } }
+
+/* Keep the contents mounted while their container smoothly clips to zero height. */
+.ma-nav-collapse { display:grid; grid-template-rows:0fr; opacity:0; transition:grid-template-rows 180ms ease-out,opacity 140ms ease-out; }
+.ma-nav-collapse[data-open="true"] { grid-template-rows:1fr; opacity:1; }
+.ma-nav-collapse-content { min-height:0; overflow:hidden; }
+@media(prefers-reduced-motion:reduce) { .ma-nav-collapse { transition:none; } }
+@media(max-width:640px) {
+  .ma-study-command-animated > :first-child > :first-child { flex:1; }
+  .ma-study-command-animated > :first-child > :first-child > :last-child { min-width:0; }
+  .ma-study-command-animated > :first-child > button { margin-left:0; min-height:44px; }
+  #study-question-navigator button { min-width:36px; min-height:36px; }
+}
