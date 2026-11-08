@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { MAX_QUESTION_IMAGE_BYTES, QUESTION_IMAGE_PREFIX, type QuestionImage } from './question-images.ts';
 import { getTelegramFileDownloadUrl, isTelegramConfigured } from './telegram-storage.ts';
+import {protectedImageCache} from './protected-image-cache.ts';
 
 function key() {
   const secret = process.env.AUTH_SESSION_SECRET;
@@ -105,6 +106,8 @@ export async function fetchQuestionImage(image:QuestionImage):Promise<Buffer> {
   if(downloading.has(cacheKey))return downloading.get(cacheKey)!;
   if(downloading.size>=8)throw new Error('Images are busy loading. Please retry.');
   const job=(async()=>{
+    const protectedCopy=await protectedImageCache(image);
+    if(protectedCopy){downloads.set(cacheKey,{buffer:protectedCopy,expires:Date.now()+3600000});return protectedCopy;}
     const url=await getTelegramFileDownloadUrl(image.telegramFileId!);
     const response=await fetch(url,{signal:AbortSignal.timeout(25000)});
     if(!response.ok || !response.body)throw new Error('Telegram image unavailable. Please retry.');

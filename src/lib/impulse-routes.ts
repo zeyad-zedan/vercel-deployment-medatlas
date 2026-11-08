@@ -62,7 +62,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
  async function access(req:Request,allowOldStamp=false){
   const uid=(req as AuthRequest).user!.uid;
   const value=read(cookie(req,'impulse_'+req.params.slug));required(value?.role==='student'&&value.uid===uid,'Enter the quiz password to continue.',401);
-  const row=(await pool.query('SELECT a.id,a.version_id,a.current_position,a.completed,q.title,q.slug,q.password_hash,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 AND q.slug=$3',[value.attempt,uid,req.params.slug])).rows[0];
+  const row=(await pool.query('SELECT a.id,a.quiz_id,a.version_id,a.current_position,a.completed,q.title,q.slug,q.password_hash,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 AND q.slug=$3',[value.attempt,uid,req.params.slug])).rows[0];
   required(row&&row.published_version,'Enter the quiz password to continue.',401);required(allowOldStamp||value.stamp===hash(row.password_hash),'The quiz password has changed. Enter the current password to resume.',401);
   if(req.method==='GET'&&req.path.endsWith('/session')&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
  }
@@ -93,7 +93,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   res.json({attemptId:a.id,versionId:a.version_id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
  }));
  r.get('/api/impulse/quiz/:slug/image/:id',wrap(async(req,res)=>{
-  const a=await access(req),q=(await pool.query('SELECT definition->\'image\' AS image FROM impulse.questions WHERE id=$1 AND version_id=$2',[req.params.id,a.version_id])).rows[0];required(q?.image);res.type(q.image.mimeType).send(await fetchQuestionImage(q.image));
+  const a=await access(req),image=await resolveCourseImage(String(req.params.id),a.version_id,a.quiz_id);required(image);res.type(image.mimeType).send(await fetchQuestionImage(image));
  }));
  r.post('/api/impulse/quiz/:slug/progress',wrap(async(req,res)=>{
   const a=await access(req),position=req.body.position;required(Number.isInteger(position)&&position>=0&&position<100,'Invalid position.',400);
@@ -123,4 +123,18 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
  }));
  r.post('/api/impulse/quiz/:slug/submit',wrap(async(req,res)=>{const a=await access(req);await pool.query('UPDATE impulse.attempts SET completed=true,updated_at=now() WHERE id=$1',[a.id]);res.json({ok:true});}));
  return r;
+}
+
+/** Resolve old open-tab URLs only within the student's authorized quiz. */
+export async function resolveCourseImage(questionId:string,versionId:string,quizId:string){
+ const direct=(await pool.query("SELECT definition->'image' AS image FROM impulse.questions WHERE id=$1 AND version_id=$2",[questionId,versionId])).rows[0];
+ if(direct)return direct.image;
+ const current=(await pool.query(`SELECT current.definition->'image' AS image FROM impulse.questions old
+ JOIN impulse.versions previous ON previous.id=old.version_id
+ JOIN impulse.questions current ON current.version_id=$2
+ AND (current.definition->>'id'=old.definition->>'id' OR
+ (old.definition->>'id'=old.id::text AND current.position=old.position AND current.definition->>'type'=old.definition->>'type'))
+ WHERE old.id=$1 AND previous.quiz_id=$3
+ ORDER BY (current.definition->>'id'=old.definition->>'id') DESC LIMIT 1`,[questionId,versionId,quizId])).rows[0];
+ return current?.image;
 }

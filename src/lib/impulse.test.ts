@@ -65,6 +65,10 @@ test('private quizzes require passwords, preserve versions and resume answers wi
   assert.equal(historical.questions[1].result.score,1);
   assert.equal(historical.questions[1].result._answerOptionText,'Two');
   assert.equal((await fetch(origin+'/api/impulse/publisher/quizzes',{method:'POST',headers:{Cookie:editor,'Content-Type':'application/json'},body:JSON.stringify(quiz)})).status,403);
+  const {resolveCourseImage}=await import('./impulse-routes.ts');
+  await pool.query("UPDATE impulse.questions SET definition=jsonb_set(definition,'{image}',$2::jsonb) WHERE id=$1",[historical.questions[1].id,JSON.stringify({id:'isolated-image-reference',mimeType:'image/png'})]);
+  assert.equal((await resolveCourseImage(mcq.id,historical.versionId,draft.id)).id,'isolated-image-reference','Old open-tab URLs must resolve to the current quiz image.');
+  assert.equal(await resolveCourseImage(mcq.id,historical.versionId,other.id),undefined,'Another quiz must not grant access to an old image URL.');
   const grants=(await pool.query("SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema='impulse' AND grantee IN ('anon','authenticated','PUBLIC')")).rows[0].n;assert.equal(grants,0);
  }finally{
   await new Promise<void>(r=>http.close(()=>r()));

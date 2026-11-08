@@ -2,9 +2,29 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { getAuthToken } from '../lib/api.ts';
 import { QUESTION_IMAGE_PREFIX, type QuestionImage } from '../lib/question-images.ts';
 
-type LoadedImage = {url?:string; error?:boolean};
-type ImageLoader = {loaded:Record<string,LoadedImage>;ensure:(images:QuestionImage[],retry?:boolean)=>void};
+type LoadedImage = {url?:string; error?:boolean;message?:string};
+type ImageLoader = {loaded:Record<string,LoadedImage>;ensure:(images:QuestionImage[],retry?:boolean)=>void;failed:(id:string)=>void};
 const ImageContext=createContext<ImageLoader|null>(null);
+
+async function imageBlob(source:string,signal:AbortSignal){
+  for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController(),cancel=()=>controller.abort();
+    signal.addEventListener('abort',cancel,{once:true});
+    const timeout=window.setTimeout(cancel,35000);
+    try{
+      if(signal.aborted)throw Error('Cancelled');
+      const token=getAuthToken(),response=await fetch(source,{headers:token?{Authorization:`Bearer ${token}`}:{},signal:controller.signal,cache:'no-store'});
+      if(!response.ok)throw Object.assign(Error(response.status===404?'This question image was updated or removed. Reopen the quiz to load the latest version.':'This figure could not load.'),{retryable:response.status===429||response.status>=500});
+      if(!response.headers.get('content-type')?.startsWith('image/'))throw Object.assign(Error('The image service returned an invalid response.'),{retryable:true});
+      const blob=await response.blob();if(!blob.size)throw Object.assign(Error('The image response was empty.'),{retryable:true});
+      return blob;
+    }catch(error:any){
+      if(signal.aborted||attempt===1||error.retryable===false)throw error;
+      await new Promise(resolve=>window.setTimeout(resolve,500));
+    }finally{window.clearTimeout(timeout);signal.removeEventListener('abort',cancel);}
+  }
+  throw Error('This figure could not load.');
+}
 
 function useImageLoader():ImageLoader {
   const [loaded,setLoaded]=useState<Record<string,LoadedImage>>({});
@@ -22,15 +42,12 @@ function useImageLoader():ImageLoader {
         try{
           if(!job.image.source?.startsWith(QUESTION_IMAGE_PREFIX) &&
              !/^\/api\/impulse\/quiz\/[A-Za-z0-9_-]{20,64}\/image\/[a-f0-9-]{36}$/.test(job.image.source||''))throw new Error('Invalid image source');
-          const token=getAuthToken();
-          const response=await fetch(job.image.source!,{headers:token?{Authorization:`Bearer ${token}`}:{},signal,cache:'no-store'});
-          if(!response.ok || !response.headers.get('content-type')?.startsWith('image/'))throw new Error('Image unavailable');
-          const blob=await response.blob();
+          const blob=await imageBlob(job.image.source!,signal);
           if(signal.aborted)return;
           const url=URL.createObjectURL(blob);urls.current.push(url);job.state='done';
           setLoaded(old=>({...old,[id]:{url}}));
-        }catch{
-          if(!signal.aborted){job.state='error';setLoaded(old=>({...old,[id]:{error:true}}));}
+        }catch(error:any){
+          if(!signal.aborted){job.state='error';setLoaded(old=>({...old,[id]:{error:true,message:error.message}}));}
         }finally{
           if(!signal.aborted){active.current--;pump.current();}
         }
@@ -53,7 +70,8 @@ function useImageLoader():ImageLoader {
     pump.current();
     return ()=>{alive.current=false;abort.current.abort();urls.current.forEach(URL.revokeObjectURL);urls.current=[];};
   },[]);
-  return {loaded,ensure};
+  const failed=useCallback((id:string)=>{const job=jobs.current.get(id);if(job)job.state='error';setLoaded(old=>({...old,[id]:{error:true,message:'Your browser could not display this figure.'}}));},[]);
+  return {loaded,ensure,failed};
 }
 
 export function useSessionImagePrefetch(questions: any[]) {
@@ -80,8 +98,8 @@ function ImageList({images,loader}:{images:QuestionImage[];loader:ImageLoader}) 
   return <div className="my-4 grid gap-3" aria-label="Question figures">{images.map((image,index)=>{
     const state=loader.loaded[image.id];
     return <figure key={image.id+index} className="rounded-xl border border-slate-200 bg-white p-3">
-      {state?.url ? <img src={state.url} alt={image.alt || `Question figure ${index+1}`} className="mx-auto max-h-[32rem] max-w-full rounded-lg object-contain"/> : state?.error ?
-        <div className="p-4 text-center text-sm text-amber-800" role="alert">This figure could not load. <button type="button" className="font-semibold underline" onClick={()=>loader.ensure([image],true)}>Retry image</button></div> :
+      {state?.url ? <img src={state.url} alt={image.alt || `Question figure ${index+1}`} onError={()=>loader.failed(image.id)} className="mx-auto max-h-[32rem] max-w-full rounded-lg object-contain"/> : state?.error ?
+        <div className="p-4 text-center text-sm text-amber-800" role="alert">{state.message||'This figure could not load.'} <button type="button" className="font-semibold underline" onClick={()=>loader.ensure([image],true)}>Retry image</button></div> :
         <div role="status" className="animate-pulse rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500">Loading figure {index+1}…</div>}
       {image.alt && <figcaption className="mt-2 text-center text-xs text-slate-500">{image.alt}</figcaption>}
     </figure>;

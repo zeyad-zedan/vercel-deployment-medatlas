@@ -261,3 +261,17 @@ test('mobile touch direction ignores an image layout adjustment and permits a de
   await act(async()=>{touch('touchmove',590);scroll(10);});assert.equal(open(),'true');
  }finally{await act(async()=>root.unmount());if(prior)Object.defineProperty(dom.window,'scrollY',prior);}
 });
+
+
+test('question images retry one temporary failure, reuse the loaded image, and recover from browser display errors',async()=>{
+ reset();const {QuestionImageProvider,QuestionImages}=await import('../components/QuestionImages.tsx');const originalFetch=globalThis.fetch;let calls=0;
+ globalThis.fetch=(async()=>{calls++;return calls===1?Response.json({error:'Temporary failure'},{status:503}):new Response(new Uint8Array([1,2,3]),{headers:{'Content-Type':'image/png'}});}) as typeof fetch;
+ const images=[{id:'image-retry-fixture',alt:'Test figure',source:'/api/question-images/test-fixture'}],root=createRoot(host());
+ try{
+  await act(async()=>root.render(<QuestionImageProvider questions={[{images}]}><QuestionImages images={images}/></QuestionImageProvider>));
+  await act(async()=>{await new Promise(r=>setTimeout(r,650));});assert.equal(calls,2);assert.ok(host().querySelector('img'));
+  await act(async()=>host().querySelector('img')!.dispatchEvent(new dom.window.Event('error')));assert.match(text(),/browser could not display/);
+  await click('Retry image');assert.equal(calls,3);assert.ok(host().querySelector('img'));
+  await act(async()=>root.render(<QuestionImageProvider questions={[{images}]}><QuestionImages images={images}/></QuestionImageProvider>));assert.equal(calls,3);
+ }finally{await act(async()=>root.unmount());globalThis.fetch=originalFetch;}
+});
