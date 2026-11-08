@@ -1030,7 +1030,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
               {/* Question Text Vignette */}
               <div className="space-y-3">
                 <QuestionImages images={currentQ.images}/>
-                <p className="ma-question-stem font-serif-academic text-slate-900">
+                <p className="ma-question-stem whitespace-pre-wrap font-serif-academic text-slate-900">
                   {currentQ.questionText}
                 </p>
 

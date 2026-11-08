@@ -2178,7 +2178,7 @@ export const BookmarksView: React.FC<{
                 </div>
 
                 <QuestionImages images={item.images}/>
-                <p className="text-sm sm:text-base font-serif-academic text-slate-900 leading-relaxed">
+                <p className="text-sm sm:text-base whitespace-pre-wrap font-serif-academic text-slate-900 leading-relaxed">
                   {item.questionText}
                 </p>
 

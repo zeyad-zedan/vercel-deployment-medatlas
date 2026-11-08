@@ -8,7 +8,7 @@ export function MatchingQuestion({question,questions,choices={},completed=false,
   const rows=(questions||[question]).filter(q=>q.matching?.groupId===question.matching?.groupId);
   return <section aria-label="Numbered image matching" className="space-y-4">
     <QuestionImages images={question.images}/>
-    <p className="ma-question-stem font-serif-academic">{question.matching.prompt}</p>
+    <p className="ma-question-stem whitespace-pre-wrap font-serif-academic">{question.matching.prompt}</p>
     <p className="text-xs text-slate-500">Choose a name for each numbered label. Each label counts as one question.</p>
     <div className="space-y-3">{rows.map(q=>{
       const selected=choices[q.id]??q.matchingChoiceId??'';

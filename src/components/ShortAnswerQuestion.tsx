@@ -25,7 +25,7 @@ export function ShortAnswerQuestion({question,sessionId,exam=false,completed=fal
  };
  return <section aria-label="Short-answer question" className="space-y-4">
   <QuestionImages images={question.images||[]}/>
-  <div><p className="text-xs font-semibold text-[var(--ma-brand)]">Short answer · {question.maxMarks||1} marks</p><h2 className="ma-question-stem font-serif-academic mt-2">{question.questionText}</h2></div>
+  <div><p className="text-xs font-semibold text-[var(--ma-brand)]">Short answer · {question.maxMarks||1} marks</p><h2 className="ma-question-stem whitespace-pre-wrap font-serif-academic mt-2">{question.questionText}</h2></div>
   <label className="block text-sm font-semibold" htmlFor={`short-answer-${question.id}`}>Your answer</label>
   <textarea id={`short-answer-${question.id}`} value={answer} disabled={busy||completed||disabled} maxLength={4000} rows={5} className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm disabled:bg-slate-50" placeholder="Write your answer…" onChange={event=>{setAnswer(event.target.value);textSaves.remember(question.id,event.target.value);try{localStorage.setItem(key,event.target.value);}catch{}}}/>
   {!completed&&<p className="text-xs text-slate-500">Typing stays on this device. Save answer stores it in your quiz, even without a Gemini key.</p>}

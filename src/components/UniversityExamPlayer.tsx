@@ -514,7 +514,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
               </div>
 
               {reviewingQuestion.questionType!=='short_answer'&&<QuestionImages images={reviewingQuestion.images}/>}
-              <div className="font-semibold text-slate-900 text-sm leading-relaxed">
+              <div className="font-semibold whitespace-pre-wrap text-slate-900 text-sm leading-relaxed">
                 {reviewingQuestion.questionType!=='short_answer'&&reviewingQuestion.questionText}
               </div>
               {reviewingQuestion.questionType==='short_answer'?<ShortAnswerQuestion key={reviewingQuestion.id} question={reviewingQuestion} sessionId={session.id} exam completed onSaved={result=>handleShortAnswer(reviewingQuestion,result)}/>:null}
@@ -760,7 +760,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                     <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>
                     {!currentQ.matching&&currentQ.questionType!=='short_answer'&&<QuestionImages images={currentQ.images}/>}
                     <div
-                      className="font-semibold text-slate-900 leading-relaxed"
+                      className="font-semibold whitespace-pre-wrap text-slate-900 leading-relaxed"
                       style={{ fontSize: currentFontSize }}
                     >
                       {!currentQ.matching && currentQ.questionType!=='short_answer' && currentQ.questionText}

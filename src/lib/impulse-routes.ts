@@ -2,6 +2,7 @@ import express,{type Request,type Response,type RequestHandler} from 'express';
 import {createHmac,createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import path from 'node:path';
 import {pool} from '../db/index.ts';
+import {refreshCourseAttempt} from './course-version.ts';
 import {hashPasswordAsync,verifyPasswordAsync,requireAuth,type AuthRequest} from '../middleware/auth.ts';
 import {createBoundedRateLimiter,type SharedRateLimitStore} from '../middleware/rate-limit.ts';
 import {uploadQuestionImage,imageForClient,imageForStorage,fetchQuestionImage} from './telegram-question-images.ts';
@@ -47,10 +48,12 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const {password,id}=req.body;required((!id&&typeof password==='string'&&password.length>=8&&password.length<=128)||(id&&(!password||(typeof password==='string'&&password.length>=8&&password.length<=128))),'Use a quiz password of 8–128 characters.',400);
   const passwordHash=password?await hashPasswordAsync(password):null,client=await pool.connect();
   try{await client.query('BEGIN');let quiz;
+   if(id){const previous=(await client.query('SELECT draft FROM impulse.quizzes WHERE id=$1 FOR UPDATE',[id])).rows[0];required(previous);
+    for(let i=0;i<valid.questions.length;i++)if(!req.body.questions[i]?.id&&previous.draft[i]?.type===valid.questions[i].type)valid.questions[i].id=previous.draft[i].id;}
    if(id){quiz=(await client.query('UPDATE impulse.quizzes SET title=$2,draft=$3,password_hash=COALESCE($4,password_hash),updated_at=now() WHERE id=$1 RETURNING id,slug',[id,valid.title,JSON.stringify(valid.questions),passwordHash])).rows[0];required(quiz);}
    else quiz=(await client.query('INSERT INTO impulse.quizzes(title,slug,password_hash,draft) VALUES($1,$2,$3,$4) RETURNING id,slug',[valid.title,randomBytes(18).toString('base64url'),passwordHash,JSON.stringify(valid.questions)])).rows[0];
    if(req.body.publish===true){const version=randomUUID();await client.query('INSERT INTO impulse.versions(id,quiz_id) VALUES($1,$2)',[version,quiz.id]);
-    for(let i=0;i<valid.questions.length;i++)await client.query('INSERT INTO impulse.questions(id,version_id,position,definition) VALUES($1,$2,$3,$4)',[valid.questions[i].id,version,i,JSON.stringify(valid.questions[i])]);
+    for(let i=0;i<valid.questions.length;i++)await client.query('INSERT INTO impulse.questions(id,version_id,position,definition) VALUES($1,$2,$3,$4)',[randomUUID(),version,i,JSON.stringify(valid.questions[i])]);
     await client.query('UPDATE impulse.quizzes SET published_version=$2 WHERE id=$1',[quiz.id,version]);}
    await client.query('COMMIT');res.json({...quiz,published:req.body.publish===true});
   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
@@ -60,7 +63,8 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const uid=(req as AuthRequest).user!.uid;
   const value=read(cookie(req,'impulse_'+req.params.slug));required(value?.role==='student'&&value.uid===uid,'Enter the quiz password to continue.',401);
   const row=(await pool.query('SELECT a.id,a.version_id,a.current_position,a.completed,q.title,q.slug,q.password_hash,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 AND q.slug=$3',[value.attempt,uid,req.params.slug])).rows[0];
-  required(row&&row.published_version,'Enter the quiz password to continue.',401);required(allowOldStamp||value.stamp===hash(row.password_hash),'The quiz password has changed. Enter the current password to resume.',401);return row;
+  required(row&&row.published_version,'Enter the quiz password to continue.',401);required(allowOldStamp||value.stamp===hash(row.password_hash),'The quiz password has changed. Enter the current password to resume.',401);
+  if(!row.completed&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
  }
  r.post('/api/impulse/quiz/:slug/unlock',limit('unlock',8),wrap(async(req,res)=>{
   const quiz=(await pool.query('SELECT id,password_hash,published_version FROM impulse.quizzes WHERE slug=$1',[req.params.slug])).rows[0];required(quiz?.published_version,'Quiz not available.',404);
@@ -75,17 +79,17 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const includeStates=req.query.offset===undefined||req.query.states==='1';
   const states=includeStates?(await pool.query(`SELECT q.id,q.position,q.definition->>'type' AS type,a.answer IS NOT NULL AS answered,
    CASE WHEN q.definition->>'type'='mcq' THEN a.answer END AS choice,a.result->'score' AS score,
-   COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks
+   COALESCE((a.result->>'maxScore')::numeric,(SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks
    FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2
    WHERE q.version_id=$1 ORDER BY q.position`,[a.version_id,a.id])).rows:[];
   const count=includeStates?states.length:(await pool.query('SELECT count(*)::int AS total FROM impulse.questions WHERE version_id=$1',[a.version_id])).rows[0].total;
   const offset=req.query.offset===undefined?Math.floor(a.current_position/6)*6:Number(req.query.offset);required(Number.isInteger(offset)&&offset>=0&&offset<count,'Invalid question page.',400);
-  const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,
+  const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((a.result->>'maxScore')::numeric,(SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,
    CASE WHEN a.result IS NOT NULL AND q.definition->>'type'='mcq' THEN a.result||jsonb_build_object('correctOption',q.definition->'correct') ELSE a.result END AS result,
    CASE WHEN q.definition->>'type'='mcq' THEN jsonb_build_object('correctOption',q.definition->'correct','feedback',q.definition->>'explanation') END AS study_feedback,
-   CASE WHEN a.result IS NOT NULL THEN q.definition->>'model_answer' END AS model_answer,a.status
+   CASE WHEN a.result IS NOT NULL THEN COALESCE(a.result->>'_modelAnswer',q.definition->>'model_answer') END AS model_answer,a.status
    FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
-  res.json({attemptId:a.id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
+  res.json({attemptId:a.id,versionId:a.version_id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
  }));
  r.get('/api/impulse/quiz/:slug/image/:id',wrap(async(req,res)=>{
   const a=await access(req),q=(await pool.query('SELECT definition->\'image\' AS image FROM impulse.questions WHERE id=$1 AND version_id=$2',[req.params.id,a.version_id])).rows[0];required(q?.image);res.type(q.image.mimeType).send(await fetchQuestionImage(q.image));
@@ -108,7 +112,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
  }));
  r.post('/api/impulse/quiz/:slug/grade/:id',limit('grade',6),wrap(async(req,res)=>{
   const a=await access(req),row=(await pool.query('SELECT q.definition,a.answer,a.result,a.status FROM impulse.questions q JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.id=$1 AND q.version_id=$3',[req.params.id,a.id,a.version_id])).rows[0];required(row,'Save an answer first.',400);
-  const q=row.definition;if(row.result)return res.json({result:row.result,...(q.type==='short_answer'?{modelAnswer:q.model_answer}:{})});
+  const q=row.definition;if(row.result)return res.json({result:row.result,...(q.type==='short_answer'?{modelAnswer:row.result._modelAnswer||q.model_answer}:{})});
   if(q.type==='mcq'){const result={score:row.answer===q.correct?1:0,maxScore:1,feedback:q.explanation,correctAnswer:q.options[q.correct]};const updated=await pool.query("UPDATE impulse.answers SET result=$3,status='graded' WHERE attempt_id=$1 AND question_id=$2 AND answer=$4",[a.id,req.params.id,JSON.stringify(result),JSON.stringify(row.answer)]);required(updated.rowCount,'Your answer changed. Grade the saved answer again.',409);return res.json({result});}
   required(typeof row.answer==='string'&&row.answer.trim(),'Write an answer first.',400);const lease=randomUUID();
   const claim=await pool.query("UPDATE impulse.answers SET lease=$3,lease_until=now()+interval '35 seconds',status='grading' WHERE attempt_id=$1 AND question_id=$2 AND (lease IS NULL OR lease_until<now()) RETURNING question_id",[a.id,req.params.id,lease]);required(claim.rowCount,'Grading is already in progress. Please wait.',409);

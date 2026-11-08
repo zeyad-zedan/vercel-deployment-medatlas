@@ -8,7 +8,7 @@ export function validateImpulseQuiz(input:any){
   if(!q||!['mcq','short_answer'].includes(q.type)||typeof q.text!=='string'||!q.text.trim()||q.text.length>4000)fail('Choose a type and write the question (up to 4,000 characters).');
   let image;
   if(q.image){try{image=imageForStorage({...q.image,source:q.image.source?.replace('/api/impulse/media/','/api/question-images/')});}catch{fail('Upload a valid image first.');}}
-  const base={id:randomUUID(),type:q.type,text:q.text.trim(),...(image?{image}: {})};
+  const base={id:typeof q.id==='string'&&/^[a-f0-9-]{36}$/i.test(q.id)?q.id:randomUUID(),type:q.type,text:q.text.trim(),...(image?{image}: {})};
   if(q.type==='mcq'){
    if(!Array.isArray(q.options)||q.options.length<2||q.options.length>6||q.options.some((o:any)=>typeof o!=='string'||!o.trim()||o.length>1000))fail('Enter 2–6 answer choices.');
    if(!Number.isInteger(q.correct)||q.correct<0||q.correct>=q.options.length)fail('Choose the correct answer.');

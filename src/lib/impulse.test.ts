@@ -39,11 +39,23 @@ test('private quizzes require passwords, preserve versions and resume answers wi
   const revised={...quiz,id:draft.id,password:'Replacement-Password',questions:[{...quiz.questions[0],text:'An edited question.'},quiz.questions[1]],publish:true};
   await request('/publisher/quizzes',revised,editor);assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,student)).status,401);
   const resumed=(await request(`/quiz/${draft.slug}/unlock`,{password:revised.password},student)).cookie;
-  session=(await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data;assert.equal(session.questions[0].question.text,'One plus one?');assert.equal(session.questions[1].answer,'Support');
+  session=(await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data;assert.equal(session.questions[0].question.text,'An edited question.');assert.equal(session.questions[1].answer,'Support');
   const newcomer=(await request(`/quiz/${draft.slug}/unlock`,{password:revised.password},'','student-two')).cookie;
   assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data.questions[0].question.text,'An edited question.');
   await request(`/quiz/${draft.slug}/submit`,{},resumed);assert.equal((await request(`/quiz/${draft.slug}/answer/${mcq.id}`,{answer:1},resumed)).status,409);
   assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data.questions[0].answer,0);
+  const publishedDraft=(await request('/publisher/quizzes/'+draft.id,undefined,editor)).data;
+  const otherSession=(await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data;
+  await request(`/quiz/${draft.slug}/answer/${otherSession.questions[1].id}`,{answer:'Support'},newcomer,'student-two');
+  const reordered=publishedDraft.questions.slice().reverse();reordered[1].text='Updated again.\nThis is a new line.';
+  await request('/publisher/quizzes',{...revised,password:'',questions:reordered},editor);
+  const updatedOther=(await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data;
+  assert.equal(updatedOther.questions[0].answer,'Support','Reordering must follow question identity rather than move answers to the wrong question.');
+  assert.equal(updatedOther.current,0);
+  assert.equal(updatedOther.questions[1].question.text,'Updated again.\nThis is a new line.');
+  const historical=(await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data;
+  assert.equal(historical.questions[0].question.text,'An edited question.','Completed history must stay on its original questions.');
+  assert.equal(historical.questions[1].result.score,1);
   assert.equal((await fetch(origin+'/api/impulse/publisher/quizzes',{method:'POST',headers:{Cookie:editor,'Content-Type':'application/json'},body:JSON.stringify(quiz)})).status,403);
   const grants=(await pool.query("SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema='impulse' AND grantee IN ('anon','authenticated','PUBLIC')")).rows[0].n;assert.equal(grants,0);
  }finally{

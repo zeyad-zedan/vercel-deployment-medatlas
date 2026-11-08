@@ -3,7 +3,7 @@ import type {SessionPlayerApi} from './session-player-api.tsx';
 
 type State = {id:string;position:number;type:string;answered:boolean;choice:number|null;score:number|null;max_marks:number};
 type Row = {id:string;position:number;question:any;answer:any;result:any;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;has_image:boolean;max_marks:number};
-export type CourseSession = {attemptId:string;title:string;total:number;current:number;completed:boolean;studentUid:string;states:State[];questions:Row[]};
+export type CourseSession = {attemptId:string;versionId?:string;title:string;total:number;current:number;completed:boolean;studentUid:string;states:State[];questions:Row[]};
 const option = (index:number) => String.fromCharCode(65+index);
 
 export async function courseRequest(slug:string,path:string,body?:unknown,keepalive=false) {
@@ -22,7 +22,7 @@ export async function courseRequest(slug:string,path:string,body?:unknown,keepal
 export function createCourseSession(slug:string,initial:CourseSession,onFailure:(error:any)=>void) {
   let data=initial,position=initial.current,queue:Promise<unknown>=Promise.resolve();
   const rows=new Map(initial.questions.map(row=>[row.id,row]));
-  const sessionId=`course-${initial.studentUid}-${initial.attemptId}`;
+  const sessionId=`course-${initial.studentUid}-${initial.attemptId}${initial.versionId?'-'+initial.versionId:''}`;
   const stateFor=(id:number)=>{const state=data.states.find(s=>s.position===id-1);if(!state)throw Error('Question not available.');return state;};
   const serial=<T>(operation:()=>Promise<T>):Promise<T>=>{
     const pending=queue.catch(()=>{}).then(operation);queue=pending;
