@@ -1,0 +1,51 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+test('private quizzes require passwords, preserve versions and resume answers without exposing marking guides',async()=>{
+ assert.equal(new URL(process.env.DATABASE_URL!).port,'56350','Use the isolated Impulse test database only.');
+ process.env.NODE_ENV='test';process.env.AUTH_SESSION_SECRET='isolated_impulse_test_secret_at_least_32_chars';
+ const {hashPasswordAsync}=await import('../middleware/auth.ts');process.env.IMPULSE_PUBLISHER_PASSWORD_HASH=await hashPasswordAsync('Publisher-Test-Password');
+ const {pool}=await import('../db/index.ts'),{impulseRouter}=await import('./impulse-routes.ts'),{default:express}=await import('express');
+ let calls=0;const app=express();app.use(impulseRouter(null,async(question,answer)=>{calls++;assert.equal(answer,'Support');assert.equal('images' in question,false);return {model:'test',grade:{score:1,maxScore:1,feedback:'Correct',points:question.rubric.map(p=>({...p,awarded:1,feedback:'Correct'}))}};},(req,res,next)=>{if(!['student-one','student-two'].includes(req.get('Authorization')||''))return void res.status(401).json({error:'Sign in to MedAtlas.'});(req as any).user={uid:req.get('Authorization')};next();}));
+ const http=app.listen(0,'127.0.0.1');await new Promise<void>(r=>http.once('listening',r));const origin='http://127.0.0.1:'+(http.address() as any).port,ids:string[]=[];
+ const request=async(path:string,body?:any,cookie='',identity='student-one')=>{const r=await fetch(origin+'/api/impulse'+path,{method:body===undefined?'GET':'POST',headers:{Cookie:cookie,Authorization:identity,'Content-Type':'application/json','X-Impulse-Request':'1'},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]||''};};
+ const quiz={title:'Isolated '+randomUUID(),password:'Student-Password',questions:[{type:'mcq',text:'One plus one?',options:['Two','Three'],correct:0,explanation:'Addition.'},{type:'short_answer',text:'Name a bone function.',rubric:[{description:'Support',marks:1}]},...Array.from({length:6},(_,i)=>({type:'mcq',text:'Extra question '+i,options:['One','Two'],correct:0}))]};
+ try{
+  assert.equal((await request('/publisher/quizzes')).status,401);
+  assert.equal((await request('/publisher/login',{password:'wrong'})).status,401);
+  const editor=(await request('/publisher/login',{password:'Publisher-Test-Password'})).cookie;assert.ok(editor);
+  const draft=(await request('/publisher/quizzes',quiz,editor)).data;ids.push(draft.id);
+  assert.equal((await request(`/quiz/${draft.slug}/unlock`,{password:quiz.password})).status,404);
+  assert.equal((await request('/publisher/quizzes',{...quiz,id:draft.id,publish:true},editor)).status,200);
+  assert.equal((await request(`/quiz/${draft.slug}/session`)).status,401);
+  assert.equal((await request(`/quiz/${draft.slug}/unlock`,{password:'incorrect'})).status,401);
+  const student=(await request(`/quiz/${draft.slug}/unlock`,{password:quiz.password})).cookie;assert.ok(student);
+  let session=(await request(`/quiz/${draft.slug}/session`,undefined,student)).data;assert.equal(session.questions.length,6);assert.equal(session.total,8);
+  assert.equal((await request(`/quiz/${draft.slug}/session?offset=6`,undefined,student)).data.questions.length,2);
+  assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,student,'')).status,401,'The quiz cookie alone must not replace MedAtlas sign-in.');
+  const [mcq,sa]=session.questions;assert.equal('correct' in mcq.question,false);assert.equal('rubric' in sa.question,false);assert.equal('model_answer' in sa.question,false);
+  assert.equal((await request(`/quiz/${draft.slug}/answer/${mcq.id}`,{answer:0},student)).status,200);
+  assert.equal((await request(`/quiz/${draft.slug}/grade/${mcq.id}`,{},student)).data.result.score,1);
+  await request(`/quiz/${draft.slug}/answer/${sa.id}`,{answer:'Support'},student);
+  await request(`/quiz/${draft.slug}/progress`,{position:1},student);
+  assert.equal((await request(`/quiz/${draft.slug}/grade/${sa.id}`,{},student)).data.result.score,1);
+  await request(`/quiz/${draft.slug}/grade/${sa.id}`,{},student);assert.equal(calls,1,'Saved grades must be reused.');
+  session=(await request(`/quiz/${draft.slug}/session`,undefined,student)).data;assert.equal(session.current,1);assert.equal(session.questions[1].answer,'Support');
+  const secondDevice=(await request(`/quiz/${draft.slug}/unlock`,{password:quiz.password})).cookie;
+  assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,secondDevice)).data.questions[1].answer,'Support','Same account resumes across devices.');
+  assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,student,'student-two')).status,401,'A different account cannot use the first account’s cookie.');
+  const other=(await request('/publisher/quizzes',{...quiz,publish:true},editor)).data;ids.push(other.id);
+  assert.equal((await request(`/quiz/${other.slug}/session`,undefined,student.replace(draft.slug,other.slug))).status,401);
+  const revised={...quiz,id:draft.id,password:'Replacement-Password',questions:[{...quiz.questions[0],text:'An edited question.'},quiz.questions[1]],publish:true};
+  await request('/publisher/quizzes',revised,editor);assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,student)).status,401);
+  const resumed=(await request(`/quiz/${draft.slug}/unlock`,{password:revised.password},student)).cookie;
+  session=(await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data;assert.equal(session.questions[0].question.text,'One plus one?');assert.equal(session.questions[1].answer,'Support');
+  const newcomer=(await request(`/quiz/${draft.slug}/unlock`,{password:revised.password},'','student-two')).cookie;
+  assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data.questions[0].question.text,'An edited question.');
+  await request(`/quiz/${draft.slug}/submit`,{},resumed);assert.equal((await request(`/quiz/${draft.slug}/answer/${mcq.id}`,{answer:1},resumed)).status,409);
+  assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data.questions[0].answer,0);
+  assert.equal((await fetch(origin+'/api/impulse/publisher/quizzes',{method:'POST',headers:{Cookie:editor,'Content-Type':'application/json'},body:JSON.stringify(quiz)})).status,403);
+  const grants=(await pool.query("SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema='impulse' AND grantee IN ('anon','authenticated','PUBLIC')")).rows[0].n;assert.equal(grants,0);
+ }finally{
+  await new Promise<void>(r=>http.close(()=>r()));
+  for(const id of ids){await pool.query('DELETE FROM impulse.answers WHERE attempt_id IN(SELECT id FROM impulse.attempts WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.attempts WHERE quiz_id=$1',[id]);await pool.query('UPDATE impulse.quizzes SET published_version=NULL WHERE id=$1',[id]);await pool.query('DELETE FROM impulse.questions WHERE version_id IN(SELECT id FROM impulse.versions WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.versions WHERE quiz_id=$1',[id]);await pool.query('DELETE FROM impulse.quizzes WHERE id=$1',[id]);}await pool.end();
+ }
+});

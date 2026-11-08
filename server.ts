@@ -2,6 +2,7 @@ import { getSampleJsonTemplate } from './src/lib/json-import.ts';
 import { protectQuestionImageFields, uploadQuestionImage, imageForStorage, fetchQuestionImage } from './src/lib/telegram-question-images.ts';
 import { validImageFileName } from './src/lib/question-images.ts';
 import 'dotenv/config';
+import {impulseRouter} from './src/lib/impulse-routes.ts';
 import {shortAnswerRouter} from './src/lib/short-answer-routes.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'node:path';
@@ -138,6 +139,7 @@ const defaultJsonParser = express.json({ limit: '64kb' });
 const adminCsvImportJsonParser = express.json({ limit: '5mb' });
 const adminPdfUploadJsonParser = express.json({ limit: '50mb' });
 app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api/impulse')) return next();
   if (
     req.path.startsWith('/api/admin/import/preview') ||
     req.path.startsWith('/api/admin/import/execute')
@@ -153,6 +155,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const rateLimitResolution = resolveRateLimitStoreConfig(process.env);
 const sharedRateLimitStore = rateLimitResolution.store;
 const rateLimitDegradedPolicy = rateLimitResolution.degradedModePolicy;
+app.use(impulseRouter(sharedRateLimitStore));
 
 app.use('/api/documents', createProtectedDocumentRouter({
   authenticate: requireAuth,

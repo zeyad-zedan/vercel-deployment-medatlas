@@ -119,6 +119,11 @@ export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [initializingAuth, setInitializingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState<string>(() => parseCurrentRoute().tab);
+  useEffect(() => {
+    if (!user || user.profileCompleted === false) return;
+    const next = new URLSearchParams(window.location.search).get('next');
+    if (next && /^\/impulse\/quiz\/[A-Za-z0-9_-]{20,64}$/.test(next)) window.location.assign(next);
+  }, [user]);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       let saved: string | null = null;
