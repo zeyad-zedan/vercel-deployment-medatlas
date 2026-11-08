@@ -36,7 +36,7 @@
     },
     {
       "source": "/impulse/quiz/:slug",
-      "destination": "/impulse/index.html"
+      "destination": "/index.html"
     },
     {
       "source": "/__/auth/(.*)",

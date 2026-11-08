@@ -19,7 +19,7 @@ const wrap=(fn:(req:Request,res:Response)=>Promise<any>)=>(req:Request,res:Respo
 export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithPool,authenticate:RequestHandler=requireAuth){
  const r=express.Router();
  r.use((_req,res,next)=>{res.set({'Cache-Control':'private, no-store','X-Robots-Tag':'noindex, nofollow','Referrer-Policy':'no-referrer'});next();});
- r.get(['/impulse/upload','/impulse/quiz/:slug'],(_req,res)=>res.sendFile(path.resolve('public/impulse/index.html')));
+ r.get('/impulse/upload',(_req,res)=>res.sendFile(path.resolve('public/impulse/index.html')));
  r.use('/api/impulse',(req,res,next)=>{try{if(req.method!=='GET'&&(req.get('X-Impulse-Request')!=='1'||(req.get('origin')&&new URL(req.get('origin')!).host!==req.get('host'))))return res.status(403).json({error:'Open this quiz page to continue.'});next();}catch{res.status(403).json({error:'Open this quiz page to continue.'});}});
  const limit=(scope:string,maxRequests:number)=>createBoundedRateLimiter({scope:'impulse-'+scope,maxRequests,windowMs:60000,store:store??undefined,maxKeys:2000,...(['grade','unlock'].includes(scope)?{keyGenerator:(req:Request)=>(req as AuthRequest).user!.uid}:{})});
  r.use('/api/impulse',limit('requests',600));

@@ -5,6 +5,7 @@ export function sanitizeAnalyticsEvent(event: BeforeSendEvent): BeforeSendEvent 
   try {
     const url = new URL(event.url);
     if (url.pathname.startsWith('/api/')) return null;
+    if (url.pathname.startsWith('/impulse/')) return null;
     url.search = ''; url.hash = '';
     url.pathname = url.pathname.replace(/^\/session\/\d+\/?$/, '/session');
     return { ...event, url: url.toString() };

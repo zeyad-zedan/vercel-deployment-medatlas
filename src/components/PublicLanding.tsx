@@ -26,6 +26,7 @@ interface PublicLandingProps {
   loadingCatalog: boolean;
   onAuthenticated: (user: UserProfile, initialTab?: string) => void;
   initialAuthError?: string | null;
+  requireSignIn?: boolean;
 }
 
 type AuthTab = 'login' | 'register' | 'reset';
@@ -36,8 +37,9 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
   loadingCatalog,
   onAuthenticated,
   initialAuthError,
+  requireSignIn = false,
 }) => {
-  const [authModalOpen, setAuthModalOpen] = useState(Boolean(initialAuthError));
+  const [authModalOpen, setAuthModalOpen] = useState(Boolean(initialAuthError)||requireSignIn);
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [legalModal, setLegalModal] = useState<LegalModalType>(null);
   const authDialogRef = useDialogFocus(authModalOpen, () => setAuthModalOpen(false));

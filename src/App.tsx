@@ -5,6 +5,9 @@
 
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 const PracticalView=lazy(()=>import('./components/PracticalView.tsx'));
+const CourseQuizView=lazy(()=>import('./components/CourseQuizView.tsx'));
+import {courseQuizSlug} from './lib/course-quiz-route.ts';
+import {setAuthToken} from './lib/api.ts';
 import {catalogByContentType} from './lib/lecture-kinds.ts';
 import {subjectLibraryTab} from './lib/subject-library.ts';
 import {
@@ -58,6 +61,7 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
   }
 
   const pathname = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  if (courseQuizSlug(window.location.pathname)) return {tab:'course-quiz',sessionId:null};
   const searchParams = new URLSearchParams(window.location.search);
 
   // Check query params: ?session=8 or ?tab=progress
@@ -88,13 +92,16 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
   return { tab: 'dashboard', sessionId: null };
 }
 
-function updateBrowserUrl(tab: string, session: any | null, replace = false) {
+function updateBrowserUrl(tab: string, session: any | null, replace = false, privateSlug?:string|null) {
   if (typeof window === 'undefined') return;
 
   let targetUrl = '/';
   let targetTitle = 'MedAtlas MCQ';
 
-  if (session && session.id) {
+  if (tab === 'course-quiz' && privateSlug) {
+    targetUrl = `/impulse/quiz/${privateSlug}`;
+    targetTitle = 'Private quiz · MedAtlas MCQ';
+  } else if (session && session.id) {
     targetUrl = `/session/${session.id}`;
     targetTitle = `${session.title || 'MCQ Session'} · MedAtlas MCQ`;
   } else if (tab && tab !== 'dashboard') {
@@ -119,6 +126,7 @@ export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [initializingAuth, setInitializingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState<string>(() => parseCurrentRoute().tab);
+  const [privateSlug,setPrivateSlug]=useState(()=>typeof window==='undefined'?null:courseQuizSlug(window.location.pathname));
   useEffect(() => {
     if (!user || user.profileCompleted === false) return;
     const next = new URLSearchParams(window.location.search).get('next');
@@ -161,6 +169,7 @@ export default function App() {
   const [authConnectionError, setAuthConnectionError] = useState<string | null>(null);
   const [authRetryVersion, setAuthRetryVersion] = useState(0);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
+  const dashboardOwnerRef = useRef<string|null>(null);
 
   const catalogLoadedRef = useRef(false);
   const loadCatalog = useCallback(async (force = false) => {
@@ -219,6 +228,7 @@ export default function App() {
         if (resolvedUser) {
           setAuthRedirectError(null);
           const route = parseCurrentRoute();
+          setPrivateSlug(courseQuizSlug(window.location.pathname));
           setActiveTab(route.tab || 'dashboard');
         }
         setUser(resolvedUser);
@@ -235,10 +245,11 @@ export default function App() {
   }, [loadCatalog, authRetryVersion]);
 
   useEffect(() => {
-    if (user && user.profileCompleted !== false) {
+    if (user && user.profileCompleted !== false && activeTab !== 'course-quiz' && dashboardOwnerRef.current !== user.uid) {
+      dashboardOwnerRef.current = user.uid;
       loadStudentWorkspaceData();
     }
-  }, [user, loadStudentWorkspaceData]);
+  }, [user, activeTab, loadStudentWorkspaceData]);
 
   useEffect(() => subscribeToBookmarkChanges(invalidateBookmarks), [invalidateBookmarks]);
   useEffect(() => {
@@ -282,6 +293,7 @@ export default function App() {
     if (!user || user.profileCompleted === false || activeSession) return;
     try {
       const route = parseCurrentRoute();
+      if (route.tab === 'course-quiz') return;
       let targetSessionId = route.sessionId;
       if (!targetSessionId) {
         const activeIdStr = localStorage.getItem('medatlas_active_session_id');
@@ -306,6 +318,7 @@ export default function App() {
 
   // Sync activeSession ID to localStorage so progress is retained if browser closes
   useEffect(() => {
+    if (activeTab === 'course-quiz') return;
     try {
       if (activeSession && activeSession.status === 'in_progress') {
         localStorage.setItem('medatlas_active_session_id', String(activeSession.id));
@@ -313,19 +326,20 @@ export default function App() {
         localStorage.removeItem('medatlas_active_session_id');
       }
     } catch {}
-  }, [activeSession]);
+  }, [activeSession, activeTab]);
 
   // Keep the browser address bar and history in sync with active tab and active session
   useEffect(() => {
     if (!user || user.profileCompleted === false || initializingAuth) return;
-    updateBrowserUrl(activeTab, activeSession);
-  }, [activeTab, activeSession, user, initializingAuth]);
+    updateBrowserUrl(activeTab, activeSession, false, privateSlug);
+  }, [activeTab, activeSession, user, initializingAuth, privateSlug]);
 
   // Handle browser native Back and Forward navigation buttons
   useEffect(() => {
     const handlePopState = () => {
       if (!user || user.profileCompleted === false) return;
       const route = parseCurrentRoute();
+      setPrivateSlug(courseQuizSlug(window.location.pathname));
       if (route.sessionId) {
         api.getSession(route.sessionId)
           .then((res) => {
@@ -352,7 +366,8 @@ export default function App() {
   const handleAuthenticated = (loggedInUser: UserProfile, initialTab?: string) => {
     setUser(loggedInUser);
     const route = parseCurrentRoute();
-    setActiveTab(initialTab || route.tab || 'dashboard');
+    setPrivateSlug(courseQuizSlug(window.location.pathname));
+    setActiveTab(route.tab === 'course-quiz' ? route.tab : initialTab || route.tab || 'dashboard');
     setGlobalError(null);
     setAuthRedirectError(null);
   };
@@ -365,10 +380,12 @@ export default function App() {
     setUser(null);
     setActiveSession(null);
     setDashboardData(null);
+    dashboardOwnerRef.current = null;
     setBookmarksData(null);
     setAdminData(null);
-    setActiveTab('dashboard');
-    updateBrowserUrl('dashboard', null, true);
+    const returningToQuiz = activeTab === 'course-quiz' && Boolean(privateSlug);
+    setActiveTab(returningToQuiz?'course-quiz':'dashboard');
+    if(!returningToQuiz){setPrivateSlug(null);updateBrowserUrl('dashboard', null, true);}
   };
 
   const handleStartSession = async (params: any) => {
@@ -417,6 +434,7 @@ export default function App() {
         loadingCatalog={loadingCatalog}
         onAuthenticated={handleAuthenticated}
         initialAuthError={authRedirectError}
+        requireSignIn={activeTab === 'course-quiz'}
       />
     );
   }
@@ -571,7 +589,7 @@ export default function App() {
               {activeSession
                 ? `Active Session / ${activeSession.title}`
                 : `Workspace / ${
-                    navItems.find((n) => n.id === activeTab)?.label || 'Dashboard'
+                    activeTab === 'course-quiz' ? 'Private quiz' : navItems.find((n) => n.id === activeTab)?.label || 'Dashboard'
                   }`}
             </span>
           </div>
@@ -613,7 +631,9 @@ export default function App() {
             </div>
           )}
 
-          {activeSession ? (
+          {activeTab === 'course-quiz' && privateSlug ? (
+            <Suspense fallback={<p role="status">Opening your private quiz…</p>}><CourseQuizView key={`${user.uid}:${privateSlug}`} slug={privateSlug} onSignIn={()=>{setAuthToken(null);setUser(null);}}/></Suspense>
+          ) : activeSession ? (
             <McqSessionPlayer
               key={activeSession.id}
               initialSession={activeSession}

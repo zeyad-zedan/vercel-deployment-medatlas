@@ -1,6 +1,10 @@
 # Impulse 46 private quizzes
 
 Publisher workspace: `/impulse/upload`. Student links: `/impulse/quiz/<random-slug>`.
+Student links render inside the existing MedAtlas React workspace, preserving the top bar,
+sidebar and normal sign-in dialog. Signed-in users see only the quiz-password prompt.
+The Impulse-branded standalone page is the publisher workspace only. No course item is added
+to the normal sidebar or catalog, and private quiz paths are excluded from visitor analytics.
 These pages are not linked from the MedAtlas catalog. Quiz data is in the separate,
 non-exposed `impulse` Postgres schema; it never creates public lectures or questions.
 
