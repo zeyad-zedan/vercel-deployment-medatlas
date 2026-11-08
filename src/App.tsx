@@ -245,6 +245,21 @@ export default function App() {
   }, [loadCatalog, authRetryVersion]);
 
   useEffect(() => {
+    const syncLogin = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage ||
+          (event.key !== 'medatlas_session_token' && event.key !== null)) return;
+      // Revalidate when a signed-out tab receives a login, or another tab logs
+      // out. Ignore routine token refreshes in signed-in tabs to avoid a loop.
+      if ((!user && event.newValue) || (user && !event.newValue)) {
+        setInitializingAuth(true);
+        setAuthRetryVersion(version => version + 1);
+      }
+    };
+    window.addEventListener('storage', syncLogin);
+    return () => window.removeEventListener('storage', syncLogin);
+  }, [user]);
+
+  useEffect(() => {
     if (user && user.profileCompleted !== false && activeTab !== 'course-quiz' && dashboardOwnerRef.current !== user.uid) {
       dashboardOwnerRef.current = user.uid;
       loadStudentWorkspaceData();

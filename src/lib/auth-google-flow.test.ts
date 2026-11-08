@@ -115,6 +115,42 @@ function resetTestEnvironment() {
 
 resetTestEnvironment();
 
+test('a saved MedAtlas login opens a private quiz even when Google redirect storage fails', async () => {
+  resetTestEnvironment();
+  const token = 'medatlas.saved.private-quiz-session';
+  setAuthToken(token);
+  mockRedirectError = Object.assign(new Error('Google redirect storage is unavailable'), { code: 'auth/web-storage-unsupported' });
+  let requests = 0;
+  mockFetchHandler = async (url, init) => {
+    requests++;
+    assert.equal(url, '/api/auth/me');
+    assert.equal((init?.headers as any).Authorization, `Bearer ${token}`);
+    return Response.json({ user: { uid: 'existing-student' }, token });
+  };
+  let stop!: () => void;
+  const user = await new Promise<any>(resolve => {
+    stop = subscribeToAuthChanges(resolve, () => {});
+  });
+  stop();
+  assert.equal(user?.uid, 'existing-student');
+  assert.equal(requests, 1);
+  assert.equal(getAuthToken(), token);
+});
+
+test('a failed pending Google redirect still verifies an existing MedAtlas login', async () => {
+  resetTestEnvironment();
+  const token = 'medatlas.saved.redirect-fallback';
+  setAuthToken(token);
+  mockSessionStorage['medatlas_google_redirect_in_progress'] = 'true';
+  mockRedirectError = Object.assign(new Error('Google is temporarily unavailable'), { code: 'auth/network-request-failed' });
+  mockFetchHandler = async () => Response.json({ user: { uid: 'existing-student' }, token });
+  let stop!: () => void;
+  const user = await new Promise<any>(resolve => { stop = subscribeToAuthChanges(resolve, () => {}); });
+  stop();
+  assert.equal(user?.uid, 'existing-student');
+  assert.equal(getAuthToken(), token);
+});
+
 test('a temporary startup failure preserves the login and drafts; only explicit retry checks again', async () => {
   resetTestEnvironment();
   const token = 'medatlas.saved.session-token';
@@ -140,6 +176,37 @@ test('a temporary startup failure preserves the login and drafts; only explicit 
   retryStop();
   assert.equal(user.uid, 'retry-user');
   assert.equal(requests, 2);
+});
+
+test('a rejected Google credential cannot erase an independent saved MedAtlas login', async () => {
+  resetTestEnvironment();
+  const token = 'medatlas.saved.independent-session';
+  setAuthToken(token);
+  mockSessionStorage['medatlas_google_redirect_in_progress'] = 'true';
+  mockRedirectResult = { user: { uid: 'google-user', getIdToken: async () => 'rejected-google-token' } };
+  mockFetchHandler = async (_url, init) =>
+    (init?.headers as any).Authorization === 'Bearer rejected-google-token'
+      ? Response.json({ error: 'Invalid Google credential' }, { status: 401 })
+      : Response.json({ user: { uid: 'saved-student' }, token });
+  let stop!: () => void;
+  const user = await new Promise<any>(resolve => { stop = subscribeToAuthChanges(resolve, () => {}); });
+  stop();
+  assert.equal(user?.uid, 'saved-student');
+  assert.equal(getAuthToken(), token);
+});
+
+test('an old rejected request does not erase a newer login from another tab', async () => {
+  resetTestEnvironment();
+  setAuthToken('medatlas.old-session');
+  let rejectRequest!: () => void;
+  mockFetchHandler = async () => new Promise<Response>(resolve => {
+    rejectRequest = () => resolve(Response.json({ error: 'Expired session' }, { status: 401 }));
+  });
+  const pending = api.getCurrentUser();
+  setAuthToken('medatlas.new-session');
+  rejectRequest();
+  await assert.rejects(pending, /Expired session/);
+  assert.equal(getAuthToken(), 'medatlas.new-session');
 });
 
 test('a rejected startup session still clears authentication instead of using a cached profile', async () => {

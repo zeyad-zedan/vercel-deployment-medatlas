@@ -248,6 +248,7 @@ export function subscribeToAuthChanges(
   let pendingListenerExchange: Promise<UserProfile | null> | null = null;
   let resolveInitialAuthState: ((user: any) => void) | null = null;
   const wasRedirectExpected = hasPendingRedirectMarker();
+  const restoringServerSession = !wasRedirectExpected && Boolean(getAuthToken()?.startsWith('medatlas.'));
   const graceTimeoutMs = process.env.NODE_ENV === 'test' ? 60 : 500;
 
   const emitAuthenticatedUser = (profile: UserProfile) => {
@@ -280,7 +281,7 @@ export function subscribeToAuthChanges(
     ? onAuthStateChangedFn(
         auth,
         (firebaseUser: any) => {
-          if (cancelled || !firebaseUser) {
+          if (cancelled || !firebaseUser || restoringServerSession) {
             if (resolveInitialAuthState && !wasRedirectExpected) {
               const r = resolveInitialAuthState;
               resolveInitialAuthState = null;
@@ -332,8 +333,11 @@ export function subscribeToAuthChanges(
 
   (async () => {
     try {
-      // 1. Process pending Google Redirect authentication if returning from Google OAuth
-      try {
+      // A saved MedAtlas session is independent of Google's redirect iframe/storage.
+      // Only process Google first when a sign-in was explicitly started, or no
+      // server session exists. The session is still verified by /api/auth/me below.
+      if (!restoringServerSession) {
+       try {
         const redirectUser = await api.handleGoogleRedirectResult();
         if (redirectUser) {
           emitAuthenticatedUser(redirectUser);
@@ -341,19 +345,19 @@ export function subscribeToAuthChanges(
         }
       } catch (redirectErr: any) {
         console.warn('Google redirect resolution error:', redirectErr);
-        if (!cancelled) {
-          if (onRedirectError) {
-            onRedirectError(
+        // A failed Google attempt must not hide an independently valid login.
+        if (!getAuthToken()?.startsWith('medatlas.')) {
+          if (!cancelled) {
+            onRedirectError?.(
               redirectErr instanceof Error
                 ? redirectErr
                 : new Error(redirectErr?.message || 'Google sign-in via redirect failed.')
             );
+            if (!hasResolvedAuthenticatedUser) onUserResolved(null);
           }
-          if (!hasResolvedAuthenticatedUser) {
-            onUserResolved(null);
-          }
+          return;
         }
-        return;
+       }
       }
 
       // 2. Wait for initial onAuthStateChanged emission / in-flight exchange if no token is present yet
@@ -435,7 +439,10 @@ async function apiRequest<T>(
   });
 
   if (!res.ok) {
-    if (res.status === 401) {
+    // A rejected Google credential or an old in-flight request cannot invalidate
+    // a different MedAtlas session established in the meantime (including another tab).
+    if (res.status === 401 && currentToken &&
+        headers.Authorization === `Bearer ${currentToken}` && getAuthToken() === currentToken) {
       setAuthToken(null);
     }
 

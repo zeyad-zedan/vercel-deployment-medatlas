@@ -25,3 +25,31 @@ test('an expired MedAtlas session returns control to the main sign-in flow inste
 test('opening a private link while signed out opens the normal MedAtlas sign-in dialog first',async()=>{
  const root=createRoot(host());try{await act(async()=>root.render(<PublicLanding catalog={{subjects:[],lectures:[],totalPublishedQuestions:0}} loadingCatalog={false} onAuthenticated={()=>{}} requireSignIn/>));assert.ok(host().querySelector('[role=dialog]'));assert.ok(host().querySelector('input[type=email]'));assert.ok(host().querySelector('input[type=password]'));assert.doesNotMatch(host().textContent||'',/Publisher password/);}finally{await act(async()=>root.unmount());}
 });
+
+test('the whole private workspace recognizes a login made in another tab and does not loop on token refresh',async()=>{
+ const {default:App}=await import('../App.tsx');
+ const {setFirebaseClientAuthHandlersForTests,getAuthToken}=await import('./api.ts');
+ setAuthToken(null);
+ setFirebaseClientAuthHandlersForTests({getRedirectResult:async()=>null,onAuthStateChanged:(_auth,next)=>{queueMicrotask(()=>next(null));return()=>{};}});
+ let authReads=0,quizReads=0;
+ globalThis.fetch=(async(url:any,options:any={})=>{
+  const path=String(url);
+  if(path==='/api/catalog')return Response.json({subjects:[],lectures:[],totalPublishedQuestions:0});
+  if(path==='/api/auth/me'){authReads++;assert.equal(options.headers.Authorization,'Bearer medatlas.login-in-other-tab');return Response.json({token:'medatlas.refreshed-session',user:{uid:'student',displayName:'Existing Student',role:'student',profileCompleted:true}});}
+  if(path.endsWith('/session')){quizReads++;return Response.json({error:'Enter the quiz password to continue.'},{status:401});}
+  throw Error('Unexpected request '+path);
+ }) as typeof fetch;
+ const root=createRoot(host());try{
+  await act(async()=>{root.render(<App/>);await new Promise(r=>setTimeout(r,80));});
+  assert.ok(host().querySelector('input[type=email]'));
+  dom.window.localStorage.setItem('medatlas_session_token','medatlas.login-in-other-tab');
+  await act(async()=>{window.dispatchEvent(new dom.window.StorageEvent('storage',{key:'medatlas_session_token',newValue:'medatlas.login-in-other-tab',storageArea:dom.window.localStorage}));await new Promise(r=>setTimeout(r,30));});
+  assert.ok(host().querySelector('input[type=password]'));
+  assert.equal(host().querySelector('input[type=email]'),null);
+  assert.match(host().textContent||'',/Workspace.*Private quiz/);
+  assert.match(host().textContent||'',/You’re signed in to MedAtlas/);
+  assert.equal(authReads,1);assert.equal(quizReads,1);assert.equal(getAuthToken(),'medatlas.refreshed-session');
+  await act(async()=>window.dispatchEvent(new dom.window.StorageEvent('storage',{key:'medatlas_session_token',newValue:'medatlas.rotated-in-other-tab',storageArea:dom.window.localStorage})));
+  assert.equal(authReads,1,'Token rotation must not create cross-tab request loops.');
+ }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;setFirebaseClientAuthHandlersForTests(null);setAuthToken(null);}
+});
