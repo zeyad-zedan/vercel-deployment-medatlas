@@ -1,12 +1,12 @@
 import {pool} from '../db/index.ts';
 
-/** Upgrade an ongoing attempt once. Keep every original answer row for history. */
+/** Upgrade an attempt once, including completed quizzes. Keep every original answer row for history. */
 export async function refreshCourseAttempt(attemptId:string,uid:string){
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
   const attempt=(await client.query('SELECT a.*,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 FOR UPDATE OF a',[attemptId,uid])).rows[0];
-  if(!attempt||attempt.completed||attempt.version_id===attempt.published_version){await client.query('COMMIT');return attempt;}
+  if(!attempt||attempt.version_id===attempt.published_version){await client.query('COMMIT');return attempt;}
   // Compare compact fingerprints, not full question text, images or marking guides.
   const metadata=`SELECT id,position,jsonb_build_object('id',definition->'id','type',definition->'type',
    'text',md5(definition->>'text'),'image',jsonb_build_object('id',definition#>>'{image,id}'),
@@ -25,11 +25,12 @@ export async function refreshCourseAttempt(attemptId:string,uid:string){
    if(!previous||used.has(previous.id)||previous.definition.type!==question.definition.type)continue;
    used.add(previous.id);
    if(previous.position===attempt.current_position)cursor=question.position;
-   if(question.definition.type==='mcq'&&JSON.stringify(previous.definition.options)!==JSON.stringify(question.definition.options))continue;
    await client.query(`INSERT INTO impulse.answers(attempt_id,question_id,answer,result,status)
-    SELECT attempt_id,$3,answer,CASE WHEN result IS NULL THEN NULL ELSE result||jsonb_build_object('_modelAnswer',COALESCE(result->>'_modelAnswer',(SELECT definition->>'model_answer' FROM impulse.questions WHERE id=$2))) END,
+    SELECT attempt_id,$3,answer,CASE WHEN result IS NULL THEN NULL ELSE result||jsonb_build_object(
+    '_modelAnswer',COALESCE(result->>'_modelAnswer',(SELECT definition->>'model_answer' FROM impulse.questions WHERE id=$2)),
+    '_answerOptionText',CASE WHEN $4::boolean THEN COALESCE(result->>'_answerOptionText',(SELECT definition->'options'->>((answer#>>'{}')::int) FROM impulse.questions WHERE id=$2)) ELSE NULL END) END,
     CASE WHEN status='grading' THEN 'saved' ELSE status END FROM impulse.answers WHERE attempt_id=$1 AND question_id=$2
-    ON CONFLICT(attempt_id,question_id) DO NOTHING`,[attemptId,previous.id,question.id]);
+    ON CONFLICT(attempt_id,question_id) DO NOTHING`,[attemptId,previous.id,question.id,previous.definition.type==='mcq']);
   }
   await client.query('UPDATE impulse.attempts SET version_id=$2,current_position=$3,updated_at=now() WHERE id=$1',[attemptId,attempt.published_version,cursor]);
   await client.query('COMMIT');return {...attempt,version_id:attempt.published_version,current_position:cursor};

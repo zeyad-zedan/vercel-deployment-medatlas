@@ -609,7 +609,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   }
 
   const selectedOpt = localSelections[currentQ.id] ?? currentQ.selectedDisplayed ?? null;
-  const showFeedback = isCompleted || (!isExamMode && currentQ.submitted);
+  const showFeedback = !currentQ.previousVersionGrade && (isCompleted || (!isExamMode && currentQ.submitted));
   const correctOpt = currentQ.correctDisplayedOption as OptionKey | undefined;
   const isSelectedCorrect = showFeedback && selectedOpt && selectedOpt === correctOpt;
   const answeredCount = questions.filter(
@@ -1045,6 +1045,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 )}
               </div>
 
+              {currentQ.previousVersionGrade&&<div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-2 text-sm"><p className="font-semibold">Saved grade: {currentQ.previousVersionGrade.score}/{currentQ.previousVersionGrade.maxScore}</p><p>Your saved answer: {currentQ.previousVersionGrade._answerOptionText}</p><p>The question was updated. This grade and feedback are preserved from your original answer.</p>{currentQ.previousVersionGrade.correctAnswer&&<p>Original correct answer: {currentQ.previousVersionGrade.correctAnswer}</p>}{currentQ.previousVersionGrade.feedback&&<p className="whitespace-pre-wrap">{currentQ.previousVersionGrade.feedback}</p>}</div>}
               {/* Answer Options */}
               <div className="space-y-2" role="radiogroup" aria-label="Answer Options">
                 {(session.privateQuiz ? Object.keys(currentQ.options || {}) as OptionKey[] : OPTION_KEYS).map((letter) => {

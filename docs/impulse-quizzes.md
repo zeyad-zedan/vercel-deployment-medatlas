@@ -43,7 +43,7 @@ Submitted answers are immutable. Saved feedback is reused. Grading uses the exis
 Gemini pool and sends text only, never photos or account details. Images use the existing validated
 Telegram upload/cache service and authenticated, quiz-scoped delivery; no image bytes enter Postgres.
 
-Publishing edits updates ongoing attempts on their next request/reopen. Answers and grades for retained questions are copied to the new version; original rows are retained. Completed attempts remain on their original version. Changed MCQ choices require a new response; historical answers remain stored.
+Publishing edits updates all attempts, including completed quizzes, on their next content request/reopen. Answers and grades for retained questions are copied to the new version; original rows are retained. Completed status and saved grades are retained. When a marking guide changes, saved short-answer feedback keeps its original model answer and displays a notice. MCQ grades and original answer text remain preserved even when published choices change.
 Changing a quiz password requires re-unlocking, but does not replace the account's saved attempt.
 No polling or analytics events are added to private quiz pages.
 

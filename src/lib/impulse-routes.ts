@@ -64,7 +64,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const value=read(cookie(req,'impulse_'+req.params.slug));required(value?.role==='student'&&value.uid===uid,'Enter the quiz password to continue.',401);
   const row=(await pool.query('SELECT a.id,a.version_id,a.current_position,a.completed,q.title,q.slug,q.password_hash,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 AND q.slug=$3',[value.attempt,uid,req.params.slug])).rows[0];
   required(row&&row.published_version,'Enter the quiz password to continue.',401);required(allowOldStamp||value.stamp===hash(row.password_hash),'The quiz password has changed. Enter the current password to resume.',401);
-  if(req.method==='GET'&&req.path.endsWith('/session')&&!row.completed&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
+  if(req.method==='GET'&&req.path.endsWith('/session')&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
  }
  r.post('/api/impulse/quiz/:slug/unlock',limit('unlock',8),wrap(async(req,res)=>{
   const quiz=(await pool.query('SELECT id,password_hash,published_version FROM impulse.quizzes WHERE slug=$1',[req.params.slug])).rows[0];required(quiz?.published_version,'Quiz not available.',404);
@@ -87,7 +87,8 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((a.result->>'maxScore')::numeric,(SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,
    CASE WHEN a.result IS NOT NULL AND q.definition->>'type'='mcq' THEN a.result||jsonb_build_object('correctOption',q.definition->'correct') ELSE a.result END AS result,
    CASE WHEN q.definition->>'type'='mcq' THEN jsonb_build_object('correctOption',q.definition->'correct','feedback',q.definition->>'explanation') END AS study_feedback,
-   CASE WHEN a.result IS NOT NULL THEN COALESCE(a.result->>'_modelAnswer',q.definition->>'model_answer') END AS model_answer,a.status
+   CASE WHEN a.result IS NOT NULL THEN COALESCE(a.result->>'_modelAnswer',q.definition->>'model_answer') END AS model_answer,
+   (a.result->>'_modelAnswer' IS NOT NULL AND a.result->>'_modelAnswer' IS DISTINCT FROM q.definition->>'model_answer') AS guide_changed,a.status
    FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
   res.json({attemptId:a.id,versionId:a.version_id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
  }));

@@ -2,7 +2,7 @@ import {getAuthToken} from './api.ts';
 import type {SessionPlayerApi} from './session-player-api.tsx';
 
 type State = {id:string;position:number;type:string;answered:boolean;choice:number|null;score:number|null;max_marks:number};
-type Row = {id:string;position:number;question:any;answer:any;result:any;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;has_image:boolean;max_marks:number};
+type Row = {id:string;position:number;question:any;answer:any;result:any;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;guide_changed?:boolean;has_image:boolean;max_marks:number};
 export type CourseSession = {attemptId:string;versionId?:string;title:string;total:number;current:number;completed:boolean;studentUid:string;states:State[];questions:Row[]};
 const option = (index:number) => String.fromCharCode(65+index);
 
@@ -29,7 +29,7 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     return pending.catch(error=>{if(error.status===401)onFailure(error);throw error;});
   };
   const attempt=(row:Row)=>({answer:row.answer??'',status:row.result?'graded':'saved',result:row.result,
-    maxScore:Number(row.max_marks),modelAnswer:row.model_answer||''});
+    maxScore:Number(row.max_marks),modelAnswer:row.model_answer||'',guideChanged:Boolean(row.guide_changed)});
   const summary=()=>{
     const answered=data.states.filter(s=>s.answered),graded=data.states.filter(s=>s.score!==null);
     const earned=graded.reduce((sum,s)=>sum+Number(s.score),0),maximum=data.states.reduce((sum,s)=>sum+Number(s.max_marks),0);
@@ -47,8 +47,8 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
   const question=(state:State,row?:Row)=>({id:state.position+1,index:state.position,courseQuestionId:state.id,
     questionType:state.type,lectureTitle:data.title,contentLoaded:Boolean(row),maxMarks:Number(state.max_marks),
     answerCorrect:state.score===null?null:Number(state.score)===Number(state.max_marks),
-    hasSavedAnswer:state.answered,submitted:state.type==='mcq'?state.score!==null:state.answered,selectedDisplayed:state.type==='mcq'&&state.choice!==null?option(state.choice):state.answered?(state.score===null?'C':Number(state.score)===Number(state.max_marks)?'A':'B'):null,
-    ...(row?{questionText:row.question.text,options:Object.fromEntries((row.question.options||[]).map((text:string,index:number)=>[option(index),text])),
+    hasSavedAnswer:state.answered,submitted:state.type==='mcq'?state.score!==null:state.answered,selectedDisplayed:state.type==='mcq'?(row?.result&&'_modelAnswer' in row.result?'__saved':state.choice!==null?option(state.choice):null):state.answered?(state.score===null?'C':Number(state.score)===Number(state.max_marks)?'A':'B'):null,
+    ...(row?{previousVersionGrade:state.type==='mcq'&&row.result&&'_modelAnswer' in row.result?row.result:null,questionText:row.question.text,options:Object.fromEntries((row.question.options||[]).map((text:string,index:number)=>[option(index),text])),
       correctDisplayedOption:Number.isInteger(row.study_feedback?.correctOption??row.result?.correctOption)?option(row.study_feedback?.correctOption??row.result.correctOption):undefined,
       explanation:row.study_feedback?.feedback||row.result?.feedback||'',shortAnswerAttempt:state.type==='short_answer'&&state.answered?attempt(row):null,
       images:row.has_image?[{id:`course-${slug}-${row.id}`,alt:'Question image',source:`/api/impulse/quiz/${slug}/image/${row.id}`}]:[],

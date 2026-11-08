@@ -33,6 +33,7 @@ export function ShortAnswerQuestion({question,sessionId,exam=false,completed=fal
   <div className="flex flex-wrap gap-3">{!completed&&<button className={button} disabled={busy||!answer.trim()} onClick={()=>submit(false)}>{busy?'Working…':'Save answer'}</button>}{(!exam||completed)&&!grade&&<button className={button+' bg-[var(--ma-brand)] text-white border-transparent'} disabled={busy||!answer.trim()||completed&&!attempt} onClick={()=>submit(true)}>{attempt?.status==='failed'?'Retry grading':completed?'Grade saved answer':'Save & grade'}</button>}</div>
   {attempt?.errorCode==='KEY_MISSING'&&!showGuide&&<button type="button" className="text-sm underline text-[var(--ma-brand)]" onClick={()=>setShowGuide(true)}>افتح شرح إضافة مفتاح Gemini</button>}
   {error&&<p role="alert" className="text-sm text-red-700">{error}</p>}{notice&&<p role="status" className="text-sm text-emerald-800">{notice}</p>}
+  {grade&&attempt.guideChanged&&<p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The marking guide was updated after this answer was graded. Your saved grade is preserved; the feedback and model answer below show the guide used for that grade.</p>}
   {grade&&<GradeFeedback grade={grade} modelAnswer={attempt.modelAnswer} scrollToken={scrollToken}/>}
   {showGuide&&<Suspense fallback={<p role="status">بنجهّزلك الشرح…</p>}><GeminiSetupGuide onClose={()=>setShowGuide(false)} onReady={()=>{setShowGuide(false);void submit(true);}}/></Suspense>}
  </section>;

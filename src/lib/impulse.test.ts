@@ -47,15 +47,23 @@ test('private quizzes require passwords, preserve versions and resume answers wi
   const publishedDraft=(await request('/publisher/quizzes/'+draft.id,undefined,editor)).data;
   const otherSession=(await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data;
   await request(`/quiz/${draft.slug}/answer/${otherSession.questions[1].id}`,{answer:'Support'},newcomer,'student-two');
-  const reordered=publishedDraft.questions.slice().reverse();reordered[1].text='Updated again.\nThis is a new line.';
+  const reordered=publishedDraft.questions.slice().reverse();reordered[0].rubric=[{description:'Updated support marking guide',marks:2}];reordered[1].options=['Changed choice','Another choice'];reordered[1].text='Updated again.\nThis is a new line.';
   await request('/publisher/quizzes',{...revised,password:'',questions:reordered},editor);
   const updatedOther=(await request(`/quiz/${draft.slug}/session`,undefined,newcomer,'student-two')).data;
   assert.equal(updatedOther.questions[0].answer,'Support','Reordering must follow question identity rather than move answers to the wrong question.');
   assert.equal(updatedOther.current,0);
   assert.equal(updatedOther.questions[1].question.text,'Updated again.\nThis is a new line.');
   const historical=(await request(`/quiz/${draft.slug}/session`,undefined,resumed)).data;
-  assert.equal(historical.questions[0].question.text,'An edited question.','Completed history must stay on its original questions.');
+  assert.equal(historical.completed,true,'Publishing must not reopen a completed attempt.');
+  assert.equal(historical.questions[1].question.text,'Updated again.\nThis is a new line.','Completed students must see published edits too.');
+  assert.equal(historical.questions[0].answer,'Support');
+  assert.equal(historical.questions[0].result.score,1);
+  assert.equal(historical.questions[0].result.maxScore,1);
+  assert.equal(historical.questions[0].model_answer,'Support');
+  assert.equal(historical.questions[0].guide_changed,true);
+  assert.equal(historical.questions[1].answer,0);
   assert.equal(historical.questions[1].result.score,1);
+  assert.equal(historical.questions[1].result._answerOptionText,'Two');
   assert.equal((await fetch(origin+'/api/impulse/publisher/quizzes',{method:'POST',headers:{Cookie:editor,'Content-Type':'application/json'},body:JSON.stringify(quiz)})).status,403);
   const grants=(await pool.query("SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema='impulse' AND grantee IN ('anon','authenticated','PUBLIC')")).rows[0].n;assert.equal(grants,0);
  }finally{
