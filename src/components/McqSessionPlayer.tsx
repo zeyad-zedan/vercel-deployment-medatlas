@@ -85,7 +85,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
       const nextY=Math.max(0,window.scrollY),delta=nextY-lastY;
       lastY=nextY;
       // Header resizing and browser scroll anchoring are not a new gesture.
-      if(performance.now()<settleUntil||Math.abs(delta)<1)return;
+      if(performance.now()<settleUntil||delta===0)return;
       const nextDirection=Math.sign(delta);
       if(nextDirection!==direction){direction=nextDirection;travel=0;}
       travel+=Math.abs(delta);
