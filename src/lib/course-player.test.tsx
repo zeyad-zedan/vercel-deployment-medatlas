@@ -30,9 +30,12 @@ test('private quizzes use the lecture player, preserve text across navigation an
   setAuthToken('course-test-student');localStorage.setItem('medatlas_active_session_id','12345');
   localStorage.setItem('medatlas_session_draft_answers_12345','{"answers":{"9":"A"}}');
   let cookie='',reads=0,active=0;const requests:string[]=[];
+  let releaseFirstAnswer!:()=>void;
+  const firstAnswerGate=new Promise<void>(resolve=>{releaseFirstAnswer=resolve;});let gateAnswer=true;
   globalThis.fetch=(async(input:any,init:any={})=>{
     const path=String(input);assert.ok(path.startsWith('/api/impulse/'),'Private controls must not call public session/bookmark APIs.');requests.push(path);
     if(path.includes('/session'))reads++;
+    if(path.includes('/answer/')&&gateAnswer){gateAnswer=false;await firstAnswerGate;}
     active++;const response=await nativeFetch(origin+path,{...init,headers:{...init.headers,Cookie:cookie}}).finally(()=>active--);
     const next=response.headers.get('set-cookie');if(next)cookie=next.split(';')[0];return response;
   }) as typeof fetch;
@@ -48,6 +51,8 @@ test('private quizzes use the lecture player, preserve text across navigation an
     await waitFor(()=>Boolean(host().querySelector('.ma-study-player')));assert.equal(host().querySelectorAll('[role=radiogroup] > div').length,6);
     await act(async()=>{(host().querySelectorAll('[role=radiogroup] > div')[5] as HTMLElement).click();await new Promise(r=>setTimeout(r,60));});
     assert.match(host().textContent||'',/Correct Answer!/);assert.match(host().textContent||'',/Option F/);
+    assert.match(host().textContent||'',/Saving/,'Feedback must appear while the server save is still blocked.');
+    await act(async()=>{releaseFirstAnswer();await new Promise(r=>setTimeout(r,70));});
     await click('Next Question');await enter('textarea',' Support ');await click('Next Question');
     const saved=(await call(`/quiz/${quiz.slug}/session`,undefined,cookie)).data;
     assert.equal(saved.questions[1].answer,'Support');assert.equal(saved.current,2);
@@ -69,6 +74,7 @@ test('private quizzes use the lecture player, preserve text across navigation an
     await click('8');await click('Finish Session');await click('Confirm & Submit');await waitFor(()=>Boolean(host().textContent?.includes('Session Completed')));
     const completed=(await call(`/quiz/${quiz.slug}/session?offset=0`,undefined,cookie)).data;assert.equal(completed.completed,true);assert.equal(completed.questions[0].answer,5);assert.equal(completed.questions[1].answer,'Support');
   }finally{
+    releaseFirstAnswer();
     await act(async()=>root.unmount());globalThis.fetch=nativeFetch;setAuthToken(null);dom.window.close();
     await new Promise<void>(r=>http.close(()=>r()));
     await pool.query('DELETE FROM impulse.answers WHERE attempt_id IN(SELECT id FROM impulse.attempts WHERE quiz_id=$1)',[quiz.id]);await pool.query('DELETE FROM impulse.attempts WHERE quiz_id=$1',[quiz.id]);await pool.query('UPDATE impulse.quizzes SET published_version=NULL WHERE id=$1',[quiz.id]);await pool.query('DELETE FROM impulse.questions WHERE version_id IN(SELECT id FROM impulse.versions WHERE quiz_id=$1)',[quiz.id]);await pool.query('DELETE FROM impulse.versions WHERE quiz_id=$1',[quiz.id]);await pool.query('DELETE FROM impulse.quizzes WHERE id=$1',[quiz.id]);await pool.end();

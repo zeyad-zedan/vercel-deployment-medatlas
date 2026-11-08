@@ -2,7 +2,7 @@ import {getAuthToken} from './api.ts';
 import type {SessionPlayerApi} from './session-player-api.tsx';
 
 type State = {id:string;position:number;type:string;answered:boolean;choice:number|null;score:number|null;max_marks:number};
-type Row = {id:string;position:number;question:any;answer:any;result:any;model_answer?:string;has_image:boolean;max_marks:number};
+type Row = {id:string;position:number;question:any;answer:any;result:any;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;has_image:boolean;max_marks:number};
 export type CourseSession = {attemptId:string;title:string;total:number;current:number;completed:boolean;studentUid:string;states:State[];questions:Row[]};
 const option = (index:number) => String.fromCharCode(65+index);
 
@@ -49,8 +49,8 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     answerCorrect:state.score===null?null:Number(state.score)===Number(state.max_marks),
     hasSavedAnswer:state.answered,submitted:state.type==='mcq'?state.score!==null:state.answered,selectedDisplayed:state.type==='mcq'&&state.choice!==null?option(state.choice):state.answered?(state.score===null?'C':Number(state.score)===Number(state.max_marks)?'A':'B'):null,
     ...(row?{questionText:row.question.text,options:Object.fromEntries((row.question.options||[]).map((text:string,index:number)=>[option(index),text])),
-      correctDisplayedOption:Number.isInteger(row.result?.correctOption)?option(row.result.correctOption):undefined,
-      explanation:row.result?.feedback||'',shortAnswerAttempt:state.type==='short_answer'&&state.answered?attempt(row):null,
+      correctDisplayedOption:Number.isInteger(row.study_feedback?.correctOption??row.result?.correctOption)?option(row.study_feedback?.correctOption??row.result.correctOption):undefined,
+      explanation:row.study_feedback?.feedback||row.result?.feedback||'',shortAnswerAttempt:state.type==='short_answer'&&state.answered?attempt(row):null,
       images:row.has_image?[{id:`course-${slug}-${row.id}`,alt:'Question image',source:`/api/impulse/quiz/${slug}/image/${row.id}`}]:[],
     }:{}),
   });
@@ -79,12 +79,14 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     saveQuizShortAnswer:(_id,id,answer)=>serial(async()=>{
       const state=stateFor(id);if(state.type!=='short_answer')throw Error('Question not available.');
       const text=answer.trim().normalize('NFC'),row=rows.get(state.id),same=row?.answer===text;
+      if(same&&row)return {session:summary(),attempt:attempt(row)};
       await courseRequest(slug,`/answer/${state.id}`,{answer:text},true);
       const saved=update(state,text,same?row?.result:null);
       return {session:summary(),attempt:saved?attempt(saved):{answer:text,status:'saved',maxScore:Number(state.max_marks)}};
     }),
     gradeQuizShortAnswer:(_id,id)=>serial(async()=>{
       const state=stateFor(id),row=rows.get(state.id);if(!row)throw Error('Load this question before grading.');
+      if(row.result)return {session:summary(),attempt:attempt(row)};
       const graded=await courseRequest(slug,`/grade/${state.id}`,{});
       update(state,row.answer,graded.result,graded.modelAnswer);
       return {session:summary(),attempt:attempt(row)};

@@ -82,6 +82,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const offset=req.query.offset===undefined?Math.floor(a.current_position/6)*6:Number(req.query.offset);required(Number.isInteger(offset)&&offset>=0&&offset<count,'Invalid question page.',400);
   const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,
    CASE WHEN a.result IS NOT NULL AND q.definition->>'type'='mcq' THEN a.result||jsonb_build_object('correctOption',q.definition->'correct') ELSE a.result END AS result,
+   CASE WHEN q.definition->>'type'='mcq' THEN jsonb_build_object('correctOption',q.definition->'correct','feedback',q.definition->>'explanation') END AS study_feedback,
    CASE WHEN a.result IS NOT NULL THEN q.definition->>'model_answer' END AS model_answer,a.status
    FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
   res.json({attemptId:a.id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});

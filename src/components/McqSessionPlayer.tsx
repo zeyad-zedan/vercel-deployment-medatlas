@@ -397,7 +397,8 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           ...prev,
           questions: (prev.questions || []).map((q: any) =>
             q.id === currentQ.id
-              ? { ...q, submitted: !session.privateQuiz, selectedDisplayed: opt }
+              ? { ...q, submitted: !session.privateQuiz || Boolean(q.correctDisplayedOption), selectedDisplayed: opt,
+                  ...(session.privateQuiz&&q.correctDisplayedOption?{answerCorrect:opt===q.correctDisplayedOption}:{}) }
               : q
           ),
         };
