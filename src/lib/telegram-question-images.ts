@@ -91,13 +91,23 @@ export async function uploadQuestionImage(fileName:string,buffer:Buffer):Promise
     if(!response.ok || !result?.ok || !result.result?.document?.file_id) throw new Error('Telegram could not store this image. Please retry.');
     const image:QuestionImage={id,alt:'',telegramFileId:result.result.document.file_id,mimeType,fileSize:buffer.length};
     if(uploaded.size>=500) uploaded.delete(uploaded.keys().next().value!);
-    uploaded.set(id,image);return image;
+    uploaded.set(id,image);
+    // Keep the bytes already received, rather than downloading them again for
+    // the upload preview or first student request on this server instance.
+    rememberImage(image,buffer);return image;
   })();
   uploading.set(id,job);
   try{return await job;}finally{uploading.delete(id);}
 }
 const downloads=new Map<string,{buffer:Buffer;expires:number}>();
 const downloading=new Map<string,Promise<Buffer>>();
+function rememberImage(image:QuestionImage,buffer:Buffer){
+  const key=image.id+':'+image.telegramFileId;
+  downloads.delete(key);
+  let total=[...downloads.values()].reduce((sum,entry)=>sum+entry.buffer.length,0);
+  for(const [id,entry] of downloads){if(total+buffer.length<=32*1024*1024)break;downloads.delete(id);total-=entry.buffer.length;}
+  downloads.set(key,{buffer,expires:Date.now()+3600000});
+}
 export async function fetchQuestionImage(image:QuestionImage):Promise<Buffer> {
   const cacheKey=image.id+':'+image.telegramFileId;
   const cached=downloads.get(cacheKey);
@@ -107,7 +117,7 @@ export async function fetchQuestionImage(image:QuestionImage):Promise<Buffer> {
   if(downloading.size>=8)throw new Error('Images are busy loading. Please retry.');
   const job=(async()=>{
     const protectedCopy=await protectedImageCache(image);
-    if(protectedCopy){downloads.set(cacheKey,{buffer:protectedCopy,expires:Date.now()+3600000});return protectedCopy;}
+    if(protectedCopy){rememberImage(image,protectedCopy);return protectedCopy;}
     const url=await getTelegramFileDownloadUrl(image.telegramFileId!);
     const response=await fetch(url,{signal:AbortSignal.timeout(25000)});
     if(!response.ok || !response.body)throw new Error('Telegram image unavailable. Please retry.');
@@ -116,9 +126,7 @@ export async function fetchQuestionImage(image:QuestionImage):Promise<Buffer> {
     finally {await reader.cancel().catch(()=>{});}
     const buffer=Buffer.concat(chunks);
     if(size!==image.fileSize || createHash('sha256').update(buffer).digest('hex')!==image.id)throw new Error('Image integrity check failed.');
-    let total=[...downloads.values()].reduce((n,c)=>n+c.buffer.length,0);
-    for(const [k,v] of downloads){if(total+size<=32*1024*1024)break;downloads.delete(k);total-=v.buffer.length;}
-    downloads.set(cacheKey,{buffer,expires:Date.now()+3600000});return buffer;
+    rememberImage(image,buffer);return buffer;
   })();
   downloading.set(cacheKey,job);
   try{return await job;}finally{downloading.delete(cacheKey);}
