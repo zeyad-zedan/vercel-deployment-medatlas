@@ -64,7 +64,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   const value=read(cookie(req,'impulse_'+req.params.slug));required(value?.role==='student'&&value.uid===uid,'Enter the quiz password to continue.',401);
   const row=(await pool.query('SELECT a.id,a.version_id,a.current_position,a.completed,q.title,q.slug,q.password_hash,q.published_version FROM impulse.attempts a JOIN impulse.quizzes q ON q.id=a.quiz_id WHERE a.id=$1 AND a.student_uid=$2 AND q.slug=$3',[value.attempt,uid,req.params.slug])).rows[0];
   required(row&&row.published_version,'Enter the quiz password to continue.',401);required(allowOldStamp||value.stamp===hash(row.password_hash),'The quiz password has changed. Enter the current password to resume.',401);
-  if(!row.completed&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
+  if(req.method==='GET'&&req.path.endsWith('/session')&&!row.completed&&row.version_id!==row.published_version){const updated=await refreshCourseAttempt(row.id,uid);return {...row,version_id:updated.version_id,current_position:updated.current_position,completed:updated.completed};}return row;
  }
  r.post('/api/impulse/quiz/:slug/unlock',limit('unlock',8),wrap(async(req,res)=>{
   const quiz=(await pool.query('SELECT id,password_hash,published_version FROM impulse.quizzes WHERE slug=$1',[req.params.slug])).rows[0];required(quiz?.published_version,'Quiz not available.',404);
@@ -101,7 +101,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
  }));
  r.post('/api/impulse/quiz/:slug/answer/:id',wrap(async(req,res)=>{
   const a=await access(req);required(!a.completed,'This quiz is submitted. Your answers are preserved.',409);
-  const row=(await pool.query('SELECT definition,position FROM impulse.questions WHERE id=$1 AND version_id=$2',[req.params.id,a.version_id])).rows[0];required(row);const q=row.definition,answer=req.body.answer;
+  const row=(await pool.query('SELECT definition,position FROM impulse.questions WHERE id=$1 AND version_id=$2',[req.params.id,a.version_id])).rows[0];required(row,'This quiz was updated. Reopen it to load the latest questions. Your saved answers are safe.',409);const q=row.definition,answer=req.body.answer;
   required(q.type==='mcq'?Number.isInteger(answer)&&answer>=0&&answer<q.options.length:typeof answer==='string'&&answer.length<=4000,'Enter a valid answer.',400);
   const client=await pool.connect();try{await client.query('BEGIN');const locked=(await client.query('SELECT completed FROM impulse.attempts WHERE id=$1 FOR UPDATE',[a.id])).rows[0];required(!locked.completed,'This quiz is submitted. Your answers are preserved.',409);
    await client.query(`INSERT INTO impulse.answers(attempt_id,question_id,answer) VALUES($1,$2,$3) ON CONFLICT(attempt_id,question_id) DO UPDATE SET answer=excluded.answer,result=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.result ELSE NULL END,status=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.status ELSE 'saved' END,lease=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.lease ELSE NULL END,updated_at=now()`,[a.id,req.params.id,JSON.stringify(answer)]);

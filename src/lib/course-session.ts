@@ -65,6 +65,7 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
   const service:SessionPlayerApi={
     getSessionQuestionBatch:(_id,offset)=>serial(async()=>{
       const next:CourseSession=await courseRequest(slug,`/session?offset=${offset}`);
+      if(initial.versionId&&next.versionId!==initial.versionId)throw Error('This quiz was updated. Close and reopen it to load the latest questions. Your saved answers are safe.');
       data={...data,...next,states:next.states||data.states,current:position};
       next.questions.forEach(row=>{rows.set(row.id,row);const state=data.states.find(s=>s.id===row.id);if(state){state.answered=row.answer!==null;state.choice=state.type==='mcq'?row.answer:null;state.score=row.result?.score??null;}});
       return {session:snapshot(next.questions)};
