@@ -77,15 +77,24 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   });
 
   const [navigatorOpen,setNavigatorOpen]=useState(true);
+  const navigatorOpenRef=useRef(navigatorOpen);navigatorOpenRef.current=navigatorOpen;
   const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
   useEffect(()=>{
-    let lastY=window.scrollY;
+    let lastY=window.scrollY,direction=0,travel=0,settleUntil=0;
     const followScroll=()=>{
-      const nextY=window.scrollY,delta=nextY-lastY;
-      if(nextY<40)setNavigatorOpen(true);
-      else if(delta>12)setNavigatorOpen(false);
-      else if(delta< -12)setNavigatorOpen(true);
-      if(Math.abs(delta)>12)lastY=nextY;
+      const nextY=Math.max(0,window.scrollY),delta=nextY-lastY;
+      lastY=nextY;
+      // Header resizing and browser scroll anchoring are not a new gesture.
+      if(performance.now()<settleUntil||Math.abs(delta)<1)return;
+      const nextDirection=Math.sign(delta);
+      if(nextDirection!==direction){direction=nextDirection;travel=0;}
+      travel+=Math.abs(delta);
+      const shouldOpen=nextY<24||(direction<0&&travel>=64);
+      const shouldClose=nextY>100&&direction>0&&travel>=32;
+      if((shouldOpen&&!navigatorOpenRef.current)||(shouldClose&&navigatorOpenRef.current)){
+        navigatorOpenRef.current=shouldOpen;setNavigatorOpen(shouldOpen);
+        settleUntil=performance.now()+350;travel=0;direction=0;
+      }
     };
     window.addEventListener('scroll',followScroll,{passive:true});
     return()=>window.removeEventListener('scroll',followScroll);
@@ -599,7 +608,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const showSlidePreview = sidePdfOpen && Boolean(pdfTargetUrl);
 
   return (
-    <div className="ma-study-player w-full space-y-3 pb-8">
+    <div className="ma-study-player w-full space-y-3 pb-8" style={{overflowAnchor:'none'}}>
       {batches.error && <QuestionBatchStatus error={batches.error} retry={batches.retry}/>}
       {/* 1. HIGH-EFFICIENCY STICKY COMMAND BAR (Header + Navigator Unified) */}
       <div

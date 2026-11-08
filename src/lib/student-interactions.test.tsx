@@ -235,6 +235,11 @@ test('study navigator collapses on downward scrolling, expands upwards, and does
   const toggle=()=>host().querySelector('button[aria-controls="study-question-navigator"]')!;
   assert.equal(toggle().getAttribute('aria-expanded'),'true');
   await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:180});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'false');
-  await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:100});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'true');assert.equal(reads,0);
+  // A header/image layout adjustment immediately after collapsing must not reopen it.
+  await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:110});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'false');
+  await act(async()=>{await new Promise(r=>setTimeout(r,370));});
+  for(const y of [108,106,104,102])await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:y});window.dispatchEvent(new dom.window.Event('scroll'));});
+  assert.equal(toggle().getAttribute('aria-expanded'),'false','Tiny upward movements must not reopen the bar.');
+  await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:30});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'true');assert.equal(reads,0);
  }finally{await act(async()=>root.unmount());if(previousY)Object.defineProperty(dom.window,'scrollY',previousY);}
 });
