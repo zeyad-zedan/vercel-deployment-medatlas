@@ -23,7 +23,7 @@ export function readSessionDrafts(session: any): Record<number, OptionKey> {
     for (const question of session.questions || []) {
       if (question.shortAnswerId || question.questionType === 'short_answer') continue;
       const answer = answers?.[question.id];
-      if (!OPTION_KEYS.includes(answer)) continue;
+      if (session.privateQuiz ? !/^[A-F]$/.test(answer) : !OPTION_KEYS.includes(answer)) continue;
       if (session.mode !== 'exam' && question.submitted) continue;
       // Older clients stored acknowledged answers too. Do not replay these over newer server data.
       if (stored.version !== 1 && question.selectedDisplayed) continue;
@@ -37,6 +37,9 @@ export function readSessionDrafts(session: any): Record<number, OptionKey> {
 export function getResumeQuestionIndex(session: any): number {
   const questions = session?.questions || [];
   if (!questions.length) return 0;
+  // Private attempts have a server-saved cursor, including previously answered items.
+  if (session.privateQuiz && Number.isInteger(session.resumeIndex) &&
+      session.resumeIndex >= 0 && session.resumeIndex < questions.length) return session.resumeIndex;
   const continuingStudy = session.mode === 'study' && session.status === 'in_progress';
   if (continuingStudy && session.resumeQuestionId != null) {
     const resume = questions.findIndex((question: any) => question.id === session.resumeQuestionId && !question.submitted && !question.selectedDisplayed);

@@ -41,6 +41,7 @@ import { AnswerSaveStatus } from './AnswerSaveStatus.tsx';
 import { useAnswerSaving } from '../lib/use-answer-saving.ts';
 import { getResumeQuestionIndex, rememberSessionQuestion } from '../lib/session-progress.ts';
 import { UniversityExamPlayer } from './UniversityExamPlayer.tsx';
+import {SessionPlayerApiContext, useSessionPlayerApi, type SessionPlayerApi} from '../lib/session-player-api.tsx';
 
 interface McqSessionPlayerProps {
   initialSession: any;
@@ -48,9 +49,14 @@ interface McqSessionPlayerProps {
   onExit: () => void;
   onSessionCompleted: (completedSession: any) => void;
   onQuestionAnswered?: (updatedSession: any) => void;
+  service?: SessionPlayerApi;
+  onPositionChange?: (index: number) => void;
 }
 
 export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = (props) => {
+  return <SessionPlayerApiContext.Provider value={props.service || api}><SessionPlayerContent {...props}/></SessionPlayerApiContext.Provider>;
+};
+const SessionPlayerContent: React.FC<McqSessionPlayerProps> = (props) => {
   if (props.initialSession?.mode === 'exam') {
     return <QuizTextSaveProvider key={props.initialSession.id} session={props.initialSession}><QuestionImageProvider questions={props.initialSession.questions}><UniversityExamPlayer session={props.initialSession}
       onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={api}/></QuestionImageProvider></QuizTextSaveProvider>;
@@ -59,8 +65,9 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = (props) => {
 };
 
 const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
-  initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered,
+  initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered, onPositionChange,
 }) => {
+  const service = useSessionPlayerApi();
   const [session, setSession] = useState<any>(initialSession);
   const textSaves=useQuizTextSaves();
   useSessionImagePrefetch(session.questions);
@@ -70,7 +77,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   });
 
   const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
-  const batches = useSessionBatches(session, setSession, currentIndex, api);
+  const batches = useSessionBatches(session, setSession, currentIndex, service);
 
   const [localSelections, setLocalSelections] = useState<Record<number, OptionKey | null>>(
     () => {
@@ -82,7 +89,9 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     }
   );
   const [matchingChoices,setMatchingChoices]=useState<Record<number,string>>(()=>({...Object.fromEntries((initialSession.questions||[]).filter((q:any)=>q.matchingChoiceId).map((q:any)=>[q.id,q.matchingChoiceId])),...saves.matchingDrafts}));
-  const handleShortAnswer=(question:any,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===question.maxMarks?'A':'B'):'C';setLocalSelections(previous=>({...previous,[question.id]:pick}));setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===question.id?{...q,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||question.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick,submitted:true}:q)}));onQuestionAnswered?.(result.session);};
+  const applyShortAnswer=(id:number,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===result.attempt.maxScore?'A':'B'):'C';setLocalSelections(previous=>({...previous,[id]:pick}));setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===id?{...q,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||q.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick,submitted:true,...(previous.privateQuiz?{answerCorrect:result.attempt.status==='graded'?pick==='A':null}:{})}:q)}));onQuestionAnswered?.(result.session);};
+  const handleShortAnswer=(question:any,result:any)=>applyShortAnswer(question.id,result);
+  useEffect(()=>textSaves.subscribeSaved?.(applyShortAnswer),[textSaves,onQuestionAnswered]);
   const handleMatchingChoice=(question:any,choice:string)=>{
     if (session.status==='completed'||(session.mode!=='exam'&&question.submitted))return;
     const selected=session.mode==='exam'?'A':choice===question.matching.correctChoiceId?'A':'B';
@@ -175,19 +184,33 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   };
 
   const handleSelectQuestion = (index: number) => {
-    setSidePdfOpen(false);
-    setCurrentIndex(index);
+    void navigateToQuestion(index);
+  };
+
+  const navigationPending = useRef(false);
+  const playerMounted = useRef(true);
+  useEffect(()=>{playerMounted.current=true;return()=>{playerMounted.current=false;};},[]);
+  const navigateToQuestion = async (index: number) => {
+    if (navigationPending.current) return;
+    navigationPending.current = true;
+    try {
+      if (session.privateQuiz) { await saves.flush(); await textSaves.flush(); }
+      if (!playerMounted.current) return;
+      setSidePdfOpen(false);
+      setCurrentIndex(index);
+    } catch (error: any) { if(playerMounted.current)setErrorMsg(error.message || 'Could not save your answer. Please retry.'); }
+    finally { navigationPending.current = false; }
   };
 
   const handlePrevQuestion = () => {
-    setSidePdfOpen(false);
-    setCurrentIndex((i) => Math.max(0, i - 1));
+    void navigateToQuestion(Math.max(0, currentIndex - 1));
   };
 
   const handleNextQuestion = () => {
-    setSidePdfOpen(false);
-    setCurrentIndex((i) => Math.min(questions.length - 1, i + 1));
+    void navigateToQuestion(Math.min(questions.length - 1, currentIndex + 1));
   };
+
+  useEffect(() => { onPositionChange?.(currentIndex); }, [currentIndex, onPositionChange]);
 
   // Automatically close slide preview whenever advancing or navigating to a different question
   useEffect(() => {
@@ -342,6 +365,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 submitted: isLock !== undefined ? isLock : q.submitted,
                 selectedDisplayed: updated.selectedDisplayed ?? (opt !== undefined ? opt : q.selectedDisplayed),
                 matchingChoiceId: updated.matchingChoiceId ?? q.matchingChoiceId,
+                ...(updated.questionUpdate?.id === q.id ? updated.questionUpdate : {}),
               }
             : q
         ),
@@ -373,7 +397,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           ...prev,
           questions: (prev.questions || []).map((q: any) =>
             q.id === currentQ.id
-              ? { ...q, submitted: true, selectedDisplayed: opt }
+              ? { ...q, submitted: !session.privateQuiz, selectedDisplayed: opt }
               : q
           ),
         };
@@ -430,7 +454,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             String(latestCurrentIndexRef.current)
           );
         } catch {}
-        api.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
+        service.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
       }
     };
 
@@ -442,9 +466,9 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             `medatlas_session_curr_idx_${sid}`,
             String(latestCurrentIndexRef.current)
           );
-          localStorage.setItem('medatlas_active_session_id', String(sid));
+          if (!initialSession.privateQuiz) localStorage.setItem('medatlas_active_session_id', String(sid));
         } catch {}
-        api.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
+        service.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
       }
     };
 
@@ -467,15 +491,19 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   }, []);
 
   // Safe Exit helper: records current index & syncs elapsed time before exiting
-  const handleSafeExit = () => {
+  const handleSafeExit = async () => {
+    if (session.privateQuiz && !isCompleted) {
+      try { await saves.flush(); await textSaves.flush(); }
+      catch (error: any) { setErrorMsg(error.message || 'Could not save your answer. Please retry.'); return; }
+    }
     if (session?.id && !isCompleted) {
       try {
         localStorage.setItem(`medatlas_session_curr_idx_${session.id}`, String(currentIndex));
       } catch {}
-      api.syncSessionProgress(session.id, elapsedSeconds).catch(() => {});
+      service.syncSessionProgress(session.id, elapsedSeconds).catch(() => {});
     }
     try {
-      localStorage.removeItem('medatlas_active_session_id');
+      if (!session.privateQuiz) localStorage.removeItem('medatlas_active_session_id');
     } catch {}
     onExit();
   };
@@ -497,11 +525,11 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     try {
       await saves.flush();
       await textSaves.flush();
-      const res = await api.completeSession(session.id, localSelections, elapsedSeconds);
+      const res = await service.completeSession(session.id, localSelections, elapsedSeconds);
       saves.finish();
       setSession((previous: any) => mergeCompletedStudy(previous, res.session));
       try {
-        localStorage.removeItem('medatlas_active_session_id');
+        if (!session.privateQuiz) localStorage.removeItem('medatlas_active_session_id');
       } catch {}
       onSessionCompleted(res.session);
     } catch (err: any) {
@@ -620,10 +648,10 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
               </span>
             </button>
 
-            <BookmarkButton key={currentQ.id} questionId={currentQ.id} saved={Boolean(currentQ.isBookmarked)}
-              onSaved={(saved) => setSession((prev: any) => ({...prev, questions: prev.questions.map((q: any) => q.id === currentQ.id ? {...q, isBookmarked:saved} : q)}))}/>
+            {!session.privateQuiz && <BookmarkButton key={currentQ.id} questionId={currentQ.id} saved={Boolean(currentQ.isBookmarked)}
+              onSaved={(saved) => setSession((prev: any) => ({...prev, questions: prev.questions.map((q: any) => q.id === currentQ.id ? {...q, isBookmarked:saved} : q)}))}/>}
 
-            <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>
+            {!session.privateQuiz && <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>}
 
             {/* Slide Reference Toggle Button */}
             {currentQ.lecturePdfUrl && (
@@ -739,7 +767,9 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
                 let isCorrect: boolean | null = null;
                 if (isCompleted || (!isExamMode && isSubmitted)) {
-                  if (selectedKey && correctKey) {
+                  if (session.privateQuiz && q.answerCorrect != null) {
+                    isCorrect = q.answerCorrect;
+                  } else if (selectedKey && correctKey) {
                     isCorrect = selectedKey === correctKey;
                   }
                 }
@@ -977,7 +1007,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
               {/* Answer Options */}
               <div className="space-y-2" role="radiogroup" aria-label="Answer Options">
-                {OPTION_KEYS.map((letter) => {
+                {(session.privateQuiz ? Object.keys(currentQ.options || {}) as OptionKey[] : OPTION_KEYS).map((letter) => {
                   const optionText = currentQ.options?.[letter] || '';
                   if (!optionText) return null;
 

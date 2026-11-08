@@ -20,9 +20,10 @@ function useImageLoader():ImageLoader {
       const signal=abort.current.signal;
       void (async()=>{
         try{
-          if(!job.image.source?.startsWith(QUESTION_IMAGE_PREFIX))throw new Error('Invalid image source');
+          if(!job.image.source?.startsWith(QUESTION_IMAGE_PREFIX) &&
+             !/^\/api\/impulse\/quiz\/[A-Za-z0-9_-]{20,64}\/image\/[a-f0-9-]{36}$/.test(job.image.source||''))throw new Error('Invalid image source');
           const token=getAuthToken();
-          const response=await fetch(job.image.source,{headers:token?{Authorization:`Bearer ${token}`}:{},signal,cache:'no-store'});
+          const response=await fetch(job.image.source!,{headers:token?{Authorization:`Bearer ${token}`}:{},signal,cache:'no-store'});
           if(!response.ok || !response.headers.get('content-type')?.startsWith('image/'))throw new Error('Image unavailable');
           const blob=await response.blob();
           if(signal.aborted)return;

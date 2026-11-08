@@ -1,10 +1,11 @@
 import React,{lazy,Suspense,useEffect,useState} from 'react';
-import {api} from '../lib/api.ts';
+import {useSessionPlayerApi} from '../lib/session-player-api.tsx';
 const GeminiSetupGuide=lazy(()=>import('./GeminiSetupGuide.tsx'));
 import {QuestionImages} from './QuestionImages.tsx';
 import {useQuizTextSaves} from '../lib/quiz-text-drafts.tsx';
 
 export function ShortAnswerQuestion({question,sessionId,exam=false,completed=false,disabled=false,onSaved}:{question:any;sessionId:number;exam?:boolean;completed?:boolean;disabled?:boolean;onSaved:(result:any)=>void}){
+ const api=useSessionPlayerApi();
  const textSaves=useQuizTextSaves();
  const key=`medatlas_quiz_short_${sessionId}_${question.id}`;
  const [attempt,setAttempt]=useState(question.shortAnswerAttempt||null),[answer,setAnswer]=useState(()=>{try{return !completed?(localStorage.getItem(key)??question.shortAnswerAttempt?.answer??''):question.shortAnswerAttempt?.answer??'';}catch{return question.shortAnswerAttempt?.answer||'';}});

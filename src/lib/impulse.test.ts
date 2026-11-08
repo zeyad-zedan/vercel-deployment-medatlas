@@ -19,7 +19,9 @@ test('private quizzes require passwords, preserve versions and resume answers wi
   assert.equal((await request(`/quiz/${draft.slug}/unlock`,{password:'incorrect'})).status,401);
   const student=(await request(`/quiz/${draft.slug}/unlock`,{password:quiz.password})).cookie;assert.ok(student);
   let session=(await request(`/quiz/${draft.slug}/session`,undefined,student)).data;assert.equal(session.questions.length,6);assert.equal(session.total,8);
+  assert.equal(session.states.length,8);assert.ok(session.states.every((s:any)=>!('question' in s)&&!('rubric' in s)&&!('model_answer' in s)));
   assert.equal((await request(`/quiz/${draft.slug}/session?offset=6`,undefined,student)).data.questions.length,2);
+  assert.equal((await request(`/quiz/${draft.slug}/session?offset=6`,undefined,student)).data.states,undefined,'Later batches must not resend the full navigator metadata.');
   assert.equal((await request(`/quiz/${draft.slug}/session`,undefined,student,'')).status,401,'The quiz cookie alone must not replace MedAtlas sign-in.');
   const [mcq,sa]=session.questions;assert.equal('correct' in mcq.question,false);assert.equal('rubric' in sa.question,false);assert.equal('model_answer' in sa.question,false);
   assert.equal((await request(`/quiz/${draft.slug}/answer/${mcq.id}`,{answer:0},student)).status,200);

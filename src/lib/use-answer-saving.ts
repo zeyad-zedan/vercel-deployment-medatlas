@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from './api.ts';
+import { useSessionPlayerApi } from './session-player-api.tsx';
 import { AnswerSaveQueue, type AnswerToSave } from './answer-saves.ts';
 import { readSessionDrafts, readSessionMatchingDrafts } from './session-progress.ts';
 import type { OptionKey } from './mcq-engine.ts';
 
 export function useAnswerSaving(session: any, onSaved: (result: any, answer: AnswerToSave) => void) {
+  const api = useSessionPlayerApi();
   const callback = useRef(onSaved);
   callback.current = onSaved;
   const initial = useRef(session);

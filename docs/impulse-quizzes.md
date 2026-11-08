@@ -8,6 +8,12 @@ to the normal sidebar or catalog, and private quiz paths are excluded from visit
 These pages are not linked from the MedAtlas catalog. Quiz data is in the separate,
 non-exposed `impulse` Postgres schema; it never creates public lectures or questions.
 
+Private quizzes use the actual `McqSessionPlayer` and `ShortAnswerQuestion` components
+used by lectures and practical sections, with a course-scoped API transport. Navigator,
+answer feedback, written-answer grading, fixed arrows and completion/review screens
+are shared. Public question bookmark/report endpoints are not called for private questions.
+The normal active lecture session and its local drafts are left intact.
+
 ## Publisher workflow
 
 1. Enter the separate team publisher password.
@@ -28,8 +34,9 @@ Passwords are scrypt hashes on the server; publishers cannot retrieve plaintext 
 Students sign in to their normal MedAtlas account and enter the quiz password.
 Their attempt is keyed by account UID and quiz, not browser storage. A second browser/device
 unlocks the same attempt after account sign-in and quiz-password verification. Question content
-loads six at a time. Next/Previous saves the current response before moving. MCQ selections save
-immediately; written answers have Save and Save & grade controls. Unsaved written drafts also
+loads six at a time. Navigator metadata is sent on opening, not repeated with each batch.
+Next/Previous saves the current response before moving. MCQ selections save and return feedback
+in one request; only short answers call Gemini. Written answers have Save and Save & grade controls. Unsaved written drafts also
 stay in account-scoped local storage, and closing the page warns about unsaved work.
 
 Submitted answers are immutable. Saved feedback is reused. Grading uses the existing server-side

@@ -70,10 +70,21 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   setCookie(req,res,'impulse_'+req.params.slug,sign({role:'student',attempt:attempt.id,uid,stamp:hash(quiz.password_hash)}));res.json({ok:true});
  }));
  r.get('/api/impulse/quiz/:slug/session',wrap(async(req,res)=>{
-  const a=await access(req),count=(await pool.query('SELECT count(*)::int AS total FROM impulse.questions WHERE version_id=$1',[a.version_id])).rows[0].total;
+  const a=await access(req);
+  // Small navigation/score metadata only; question text and answer text remain paged.
+  const includeStates=req.query.offset===undefined||req.query.states==='1';
+  const states=includeStates?(await pool.query(`SELECT q.id,q.position,q.definition->>'type' AS type,a.answer IS NOT NULL AS answered,
+   CASE WHEN q.definition->>'type'='mcq' THEN a.answer END AS choice,a.result->'score' AS score,
+   COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks
+   FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2
+   WHERE q.version_id=$1 ORDER BY q.position`,[a.version_id,a.id])).rows:[];
+  const count=includeStates?states.length:(await pool.query('SELECT count(*)::int AS total FROM impulse.questions WHERE version_id=$1',[a.version_id])).rows[0].total;
   const offset=req.query.offset===undefined?Math.floor(a.current_position/6)*6:Number(req.query.offset);required(Number.isInteger(offset)&&offset>=0&&offset<count,'Invalid question page.',400);
-  const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,a.result,a.status FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
-  res.json({title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,questions:rows});
+  const rows=(await pool.query(`SELECT q.id,q.position,q.definition-'correct'-'rubric'-'model_answer'-'explanation'-'image' AS question,q.definition ? 'image' AS has_image,COALESCE((SELECT sum((p->>'marks')::int) FROM jsonb_array_elements(q.definition->'rubric') p),1) AS max_marks,a.answer,
+   CASE WHEN a.result IS NOT NULL AND q.definition->>'type'='mcq' THEN a.result||jsonb_build_object('correctOption',q.definition->'correct') ELSE a.result END AS result,
+   CASE WHEN a.result IS NOT NULL THEN q.definition->>'model_answer' END AS model_answer,a.status
+   FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
+  res.json({attemptId:a.id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
  }));
  r.get('/api/impulse/quiz/:slug/image/:id',wrap(async(req,res)=>{
   const a=await access(req),q=(await pool.query('SELECT definition->\'image\' AS image FROM impulse.questions WHERE id=$1 AND version_id=$2',[req.params.id,a.version_id])).rows[0];required(q?.image);res.type(q.image.mimeType).send(await fetchQuestionImage(q.image));
@@ -89,17 +100,19 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradeWithP
   required(q.type==='mcq'?Number.isInteger(answer)&&answer>=0&&answer<q.options.length:typeof answer==='string'&&answer.length<=4000,'Enter a valid answer.',400);
   const client=await pool.connect();try{await client.query('BEGIN');const locked=(await client.query('SELECT completed FROM impulse.attempts WHERE id=$1 FOR UPDATE',[a.id])).rows[0];required(!locked.completed,'This quiz is submitted. Your answers are preserved.',409);
    await client.query(`INSERT INTO impulse.answers(attempt_id,question_id,answer) VALUES($1,$2,$3) ON CONFLICT(attempt_id,question_id) DO UPDATE SET answer=excluded.answer,result=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.result ELSE NULL END,status=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.status ELSE 'saved' END,lease=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.lease ELSE NULL END,updated_at=now()`,[a.id,req.params.id,JSON.stringify(answer)]);
-   await client.query('UPDATE impulse.attempts SET current_position=$2,updated_at=now() WHERE id=$1',[a.id,row.position]);await client.query('COMMIT');res.json({ok:true});
+   const result=q.type==='mcq'?{score:answer===q.correct?1:0,maxScore:1,feedback:q.explanation,correctAnswer:q.options[q.correct],correctOption:q.correct}:null;
+   if(result)await client.query("UPDATE impulse.answers SET result=$3,status='graded' WHERE attempt_id=$1 AND question_id=$2",[a.id,req.params.id,JSON.stringify(result)]);
+   await client.query('UPDATE impulse.attempts SET current_position=$2,updated_at=now() WHERE id=$1',[a.id,row.position]);await client.query('COMMIT');res.json({ok:true,...(result?{result}:{})});
   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
  }));
  r.post('/api/impulse/quiz/:slug/grade/:id',limit('grade',6),wrap(async(req,res)=>{
   const a=await access(req),row=(await pool.query('SELECT q.definition,a.answer,a.result,a.status FROM impulse.questions q JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.id=$1 AND q.version_id=$3',[req.params.id,a.id,a.version_id])).rows[0];required(row,'Save an answer first.',400);
-  if(row.result)return res.json({result:row.result});const q=row.definition;
+  const q=row.definition;if(row.result)return res.json({result:row.result,...(q.type==='short_answer'?{modelAnswer:q.model_answer}:{})});
   if(q.type==='mcq'){const result={score:row.answer===q.correct?1:0,maxScore:1,feedback:q.explanation,correctAnswer:q.options[q.correct]};const updated=await pool.query("UPDATE impulse.answers SET result=$3,status='graded' WHERE attempt_id=$1 AND question_id=$2 AND answer=$4",[a.id,req.params.id,JSON.stringify(result),JSON.stringify(row.answer)]);required(updated.rowCount,'Your answer changed. Grade the saved answer again.',409);return res.json({result});}
   required(typeof row.answer==='string'&&row.answer.trim(),'Write an answer first.',400);const lease=randomUUID();
   const claim=await pool.query("UPDATE impulse.answers SET lease=$3,lease_until=now()+interval '35 seconds',status='grading' WHERE attempt_id=$1 AND question_id=$2 AND (lease IS NULL OR lease_until<now()) RETURNING question_id",[a.id,req.params.id,lease]);required(claim.rowCount,'Grading is already in progress. Please wait.',409);
   try{const {grade}=await grader({question_text:q.text,model_answer:q.model_answer,rubric:q.rubric,tags:[],status:'published'},row.answer);
-   const updated=await pool.query("UPDATE impulse.answers SET result=$4,status='graded',lease=NULL WHERE attempt_id=$1 AND question_id=$2 AND lease=$3 AND answer=$5",[a.id,req.params.id,lease,JSON.stringify(grade),JSON.stringify(row.answer)]);required(updated.rowCount,'Your answer changed. Grade the saved answer again.',409);res.json({result:grade});
+   const updated=await pool.query("UPDATE impulse.answers SET result=$4,status='graded',lease=NULL WHERE attempt_id=$1 AND question_id=$2 AND lease=$3 AND answer=$5",[a.id,req.params.id,lease,JSON.stringify(grade),JSON.stringify(row.answer)]);required(updated.rowCount,'Your answer changed. Grade the saved answer again.',409);res.json({result:grade,modelAnswer:q.model_answer});
   }catch(e:any){await pool.query("UPDATE impulse.answers SET lease=NULL,status='saved' WHERE attempt_id=$1 AND question_id=$2 AND lease=$3",[a.id,req.params.id,lease]);throw Object.assign(Error(gradingMessages[e.code]||'Grading is temporarily unavailable. Your answer is saved.'),{status:503});}
  }));
  r.post('/api/impulse/quiz/:slug/submit',wrap(async(req,res)=>{const a=await access(req);await pool.query('UPDATE impulse.attempts SET completed=true,updated_at=now() WHERE id=$1',[a.id]);res.json({ok:true});}));
