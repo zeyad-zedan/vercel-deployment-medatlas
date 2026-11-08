@@ -210,3 +210,31 @@ test('quota failures do not open key setup, and closing setup preserves the save
   await act(async()=>dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true})));assert.equal(dom.window.document.querySelector('[role="dialog"]'),null);assert.equal((host().querySelector('textarea') as HTMLTextAreaElement).value,'My saved answer');assert.match(text(),/افتح شرح إضافة مفتاح/);
  }finally{await act(async()=>root.unmount());}
 });
+
+
+test('grading feedback distinguishes marking outcomes and scrolls only for a requested new result',async()=>{
+ const {GradeFeedback}=await import('../components/GradeFeedback.tsx');let scrolls=0;
+ const previousScroll=dom.window.HTMLElement.prototype.scrollIntoView;
+ dom.window.HTMLElement.prototype.scrollIntoView=()=>{scrolls++;};
+ const grade={score:3,maxScore:6,feedback:'Two points need attention.',points:[{id:'one',description:'Correct point',awarded:2,marks:2,feedback:'Correct.'},{id:'two',description:'Partial point',awarded:1,marks:2,feedback:'Add detail.'},{id:'three',description:'Missing point',awarded:0,marks:2,feedback:'Review this.'}]};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<GradeFeedback grade={grade} modelAnswer="Model text"/>));assert.equal(scrolls,0);
+  for(const state of ['correct','partial','missed'])assert.ok(host().querySelector('.ma-grade-point-'+state));
+  await act(async()=>{root.render(<GradeFeedback grade={grade} modelAnswer="Model text" scrollToken={1}/>);});
+  await act(async()=>{await new Promise(r=>setTimeout(r,10));});assert.equal(scrolls,1);
+  assert.match(text(),/50%/);assert.match(text(),/Partial credit/);assert.match(text(),/Needs review/);
+ }finally{await act(async()=>root.unmount());dom.window.HTMLElement.prototype.scrollIntoView=previousScroll;}
+});
+
+test('study navigator collapses on downward scrolling, expands upwards, and does not fetch questions',async()=>{
+ reset();let reads=0;api.syncSessionProgress=async()=>({success:true});api.getSessionQuestionBatch=async()=>{reads++;throw Error('Unnecessary fetch');};
+ const question={id:991,index:0,questionText:'A test question',images:[],options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A'};
+ const root=createRoot(host());const previousY=Object.getOwnPropertyDescriptor(dom.window,'scrollY');
+ try{
+  await act(async()=>root.render(<McqSessionPlayer initialSession={{id:889911,mode:'study',status:'in_progress',questions:[question],totalQuestions:1}} onExit={()=>{}} onSessionCompleted={()=>{}}/>));
+  const toggle=()=>host().querySelector('button[aria-controls="study-question-navigator"]')!;
+  assert.equal(toggle().getAttribute('aria-expanded'),'true');
+  await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:180});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'false');
+  await act(async()=>{Object.defineProperty(dom.window,'scrollY',{configurable:true,value:100});window.dispatchEvent(new dom.window.Event('scroll'));});assert.equal(toggle().getAttribute('aria-expanded'),'true');assert.equal(reads,0);
+ }finally{await act(async()=>root.unmount());if(previousY)Object.defineProperty(dom.window,'scrollY',previousY);}
+});

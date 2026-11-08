@@ -32,3 +32,13 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+.ma-grade-feedback { border:1px solid #cbdedb; border-radius:12px; overflow:hidden; scroll-margin-top:160px; background:#fff; }
+.ma-grade-summary { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px; background:#edf7f4; border-bottom:1px solid #cbdedb; color:#163b35; }
+.ma-grade-body { padding:20px; }
+.ma-grade-point { display:flex; align-items:flex-start; gap:12px; padding:14px; border:1px solid; border-left-width:3px; border-radius:8px; }
+.ma-grade-point-correct { background:#f2faf6; border-color:#b8dbc9; color:#16613f; }
+.ma-grade-point-partial { background:#fffbef; border-color:#ead59a; color:#805b12; }
+.ma-grade-point-missed { background:#fff5f4; border-color:#ebc3bf; color:#993f36; }
+.ma-grade-model { margin-top:20px; padding:14px; border:1px solid #d9e2e5; border-radius:8px; background:#f7f9fa; color:#243b45; }
+@media(max-width:640px) { .ma-grade-summary,.ma-grade-body { padding:16px; } }

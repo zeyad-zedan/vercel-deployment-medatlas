@@ -513,10 +513,11 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                 </span>
               </div>
 
+              {reviewingQuestion.questionType!=='short_answer'&&<QuestionImages images={reviewingQuestion.images}/>}
               <div className="font-semibold text-slate-900 text-sm leading-relaxed">
                 {reviewingQuestion.questionType!=='short_answer'&&reviewingQuestion.questionText}
               </div>
-              {reviewingQuestion.questionType==='short_answer'?<ShortAnswerQuestion key={reviewingQuestion.id} question={reviewingQuestion} sessionId={session.id} exam completed onSaved={result=>handleShortAnswer(reviewingQuestion,result)}/>:<QuestionImages images={reviewingQuestion.images}/>}
+              {reviewingQuestion.questionType==='short_answer'?<ShortAnswerQuestion key={reviewingQuestion.id} question={reviewingQuestion} sessionId={session.id} exam completed onSaved={result=>handleShortAnswer(reviewingQuestion,result)}/>:null}
                   <QuestionReportButton key={reviewingQuestion.id} questionId={reviewingQuestion.id}/>
 
               {reviewingQuestion.matching && <MatchingAnswerReview matching={reviewingQuestion.matching} choiceId={reviewingQuestion.matchingChoiceId}/>}
@@ -757,6 +758,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                     <BookmarkButton key={currentQ.id} questionId={currentQ.id} saved={Boolean(currentQ.isBookmarked)}
                       onSaved={(saved) => setSession((prev: any) => ({...prev, questions: prev.questions.map((q: any) => q.id === currentQ.id ? {...q,isBookmarked:saved} : q)}))}/>
                     <QuestionReportButton key={`report-${currentQ.id}`} questionId={currentQ.id}/>
+                    {!currentQ.matching&&currentQ.questionType!=='short_answer'&&<QuestionImages images={currentQ.images}/>}
                     <div
                       className="font-semibold text-slate-900 leading-relaxed"
                       style={{ fontSize: currentFontSize }}
@@ -764,7 +766,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       {!currentQ.matching && currentQ.questionType!=='short_answer' && currentQ.questionText}
                     </div>
                     {currentQ.questionType==='short_answer'?<ShortAnswerQuestion key={currentQ.id} question={currentQ} sessionId={session.id} exam disabled={completing} onSaved={result=>handleShortAnswer(currentQ,result)}/>:currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} exam onSelect={handleMatchingChoice}
-                      onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <QuestionImages images={currentQ.images}/>}
+                      onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : null}
 
                     <div className="space-y-3 pt-2">
                       {(!currentQ.matching&&currentQ.questionType!=='short_answer' ? ['A', 'B', 'C', 'D'] as const : []).map((key) => {

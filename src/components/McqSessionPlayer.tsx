@@ -76,7 +76,20 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     onQuestionAnswered?.(result.session);
   });
 
+  const [navigatorOpen,setNavigatorOpen]=useState(true);
   const [currentIndex, setCurrentIndex] = useState(() => getResumeQuestionIndex(initialSession));
+  useEffect(()=>{
+    let lastY=window.scrollY;
+    const followScroll=()=>{
+      const nextY=window.scrollY,delta=nextY-lastY;
+      if(nextY<40)setNavigatorOpen(true);
+      else if(delta>12)setNavigatorOpen(false);
+      else if(delta< -12)setNavigatorOpen(true);
+      if(Math.abs(delta)>12)lastY=nextY;
+    };
+    window.addEventListener('scroll',followScroll,{passive:true});
+    return()=>window.removeEventListener('scroll',followScroll);
+  },[]);
   const batches = useSessionBatches(session, setSession, currentIndex, service);
 
   const [localSelections, setLocalSelections] = useState<Record<number, OptionKey | null>>(
@@ -157,7 +170,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         behavior: 'smooth',
       });
     }
-  }, [currentIndex]);
+  }, [currentIndex,navigatorOpen]);
 
   // Smoothly autoscroll so both the Navigator Panel and the MCQ Card are shown when advancing/changing questions
   useEffect(() => {
@@ -594,7 +607,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         className="ma-study-command sticky z-20 scroll-mt-24 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-xs px-3 py-2 sm:px-4 sm:py-2.5 space-y-2 transition-all"
       >
         {/* Top Control Line */}
-        <div className="flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
           {/* Left: Exit + Context Info */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
@@ -626,8 +639,9 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             </div>
           </div>
 
+          <button type="button" aria-expanded={navigatorOpen} aria-controls="study-question-navigator" onClick={()=>setNavigatorOpen(open=>!open)} className="ml-auto px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg whitespace-nowrap">{navigatorOpen?'Hide questions':`Questions (${currentIndex+1}/${questions.length})`}</button>
           {/* Right: Tools & Timer */}
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <div style={{display:navigatorOpen?undefined:'none'}} className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             {/* Flag Button */}
             <button
               type="button"
@@ -716,7 +730,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
         </div>
 
         {/* Bottom Control Line: Continuous Single-Row MCQ Numbers Strip + Micro Legend */}
-        <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+        <div id="study-question-navigator" style={{display:navigatorOpen?undefined:'none'}} className="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
           {/* Micro Legend & Counter */}
           <div className="hidden lg:flex items-center gap-2.5 text-[11px] text-slate-500 font-medium shrink-0">
             <span className="font-bold text-slate-800">
@@ -990,12 +1004,12 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <>
               {/* Question Text Vignette */}
               <div className="space-y-3">
+                <QuestionImages images={currentQ.images}/>
                 <p className="ma-question-stem font-serif-academic text-slate-900">
                   {currentQ.questionText}
                 </p>
 
                 {/* Optional Scientific Diagram */}
-                <QuestionImages images={currentQ.images}/>
                 {currentQ.diagramSvg && (
                   <div
                     className="max-h-52 overflow-hidden mx-auto rounded-xl border border-slate-100 p-2 bg-slate-50/50 flex items-center justify-center"
