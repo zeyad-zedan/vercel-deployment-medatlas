@@ -758,7 +758,7 @@ app.get('/api/sessions/:id', requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Invalid question batch offset.' });
     }
     const session = await getExamSessionForStudent(req.user!.uid, sessionId, undefined,
-      { batched, offset, batchOnly: offset !== undefined });
+      { batched, offset: req.query.review === '1' && batched ? 0 : offset, batchOnly: req.query.review !== '1' && offset !== undefined });
     return res.json({ session });
   } catch (error) {
     return sendErrorResponse(res, error, 'Session not found.', 404);

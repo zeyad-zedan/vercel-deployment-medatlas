@@ -145,6 +145,21 @@ test('six-question database reads preserve progress/bookmarks, paging, review sn
     assert.equal(later.questionBatch.offset,6);
     assert.equal(getResumeQuestionIndex(later),9,'resume must load the six-question window around the next unanswered question');
     assert.equal(later.questions.filter((q:any)=>q.contentLoaded).length,6);
+    const historyBefore=await db.select().from(questionAttempts).where(eq(questionAttempts.userUid,uid));
+    const bookmarksBefore=await db.select().from(bookmarks).where(eq(bookmarks.userUid,uid));
+    const fresh=(await repo.createPracticeOrExamSession(uid,{mode:'study',lectureIds:[lectureId],requestedCount:60,shuffleQuestions:false,avoidRecent:false,batched:true})).session;
+    assert.notEqual(fresh.id,later.id);
+    assert.equal(fresh.unansweredCount,60);
+    assert.equal(fresh.questions.filter((q:any)=>q.contentLoaded).length,6);
+    const freshQuestion=fresh.questions[0];
+    await repo.saveSessionQuestionAnswer(uid,fresh.id,freshQuestion.id,freshQuestion.correctDisplayedOption,true,0,true);
+    const reopened=await repo.getExamSessionForStudent(uid,fresh.id,undefined,{batched:true});
+    assert.equal(reopened.id,fresh.id);assert.equal(getResumeQuestionIndex(reopened),1);
+    const oldReviewAgain=await repo.getExamSessionForStudent(uid,session.id,undefined,{batched:true,offset:0});
+    assert.equal(oldReviewAgain.status,'completed');assert.equal(oldReviewAgain.questions[0].selectedDisplayed,q.correctDisplayedOption);
+    assert.deepEqual(await db.select().from(bookmarks).where(eq(bookmarks.userUid,uid)),bookmarksBefore);
+    const historyAfter=await db.select().from(questionAttempts).where(eq(questionAttempts.userUid,uid));
+    for(const old of historyBefore)assert.deepEqual(historyAfter.find(row=>row.id===old.id),old,'Fresh attempts never rewrite old answers or grades');
     const report={questions:60,batchSize:6,oldDatabaseResultBytes:before.bytes,newDatabaseResultBytes:after.bytes,
       reductionPercent:Math.round((1-after.bytes/before.bytes)*100),oldFullQuestionRows:before.fullQuestionRows,newFullQuestionRows:after.fullQuestionRows,
       startDatabaseResultBytes:started.bytes,nextBatchDatabaseResultBytes:page.bytes,earlySubmitDatabaseResultBytes:completed.bytes,

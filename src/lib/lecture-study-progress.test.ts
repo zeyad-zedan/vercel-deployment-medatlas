@@ -36,7 +36,7 @@ test('lecture tag priority reaches the database without changing saved progress 
     const inserted=await db.insert(questions).values(Array.from({length:10},(_,index)=>({...base,id:undefined,lectureId:lecture.id,questionBankId:null,shortAnswerId:null,matchingGroupId:null,tags:index===7?'Topic':'',specialTags:index===9?'Important':'',questionText:`Tag priority ${marker} ${index}`,contentHash:`${marker}-${index}`}))).returning({id:questions.id});
     repo.invalidateCatalogCache();
     const opened=(await repo.createPracticeOrExamSession(uid,{mode:'study',lectureIds:[lectureId],batched:true})).session;
-    const expected=[inserted[7].id,inserted[9].id,...inserted.filter((_,i)=>i!==7&&i!==9).map(q=>q.id)];
+    const expected=[inserted[9].id,inserted[7].id,...inserted.filter((_,i)=>i!==7&&i!==9).map(q=>q.id)];
     assert.deepEqual(opened.questions.map((q:any)=>q.id),expected);
     assert.equal(opened.questions.filter((q:any)=>q.contentLoaded).length,6);
     await repo.saveSessionQuestionAnswer(uid,opened.id,opened.questions[0].id,opened.questions[0].correctDisplayedOption,true,0,true);
@@ -112,7 +112,8 @@ test('22 study + 5 custom answers restore 27/60; custom-only 9/60 resumes withou
     const [history] = await db.insert(examSessions).values({ ...studyBefore, id: undefined, status: 'completed', title: 'Historical completed study', completedAt: new Date() }).returning();
     const custom = (await repo.createPracticeOrExamSession(uid, { mode: 'custom', lectureIds: [fixtureLectures[0]], shuffleQuestions: false, shuffleOptions: true })).session;
     for (const index of [36, 46, 48, 55, 56]) {
-      const question = custom.questions[index];
+      const question = custom.questions.find((item: any) => item.id === lectureQuestions[0][index]);
+      assert.ok(question);
       const wrong = (['A', 'B', 'C', 'D'] as const).find(option => option !== question.correctDisplayedOption)!;
       await repo.saveSessionQuestionAnswer(uid, custom.id, question.id, wrong, true, 0, true);
     }
@@ -137,7 +138,8 @@ test('22 study + 5 custom answers restore 27/60; custom-only 9/60 resumes withou
     assert.ok(repeated.every(result => result.session.id === study.id));
     const customOnly = (await repo.createPracticeOrExamSession(uid, { mode: 'custom', lectureIds: [fixtureLectures[1]], shuffleQuestions: false })).session;
     for (const index of [0, 3, 12, 21, 28, 38, 40, 42, 43]) {
-      const question = customOnly.questions[index];
+      const question = customOnly.questions.find((item: any) => item.id === lectureQuestions[1][index]);
+      assert.ok(question);
       await repo.saveSessionQuestionAnswer(uid, customOnly.id, question.id, question.correctDisplayedOption, true, 0, true);
     }
     const simultaneous = await Promise.all(Array.from({ length: 2 }, () => repo.createPracticeOrExamSession(uid, { mode: 'study', lectureIds: [fixtureLectures[1]] })));

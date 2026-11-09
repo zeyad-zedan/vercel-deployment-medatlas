@@ -15,7 +15,7 @@ export function clearResetSessionStorage(sessionIds: number[]) {
 }
 
 export function readSessionDrafts(session: any): Record<number, OptionKey> {
-  if (session?.status === 'completed') return {};
+  if (session?.status === 'completed'||session?.reviewOnly) return {};
   try {
     const stored = JSON.parse(localStorage.getItem(`medatlas_session_draft_answers_${session.id}`) || '{}');
     const answers = stored.version === 1 ? stored.answers : stored;
@@ -36,7 +36,7 @@ export function readSessionDrafts(session: any): Record<number, OptionKey> {
 
 export function getResumeQuestionIndex(session: any): number {
   const questions = session?.questions || [];
-  if (!questions.length) return 0;
+  if (!questions.length||session?.reviewOnly) return 0;
   // Private attempts have a server-saved cursor, including previously answered items.
   if (session.privateQuiz && Number.isInteger(session.resumeIndex) &&
       session.resumeIndex >= 0 && session.resumeIndex < questions.length) return session.resumeIndex;
@@ -68,7 +68,7 @@ export function rememberSessionQuestion(sessionId: number, questionId: number, i
 
 /** Matching choices share the same acknowledged-write draft envelope as MCQ options. */
 export function readSessionMatchingDrafts(session: any): Record<number,string> {
-  if (session?.status === 'completed') return {};
+  if (session?.status === 'completed'||session?.reviewOnly) return {};
   try {
     const stored = JSON.parse(localStorage.getItem(`medatlas_session_draft_answers_${session.id}`) || '{}');
     const drafts: Record<number,string> = {};

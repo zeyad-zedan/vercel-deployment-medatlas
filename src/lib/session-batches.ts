@@ -15,7 +15,7 @@ export function mergeCompletedStudy(previous: any, completed: any) {
 /** Merge content only: an older fetch must not undo an answer/bookmark saved meanwhile. */
 export function mergeQuestionBatch(previous: any, incoming: any) {
   if (previous.id !== incoming.id) return previous;
-  if (previous.status !== incoming.status) return incoming;
+  if (previous.status !== incoming.status) return {...incoming,...(previous.reviewOnly?{reviewOnly:true}:{})};
   const byId = new Map((incoming.questions || []).filter((q: any) => q.contentLoaded !== false).map((q: any) => [q.id, q]));
   return { ...previous, questions: previous.questions.map((q: any) => {
     const loaded: any = byId.get(q.id);

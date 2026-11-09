@@ -742,8 +742,8 @@ export const api = {
       body: JSON.stringify({ ...params, batchSize: 6 }),
     }),
 
-  getSession: (sessionId: number) =>
-    apiRequest<{ session: any }>(`/api/sessions/${sessionId}?batchSize=6`),
+  getSession: (sessionId: number, review = false) =>
+    apiRequest<{ session: any }>(`/api/sessions/${sessionId}?batchSize=6${review ? "&review=1" : ""}`),
 
   getSessionQuestionBatch: (sessionId: number, offset: number) =>
     apiRequest<{ session: any }>(`/api/sessions/${sessionId}?batchSize=6&offset=${offset}`, {

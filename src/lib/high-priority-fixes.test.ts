@@ -156,6 +156,14 @@ test('paged history preserves every answer and targeted reset preserves other le
     assert.deepEqual(await db.select().from(bookmarks).where(eq(bookmarks.userUid, uid)), savedBookmarks);
     assert.equal((await db.select().from(questionAttempts).where(eq(questionAttempts.userUid, foreignUid))).length, 1);
     assert.equal((await db.select().from(examSessions).where(eq(examSessions.id, mixed.id))).length, 1);
+    const dashboard = await repo.getStudentDashboardAnalytics(uid);
+    const progress: {lectureId: number; uniqueQuestionsAttempted: number; activeSessionId: number | null; reviewSessionId: number | null}[] =
+      dashboard.subjectProgress.flatMap((subject: any) => subject.lectures);
+    const cleared = progress.find(lecture => lecture.lectureId === lectureIds[0]);
+    assert.equal(cleared?.uniqueQuestionsAttempted, 0);
+    assert.equal(cleared?.activeSessionId, null);
+    assert.equal(cleared?.reviewSessionId, null);
+    assert.equal(progress.find(lecture => lecture.lectureId === lectureIds[1])?.uniqueQuestionsAttempted, 200);
     if (process.env.MEDATLAS_EGRESS_REPORT_PATH) fs.writeFileSync(process.env.MEDATLAS_EGRESS_REPORT_PATH, JSON.stringify({ questionsInHistory: 400, questionsPerPage: 25,
       legacyQuestionResultBytes: legacyPayloadBytes, pagedDatabaseResultBytes: pagedResultBytes,
       resultPayloadReductionPercent: Math.round((1 - pagedResultBytes / legacyPayloadBytes) * 100), progressPreserved: true }, null, 2));

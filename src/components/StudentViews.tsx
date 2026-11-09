@@ -87,49 +87,27 @@ export const DashboardView: React.FC<{
 
   return (
     <div className="space-y-8">
-      {/* Header & Primary Action */}
-      <PageHeading eyebrow="Your workspace" title="A little progress, every day."
-        description="Pick up where you left off, explore a lecture, or revisit a question.">
-        <div className="flex w-full flex-wrap items-center justify-end gap-2">
-          {summary.totalIncorrectAnswers > 0 && (
-            <button
-              type="button"
-              onClick={() =>
-                onStartQuickSession({
-                  mode: 'study',
-                  title: 'Review Mistakes (All Modules)',
-                  onlyMistakes: true,
-                })
-              }
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Review Mistakes ({summary.totalIncorrectAnswers})
+      <div className="space-y-4">
+        <PageHeading eyebrow="Your workspace" title="A little progress, every day."
+          description="Pick up where you left off, explore a lecture, or revisit a question." />
+        <div className="ma-home-actions" role="group" aria-label="Study shortcuts">
+          <div className="ma-home-study-actions">
+            <button type="button" className="ma-home-primary" onClick={() => onNavigateTab('lectures')}>
+              Start studying <ArrowRight size={16} aria-hidden="true" />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => onNavigateTab('lectures')}
-            className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Lectures
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigateTab('practical')}
-            className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Practical
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigateTab('lectures')}
-            className="px-4 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Start studying
+            <button type="button" onClick={() => onNavigateTab('lectures')}>
+              <BookOpen size={16} aria-hidden="true" /> Lectures
+            </button>
+            <button type="button" onClick={() => onNavigateTab('practical')}>
+              <Layers size={16} aria-hidden="true" /> Practical
+            </button>
+          </div>
+          <button type="button" className="ma-home-review" disabled={!summary.totalIncorrectAnswers}
+            onClick={() => onStartQuickSession({ mode: 'study', title: 'Review Mistakes (All Modules)', onlyMistakes: true })}>
+            <RotateCcw size={16} aria-hidden="true" /> Review Mistakes ({summary.totalIncorrectAnswers})
           </button>
         </div>
-      </PageHeading>
+      </div>
 
       {/* Welcome / Empty State message when no questions have been attempted */}
       {summary.totalQuestionsAnswered === 0 && (
@@ -511,9 +489,12 @@ export const SubjectsAndLecturesView: React.FC<{
   catalog: any;
   dashboardData?: any;
   initialSelectedSubjectId?: number | 'all' | null;
-  onStartSession: (params: any) => void;
+  onStartSession: (params: any) => any;
   onRefresh?: () => void;
   isAdmin?: boolean;
+  kind?: 'lecture'|'practical';
+  onOpenSession?: (id:number,review?:boolean)=>void;
+  onResetProgress?: (lectureId: number) => Promise<void>;
 }> = ({
   catalog,
   dashboardData,
@@ -521,7 +502,10 @@ export const SubjectsAndLecturesView: React.FC<{
   onStartSession,
   onRefresh,
   isAdmin = false,
+  kind = 'lecture', onOpenSession, onResetProgress,
 }) => {
+  const practical=kind==='practical';
+  const [expandedActionsLectureId,setExpandedActionsLectureId]=useState<number|null>(null);
   const subjects = catalog?.subjects || [];
   const linkedLectureId=useLectureLinkId();
   const linkedSubjectId=subjects.find((subject:any)=>subject.lectures?.some((lecture:any)=>lecture.id===linkedLectureId))?.id;
@@ -540,7 +524,13 @@ export const SubjectsAndLecturesView: React.FC<{
   const [activePdf, setActivePdf] = useState<{ url: string; title: string; initialPage?: number } | null>(null);
   const [resetConfirmLecture, setResetConfirmLecture] = useState<{ id: number; title: string } | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  useEffect(()=>{
+    if(!resetSuccessMessage)return;
+    const timer=setTimeout(()=>setResetSuccessMessage(null),4000);
+    return ()=>clearTimeout(timer);
+  },[resetSuccessMessage]);
   const [uploadModalLecture, setUploadModalLecture] = useState<{
     id: number;
     title: string;
@@ -570,7 +560,7 @@ export const SubjectsAndLecturesView: React.FC<{
       <header className="ma-library-hero">
         <div>
           <span className="ma-eyebrow"><BookOpen size={14} /> Your learning library</span>
-          <h1>Lectures<span className="ma-title-dot">.</span></h1>
+          <h1>{practical?'Practical':'Lectures'}<span className="ma-title-dot">.</span></h1>
           <p>A little focus. A clearer understanding.<br className="hidden sm:block" /> Find your subject and pick up where you left off.</p>
           <div className="ma-library-actions">
             <button type="button" onClick={() => setExpandedSubjectIds(new Set(matchingSubjects.map((subject: any) => subject.id)))} disabled={!matchingSubjects.length}>
@@ -583,7 +573,7 @@ export const SubjectsAndLecturesView: React.FC<{
         </div>
         <div className="ma-library-totals" aria-label="Curriculum totals">
           <div><strong>{moduleSubjects.length}</strong><span>Subjects</span></div>
-          <div><strong>{lectureCount}</strong><span>Lectures</span></div>
+          <div><strong>{lectureCount}</strong><span>{practical?'Sections':'Lectures'}</span></div>
           <div><strong>{questionCount.toLocaleString()}</strong><span>questions</span></div>
         </div>
       </header>
@@ -602,7 +592,7 @@ export const SubjectsAndLecturesView: React.FC<{
           </select>
         </label>
       </div>
-      <p className="text-xs text-slate-500">Completed counts include study, custom practice, and submitted exams. Continue learning opens the first unanswered question.</p>
+      <p className="text-xs text-slate-500">Completed counts cover all your attempts. Continue learning resumes your current attempt; Review answers opens saved answers from Question 1.</p>
       {resetSuccessMessage && (
         <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between">
           <span>{resetSuccessMessage}</span>
@@ -618,7 +608,7 @@ export const SubjectsAndLecturesView: React.FC<{
 
       {matchingSubjects.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-600">
-          No matching subjects or lectures found.
+          No matching subjects, lectures or sections found.
         </div>
       ) : (
         <div className="space-y-8">
@@ -648,7 +638,7 @@ export const SubjectsAndLecturesView: React.FC<{
                 className="ma-subject group">
                 <summary className="ma-subject-summary">
                   <span className="ma-subject-icon" aria-hidden="true"><BookOpen size={22} strokeWidth={1.6} /></span>
-                  <span className="ma-subject-heading"><span className="ma-eyebrow">Subject {String(subjectIndex + 1).padStart(2, '0')}</span><span className="ma-subject-title">{subject.title}</span><span className="ma-subject-meta">{sortedLectures.length} lectures <span aria-hidden="true">·</span> {subject.questionCount || 0} questions</span></span>
+                  <span className="ma-subject-heading"><span className="ma-eyebrow">Subject {String(subjectIndex + 1).padStart(2, '0')}</span><span className="ma-subject-title">{subject.title}</span><span className="ma-subject-meta">{sortedLectures.length} {practical?'sections':'lectures'} <span aria-hidden="true">·</span> {subject.questionCount || 0} questions</span></span>
                   <span className="ma-subject-progress"><span>{Math.min(100, Math.round((subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100))}% completed</span><span className="ma-progress-track"><span style={{width: `${Math.min(100, (subjProgress?.uniqueQuestionsAttempted || 0) / Math.max(1, subject.questionCount || 0) * 100)}%`}} /></span></span>
                   <ChevronDown className="ma-subject-chevron" size={19} aria-hidden="true" />
                 </summary>
@@ -694,12 +684,13 @@ export const SubjectsAndLecturesView: React.FC<{
                 {/* Lectures List in correct order */}
                 <div className="space-y-4">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Lectures in this Subject ({sortedLectures.length})
+                    {practical?'Sections':'Lectures'} in this Subject ({sortedLectures.length})
                   </h3>
 
                   <div className="grid grid-cols-1 gap-4">
                     {sortedLectures.map((lect: any) => {
                       const notesOpen = expandedNotesLectureId === lect.id;
+                      const actionsOpen=expandedActionsLectureId===lect.id;
                       const lectProgress = subjProgress?.lectures?.find(
                         (l: any) => l.lectureId === lect.id
                       );
@@ -720,173 +711,36 @@ export const SubjectsAndLecturesView: React.FC<{
                           id={`lecture-${lect.id}`}
                           className="ma-lecture-card space-y-4 scroll-mt-24"
                         >
-                          {/* Lecture Title & Details */}
                           <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[var(--ma-brand)] bg-sky-50 px-2 py-0.5 rounded">
-                                Lecture {lect.lectureNumber}
-                              </span>
+                            <span className="text-[10px] font-semibold text-[var(--ma-brand)]">{practical?'Section':'Lecture'} {lect.lectureNumber}</span>
+                            <h4 className="font-bold text-slate-900">{lect.title}</h4>
+                            {lect.description&&!/^Imported (lecture|section) for /i.test(lect.description)&&<p className="text-xs leading-relaxed text-slate-600">{lect.description}</p>}
+                          </div>
+                          <div className="space-y-2">
+                            <div className="ma-lecture-summary">
+                              <span>{attemptedQuestions} of {totalQuestions} questions completed</span>
+                              {accuracy!=='—'&&<span><strong>{accuracy}</strong> accuracy</span>}
                             </div>
-                            <h4 className="text-base font-bold text-slate-900 mt-1">
-                              {lect.title}
-                            </h4>
-                            {lect.description && (
-                              <p className="text-xs text-slate-600 leading-relaxed">
-                                {lect.description}
-                              </p>
-                            )}
+                            <div className="ma-progress-track" role="progressbar" aria-label={`${lect.title} completion`} aria-valuemin={0} aria-valuemax={Math.max(1,totalQuestions)} aria-valuenow={Math.min(attemptedQuestions,totalQuestions)}><span style={{width:`${Math.min(100,attemptedQuestions/Math.max(1,totalQuestions)*100)}%`}}/></div>
                           </div>
-
-                          <div className="ma-lecture-metrics grid grid-cols-3 gap-4 text-xs">
-                            <div><span className="ma-metric-label">Question bank</span><strong className="ma-metric-value">{totalQuestions} <small>questions</small></strong></div>
-                            <div><span className="ma-metric-label" title="Unique questions answered across study, custom practice, and submitted exams">Completed</span><strong className="ma-metric-value">{attemptedQuestions}<small> / {totalQuestions}</small></strong></div>
-                            <div><span className="ma-metric-label">Accuracy</span><strong className="ma-metric-value">{accuracy}</strong></div>
-                          </div>
-
-                          <div className="ma-lecture-progress">
-                            <span>{attemptedQuestions === 0 ? 'Ready when you are' : `${attemptedQuestions} of ${totalQuestions} questions completed`}</span>
-                            <span className="ma-progress-track"><span style={{width: `${Math.min(100, attemptedQuestions / Math.max(1, totalQuestions) * 100)}%`}} /></span>
-                          </div>
-                          {/* Action Buttons: Study, Review Mistakes, Open Lecture PDF */}
-                          <div className="flex flex-wrap items-center gap-2 pt-1">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onStartSession({
-                                  mode: 'study',
-                                  lectureIds: [lect.id],
-                                  title: `${lect.title} — Study`,
-                                })
-                              }
-                              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors cursor-pointer"
-                            >
-                              <Play className="w-3.5 h-3.5" />
-                              <span>{attemptedQuestions > 0 && attemptedQuestions < totalQuestions ? 'Continue learning' : attemptedQuestions >= totalQuestions && totalQuestions > 0 ? 'Review lecture' : 'Start learning'} <ArrowRight className="inline w-3.5 h-3.5 ml-1" /></span>
+                          <div className="ma-lecture-actions">
+                            <button type="button" disabled={!totalQuestions} className="ma-lecture-primary"
+                              onClick={()=>lectProgress?.activeSessionId&&onOpenSession?onOpenSession(lectProgress.activeSessionId):onStartSession({mode:'study',lectureIds:[lect.id],title:`${lect.title} — Study`})}>
+                              <Play size={15} aria-hidden="true"/>
+                              {lectProgress?.activeSessionId||attemptedQuestions>0&&attemptedQuestions<totalQuestions?'Continue learning':attemptedQuestions>=totalQuestions&&totalQuestions>0?'Open study set':'Start learning'}
+                              <ArrowRight size={15} aria-hidden="true"/>
                             </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (incorrectAnswers > 0) {
-                                  onStartSession({
-                                    mode: 'study',
-                                    lectureIds: [lect.id],
-                                    title: `${lect.title} — Review Mistakes`,
-                                    onlyMistakes: true,
-                                  });
-                                }
-                              }}
-                              disabled={incorrectAnswers === 0}
-                              title={
-                                incorrectAnswers === 0
-                                  ? 'No incorrect questions to review for this lecture'
-                                  : `Review ${incorrectAnswers} mistakes`
-                              }
-                              className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors ${
-                                incorrectAnswers > 0
-                                  ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer'
-                                  : 'text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed opacity-60'
-                              }`}
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                              <span>Review Mistakes ({incorrectAnswers})</span>
-                            </button>
-
-                            {pdfUrl ? (
-                              <div className="inline-flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setActivePdf({
-                                      url: pdfUrl,
-                                      title: lect.title,
-                                      initialPage: 1,
-                                    })
-                                  }
-                                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  <FileText className="w-3.5 h-3.5 text-[var(--ma-brand)]" />
-                                  <span>Open Lecture PDF</span>
-                                </button>
-                                {isAdmin && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setUploadModalLecture({
-                                        id: lect.id,
-                                        title: lect.title,
-                                        subjectTitle: subject.title,
-                                        lectureNumber: lect.lectureNumber,
-                                        pdfUrl: lect.pdfUrl,
-                                      });
-                                    }}
-                                    className="p-2 text-slate-400 hover:text-[var(--ma-brand)] hover:bg-sky-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                                    title="Administrator: Replace lecture PDF"
-                                  >
-                                    <Upload className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            ) : isAdmin ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setUploadModalLecture({
-                                    id: lect.id,
-                                    title: lect.title,
-                                    subjectTitle: subject.title,
-                                    lectureNumber: lect.lectureNumber,
-                                    pdfUrl: null,
-                                  });
-                                }}
-                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[var(--ma-brand)] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer"
-                                title="Administrator: Upload PDF slide deck to this lecture"
-                              >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Upload PDF</span>
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled
-                                title="No PDF document attached to this lecture"
-                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 rounded-lg cursor-not-allowed opacity-60"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                <span>No PDF</span>
-                              </button>
-                            )}
-
-                            {attemptedQuestions > 0 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setResetConfirmLecture({
-                                    id: lect.id,
-                                    title: lect.title,
-                                  })
-                                }
-                                title="Reset all answers and restart this lecture quiz from Question 1"
-                                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 hover:border-rose-200 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <RotateCcw className="w-3.5 h-3.5" />
-                                <span>Reset Progress</span>
-                              </button>
-                            )}
-
-                            {lect.educationalNotes && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedNotesLectureId(notesOpen ? null : lect.id)
-                                }
-                                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer ml-auto"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                {notesOpen ? 'Hide Notes' : 'Read Notes'}
-                              </button>
-                            )}
+                            {pdfUrl&&<button type="button" className="ma-lecture-pdf" aria-label={`Open Lecture PDF: ${lect.title}`} onClick={()=>setActivePdf({url:pdfUrl,title:lect.title,initialPage:1})}><FileText size={15} aria-hidden="true"/>Open PDF</button>}
+                            {incorrectAnswers>0&&<button type="button" className="ma-lecture-mistakes" onClick={()=>onStartSession({mode:'study',lectureIds:[lect.id],title:`${lect.title} — Review Mistakes`,onlyMistakes:true})}><RotateCcw size={15} aria-hidden="true"/><span>Review Mistakes ({incorrectAnswers})</span></button>}
+                            {(onResetProgress&&(attemptedQuestions>0||lectProgress?.activeSessionId)||lectProgress?.reviewSessionId||isAdmin||lect.educationalNotes)&&
+                              <button type="button" id={`lecture-more-${lect.id}`} aria-label={`More actions for ${lect.title}`} aria-expanded={actionsOpen} aria-controls={`lecture-actions-${lect.id}`} className="ma-lecture-more" onClick={()=>setExpandedActionsLectureId(actionsOpen?null:lect.id)}>More<ChevronDown size={15} aria-hidden="true" className={actionsOpen?'rotate-180':''}/></button>}
                           </div>
+                          {actionsOpen&&<div id={`lecture-actions-${lect.id}`} role="group" aria-label={`More actions for ${lect.title}`} className="ma-lecture-extra" onKeyDown={event=>{if(event.key==='Escape'){setExpandedActionsLectureId(null);document.getElementById(`lecture-more-${lect.id}`)?.focus();}}}>
+                            {onOpenSession&&<button type="button" disabled={!lectProgress?.reviewSessionId} onClick={()=>onOpenSession(lectProgress.reviewSessionId,true)}><History size={15} aria-hidden="true"/>Review answers</button>}
+                            {onResetProgress&&(attemptedQuestions>0||lectProgress?.activeSessionId)&&<button type="button" onClick={()=>{setResetError(null);setResetConfirmLecture({id:lect.id,title:lect.title});setExpandedActionsLectureId(null);}}><RotateCcw size={15} aria-hidden="true"/>Restart session</button>}
+                            {lect.educationalNotes&&<button type="button" onClick={()=>setExpandedNotesLectureId(notesOpen?null:lect.id)}><FileText size={15} aria-hidden="true"/>{notesOpen?'Hide Notes':'Read Notes'}</button>}
+                            {isAdmin&&<button type="button" onClick={()=>setUploadModalLecture({id:lect.id,title:lect.title,subjectTitle:subject.title,lectureNumber:lect.lectureNumber,pdfUrl:lect.pdfUrl||null})}><Upload size={15} aria-hidden="true"/>{pdfUrl?'Replace PDF':'Upload PDF'}</button>}
+                          </div>}
 
                           {/* Optional High Yield Notes */}
                           {notesOpen && lect.educationalNotes && (
@@ -920,20 +774,21 @@ export const SubjectsAndLecturesView: React.FC<{
       )}
 
       {/* Confirmation Modal to Reset Lecture Progress */}
-      {resetConfirmLecture && (
+      {resetConfirmLecture && onResetProgress && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="reset-progress-title" className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-3 text-amber-600">
               <div className="p-2 bg-amber-50 rounded-full">
                 <RotateCcw className="w-5 h-5" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Reset Lecture Progress?</h3>
+              <h3 id="reset-progress-title" className="text-base font-bold text-slate-900">Reset progress?</h3>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Are you sure you want to restart all progress for{' '}
+              Clear your progress for{' '}
               <span className="font-semibold text-slate-900">&ldquo;{resetConfirmLecture.title}&rdquo;</span>?
-              All submitted answers, quiz scores, and attempts for this lecture will be completely erased so you can solve it fresh from Question 1.
+              This clears the saved answers and attempts that count toward this material. Your bookmarks stay saved.
             </p>
+            {resetError && <p role="alert" className="text-sm text-rose-700">{resetError}</p>}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"
@@ -949,22 +804,19 @@ export const SubjectsAndLecturesView: React.FC<{
                 onClick={async () => {
                   try {
                     setIsResetting(true);
-                    await api.resetLectureProgress(resetConfirmLecture.id);
-                    setResetSuccessMessage(
-                      `Progress for "${resetConfirmLecture.title}" has been reset. You can now start fresh!`
-                    );
-                    setTimeout(() => setResetSuccessMessage(null), 4000);
+                    setResetError(null);
+                    await onResetProgress(resetConfirmLecture.id);
+                    setResetSuccessMessage(`Progress reset for ${resetConfirmLecture.title}.`);
                     setResetConfirmLecture(null);
-                    onRefresh?.();
                   } catch (err: any) {
-                    alert(err.message || 'Failed to reset lecture progress.');
+                    setResetError(err.message || 'Could not reset progress.');
                   } finally {
                     setIsResetting(false);
                   }
                 }}
                 className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
               >
-                {isResetting ? 'Resetting...' : 'Yes, Reset & Restart'}
+                {isResetting ? 'Resetting…' : 'Reset progress'}
               </button>
             </div>
           </div>
@@ -990,367 +842,7 @@ export const SubjectsAndLecturesView: React.FC<{
 // ============================================================================
 // 3. CUSTOM PRACTICE BUILDER VIEW (MODE C)
 // ============================================================================
-export const CustomPracticeView: React.FC<{
-  catalog: any;
-  onStartSession: (params: any) => void;
-}> = ({ catalog, onStartSession }) => {
-  const subjects = catalog?.subjects || [];
-  const allLectures = catalog?.lectures || [];
-
-  const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>([]);
-  const [selectedLectureIds, setSelectedLectureIds] = useState<number[]>([]);
-  const [selectedDifficulties, setSelectedDifficulties] = useState<string[]>([]);
-  const [selectedSpecialTags, setSelectedSpecialTags] = useState<string[]>([]);
-  const [tagFilter, setTagFilter] = useState('');
-  const [questionCount, setQuestionCount] = useState(5);
-  const [shuffleQuestions, setShuffleQuestions] = useState(true);
-  const [shuffleOptions, setShuffleOptions] = useState(true);
-  const [avoidRecent, setAvoidRecent] = useState(true);
-  const [onlyMistakes, setOnlyMistakes] = useState(false);
-  const [sessionMode, setSessionMode] = useState<'custom' | 'exam'>('custom');
-
-  const toggleItem = <T,>(list: T[], val: T, setter: (next: T[]) => void) => {
-    if (list.includes(val)) setter(list.filter((x) => x !== val));
-    else setter([...list, val]);
-  };
-
-  const filteredLectures =
-    selectedSubjectIds.length === 0
-      ? allLectures
-      : allLectures.filter((l: any) => selectedSubjectIds.includes(l.subjectId));
-
-  const activeScopeLectures =
-    selectedLectureIds.length > 0
-      ? filteredLectures.filter((l: any) => selectedLectureIds.includes(l.id))
-      : filteredLectures;
-
-  const specialTagCountsMap = new Map<string, { label: string; count: number }>();
-  for (const preset of ['Old Exams', 'كتاب القسم', 'Important']) {
-    specialTagCountsMap.set(preset.toLowerCase(), { label: preset, count: 0 });
-  }
-  for (const lect of activeScopeLectures) {
-    const breakdown = lect.specialTagBreakdown || {};
-    for (const [label, cnt] of Object.entries(breakdown)) {
-      const normKey = label.toLowerCase() === 'old exam' ? 'old exams' : label.toLowerCase();
-      const existing = specialTagCountsMap.get(normKey);
-      specialTagCountsMap.set(normKey, {
-        label: existing?.label || (normKey === 'old exams' ? 'Old Exams' : label),
-        count: (existing?.count || 0) + Number(cnt || 0),
-      });
-    }
-  }
-  const availableSpecialTagOptions = Array.from(specialTagCountsMap.values());
-
-  const handleLaunchCustom = (e: React.FormEvent) => {
-    e.preventDefault();
-    onStartSession({
-      mode: sessionMode,
-      title:
-        sessionMode === 'exam'
-          ? `Custom Timed Exam (${questionCount} questions)`
-          : onlyMistakes
-          ? `Review Mistakes Practice (${questionCount} questions)`
-          : `Custom Practice Session (${questionCount} questions)`,
-      subjectIds: selectedSubjectIds.length > 0 ? selectedSubjectIds : undefined,
-      lectureIds: selectedLectureIds.length > 0 ? selectedLectureIds : undefined,
-      difficulties: selectedDifficulties.length > 0 ? selectedDifficulties : undefined,
-      specialTags: selectedSpecialTags.length > 0 ? selectedSpecialTags : undefined,
-      tagFilter: tagFilter.trim() || undefined,
-      requestedCount: Number(questionCount) || 5,
-      shuffleQuestions,
-      shuffleOptions,
-      avoidRecent,
-      onlyMistakes,
-    });
-  };
-
-  return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeading eyebrow="Make it your own" title="Custom practice"
-        description="Build a question set around the subjects, lectures, and topics you want to study." />
-
-      <form
-        onSubmit={handleLaunchCustom}
-        className="bg-white rounded-xl border border-slate-200 p-6 space-y-6"
-      >
-        {/* 1. Select Subjects */}
-        <div className="space-y-2">
-          <label className="block text-xs font-bold text-slate-900">
-            1. Select Subjects (Leave unselected to include all subjects)
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {subjects.map((s: any) => {
-              const active = selectedSubjectIds.includes(s.id);
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() =>
-                    toggleItem(selectedSubjectIds, s.id, setSelectedSubjectIds)
-                  }
-                  className={`p-3 rounded-lg border text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
-                    active
-                      ? 'border-[var(--ma-brand)] bg-sky-50/70 text-slate-900 font-semibold'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                  }`}
-                >
-                  <span>{s.title}</span>
-                  <span className="font-mono-tabular text-slate-500">
-                    {s.questionCount} questions
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 2. Select Specific Lectures */}
-        <div className="space-y-2">
-          <label className="block text-xs font-bold text-slate-900">
-            2. Filter by Specific Lectures (Optional)
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto p-1">
-            {filteredLectures.map((l: any) => {
-              const active = selectedLectureIds.includes(l.id);
-              return (
-                <button
-                  key={l.id}
-                  type="button"
-                  onClick={() =>
-                    toggleItem(selectedLectureIds, l.id, setSelectedLectureIds)
-                  }
-                  className={`p-2.5 rounded-lg border text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
-                    active
-                      ? 'border-[var(--ma-brand)] bg-sky-50/70 text-slate-900 font-semibold'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                  }`}
-                >
-                  <span className="truncate pr-2">{l.title}</span>
-                  <span className="font-mono-tabular shrink-0">
-                    {l.questionCount} questions
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 3. Difficulty, Question Count & Topic Filter */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="space-y-2">
-            <label className="block text-xs font-bold text-slate-900">
-              3. Difficulty Level
-            </label>
-            <div className="flex items-center gap-1.5">
-              {['Easy', 'Medium', 'Hard'].map((diff) => {
-                const active = selectedDifficulties.includes(diff);
-                return (
-                  <button
-                    key={diff}
-                    type="button"
-                    onClick={() =>
-                      toggleItem(
-                        selectedDifficulties,
-                        diff,
-                        setSelectedDifficulties
-                      )
-                    }
-                    className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
-                      active
-                        ? 'border-[var(--ma-brand)] bg-[var(--ma-brand)] text-white'
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    {diff}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label
-              htmlFor="custom-question-count"
-              className="block text-xs font-bold text-slate-900"
-            >
-              4. Number of Questions: <span className="font-mono-tabular">{questionCount}</span>
-            </label>
-            <input
-              id="custom-question-count"
-              type="number"
-              min={1}
-              max={100}
-              value={questionCount}
-              onChange={(e) => setQuestionCount(Number(e.target.value))}
-              className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label
-              htmlFor="custom-topic-tag"
-              className="block text-xs font-bold text-slate-900"
-            >
-              5. Topic Keyword (Optional)
-            </label>
-            <input
-              id="custom-topic-tag"
-              type="text"
-              value={tagFilter}
-              onChange={(e) => setTagFilter(e.target.value)}
-              placeholder="e.g., Collagen, GFR, Necrosis"
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[var(--ma-brand)]"
-            />
-          </div>
-        </div>
-
-        {/* 6. Special Tags / Source Labels Filter */}
-        <div className="space-y-2.5 pt-2 border-t border-slate-100">
-          <div className="flex items-center justify-between">
-            <label className="block text-xs font-bold text-slate-900">
-              6. Special Tags / Source Labels (Optional — e.g., Old Exam, كتاب القسم)
-            </label>
-            {selectedSpecialTags.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setSelectedSpecialTags([])}
-                className="text-[11px] font-semibold text-[var(--ma-brand)] hover:underline cursor-pointer"
-              >
-                Clear Special Tags (Include All)
-              </button>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedSpecialTags([])}
-              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
-                selectedSpecialTags.length === 0
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              All Questions
-            </button>
-            {availableSpecialTagOptions.map((item) => {
-              const isSelected = selectedSpecialTags.includes(item.label);
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  onClick={() =>
-                    toggleItem(selectedSpecialTags, item.label, setSelectedSpecialTags)
-                  }
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
-                    isSelected
-                      ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
-                      : 'bg-amber-50/70 text-amber-900 border-amber-300 hover:bg-amber-100'
-                  }`}
-                >
-                  <Tag className="w-3 h-3 shrink-0" />
-                  <span>{item.label}</span>
-                  <span
-                    className={`font-mono-tabular text-[10px] px-1.5 py-0.2 rounded-full ${
-                      isSelected ? 'bg-amber-700/40 text-white' : 'bg-amber-200/70 text-amber-900'
-                    }`}
-                  >
-                    {item.count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 4. Randomization & Feedback Rules */}
-        <div className="pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={shuffleQuestions}
-              onChange={(e) => setShuffleQuestions(e.target.checked)}
-              className="rounded border-slate-300 text-[var(--ma-brand)]"
-            />
-            <span className="font-medium text-slate-800">
-              Shuffle question order randomly
-            </span>
-          </label>
-
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={shuffleOptions}
-              onChange={(e) => setShuffleOptions(e.target.checked)}
-              className="rounded border-slate-300 text-[var(--ma-brand)]"
-            />
-            <span className="font-medium text-slate-800">
-              Shuffle answer options (A–D) while preserving correct answer key
-            </span>
-          </label>
-
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={avoidRecent}
-              onChange={(e) => setAvoidRecent(e.target.checked)}
-              className="rounded border-slate-300 text-[var(--ma-brand)]"
-            />
-            <span className="font-medium text-slate-800">
-              Avoid recently answered questions when alternatives exist
-            </span>
-          </label>
-
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={onlyMistakes}
-              onChange={(e) => setOnlyMistakes(e.target.checked)}
-              className="rounded border-slate-300 text-[var(--ma-brand)]"
-            />
-            <span className="font-medium text-rose-700">
-              Review Mistakes Only (filter questions previously answered incorrectly)
-            </span>
-          </label>
-
-          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-            <span className="font-semibold text-slate-800">Delivery Mode:</span>
-            <button
-              type="button"
-              onClick={() => setSessionMode('custom')}
-              className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                sessionMode === 'custom'
-                  ? 'bg-[var(--ma-brand)] text-white'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              Immediate Study Feedback
-            </button>
-            <button
-              type="button"
-              onClick={() => setSessionMode('exam')}
-              className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                sessionMode === 'exam'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              Timed Exam Mode
-            </button>
-          </div>
-        </div>
-
-        <div className="pt-2 flex justify-end">
-          <button
-            type="submit"
-            className="px-6 py-2.5 text-sm font-semibold text-white bg-[var(--ma-brand)] hover:bg-[var(--ma-brand-hover)] rounded-lg transition-colors cursor-pointer"
-          >
-            Launch Custom Question Set
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-};
+export {PracticeBuilder as CustomPracticeView} from './PracticeBuilder.tsx';
 
 // ============================================================================
 // 4. MOCK EXAMS SIMULATION CENTER (MODE B)

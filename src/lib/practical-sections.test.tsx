@@ -16,8 +16,8 @@ test('lecture and section browsing stay separate and Practical uses section labe
  const catalog={subjects:[{id:1,title:'Anatomy',lectures:[theory,section]}],lectures:[theory,section]};
  assert.deepEqual(catalogByContentType(catalog,'lecture').lectures,[theory]);assert.deepEqual(catalogByContentType(catalog,'practical').lectures,[section]);
  assert.equal(destinationLabel({...section,subjectTitle:'Anatomy'}),'Anatomy → Section 1: Arm bones');
- const html=renderToStaticMarkup(<PracticalView catalog={catalog} dashboardData={{subjectProgress:[{subjectId:1,lectures:[{lectureId:2,uniqueQuestionsAttempted:1}]}]}} onStartSession={()=>{}} onShortAnswers={()=>{}}/>);
- assert.match(html,/Section 1/);assert.match(html,/1\/2 questions/);assert.match(html,/3 short-answer/);assert.ok(!html.includes('Theory'));
+ const html=renderToStaticMarkup(<PracticalView catalog={catalog} dashboardData={{subjectProgress:[{subjectId:1,lectures:[{lectureId:2,uniqueQuestionsAttempted:1}]}]}} onStartSession={()=>{}} onResetProgress={async()=>{}}/>);
+ assert.match(html,/Section 1/);assert.match(html,/1 of 2 questions completed/);assert.doesNotMatch(html,/Difficulty for/);assert.match(html,/More actions/);assert.ok(!html.includes('Theory'));
 });
 test('portal section creation, matching/short-answer uploads, publication and reclassification preserve answers/bookmarks', {skip:!enabled},async()=>{
  const repo=await import('../db/repository.ts');await repo.ensureSeededDatabase();

@@ -9,7 +9,7 @@ export function QuizTextSaveProvider({session,children}:{session:any;children:Re
  const api=useSessionPlayerApi();
  const savedListeners=useRef(new Set<(id:number,result:any)=>void>());
  const drafts=useRef<Map<number,string>|null>(null);
- if(!drafts.current){drafts.current=new Map();if(session.status!=='completed')for(const q of session.questions||[])if(q.questionType==='short_answer')try{const draft=localStorage.getItem(quizTextDraftKey(session.id,q.id));if(draft!==null&&draft!==q.shortAnswerAttempt?.answer)drafts.current.set(q.id,draft);}catch{}}
+ if(!drafts.current){drafts.current=new Map();if(session.status!=='completed'&&!session.reviewOnly)for(const q of session.questions||[])if(q.questionType==='short_answer')try{const draft=localStorage.getItem(quizTextDraftKey(session.id,q.id));if(draft!==null&&draft!==q.shortAnswerAttempt?.answer)drafts.current.set(q.id,draft);}catch{}}
  const service=useRef<TextSaves|null>(null);
  if(!service.current){const acknowledge=(id:number,text:string)=>{if(drafts.current?.get(id)?.trim().normalize('NFC')===text.trim().normalize('NFC')){drafts.current.delete(id);try{localStorage.removeItem(quizTextDraftKey(session.id,id));}catch{}}};service.current={remember:(id,text)=>{drafts.current!.set(id,text);try{localStorage.setItem(quizTextDraftKey(session.id,id),text);}catch{}},acknowledge,subscribeSaved:listener=>{savedListeners.current.add(listener);return()=>{savedListeners.current.delete(listener);};},flush:async()=>{for(const [id,text] of [...drafts.current!]){const result=await api.saveQuizShortAnswer(session.id,id,text);acknowledge(id,text);for(const listener of savedListeners.current)listener(id,result);}}};}
  useEffect(()=>{

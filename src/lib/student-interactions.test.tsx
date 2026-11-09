@@ -45,21 +45,31 @@ test('short-answer student interaction restores drafts, saves independently, gra
 
 test('practical student controls select the section and start the existing study session',async()=>{
  reset();let started:any=null;const section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8,shortAnswerCount:1};const root=createRoot(host());
- try{await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3}]}]}} onStartSession={params=>{started=params;}}/>));assert.match(text(),/3\/8 questions/);assert.ok(![...host().querySelectorAll('button')].some(b=>b.textContent==='Short Answers'));await click('Continue section');assert.deepEqual(started.lectureIds,[82]);await change('input[type=search]','No match');assert.match(text(),/No sections match/);}finally{await act(async()=>root.unmount());}
+ try{await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3}]}]}} onStartSession={params=>{started=params;}}/>));assert.match(text(),/3 of 8 questions completed/);assert.ok(![...host().querySelectorAll('button')].some(b=>b.textContent==='Short Answers'));await click('Continue learning');assert.deepEqual(started.lectureIds,[82]);await change('input[type=search]','No match');assert.match(text(),/No matching subjects, lectures or sections/);}finally{await act(async()=>root.unmount());}
 });
 
-test('practical restart creates a separate attempt while continue and review open their saved sessions',async()=>{
- reset();const starts:any[]=[],opened:number[]=[],section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8};
- const progress={lectureId:82,uniqueQuestionsAttempted:3,activeSessionId:102,reviewSessionId:101};
+test('practical reset clears saved progress without launching a quiz',async()=>{
+ reset();const starts:any[]=[],opened:any[]=[],resets:number[]=[];
+ const section={id:82,title:'Bones',contentType:'practical',lectureNumber:1,questionCount:8};
+ let fail=true;
+ function Fixture(){
+  const [progress,setProgress]=React.useState({lectureId:82,uniqueQuestionsAttempted:3,activeSessionId:102,reviewSessionId:101});
+  return <PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}}
+   dashboardData={{subjectProgress:[{subjectId:36,lectures:[progress]}]}}
+   onStartSession={params=>{starts.push(params);}} onOpenSession={(id,review)=>{opened.push([id,review]);}}
+   onResetProgress={async id=>{resets.push(id);if(fail)throw Error('Reset temporarily unavailable');setProgress({lectureId:82,uniqueQuestionsAttempted:0,activeSessionId:0,reviewSessionId:0});}}/>;
+ }
  const root=createRoot(host());
  try{
-  await act(async()=>root.render(<PracticalView catalog={{subjects:[{id:36,title:'Anatomy',lectures:[section]}],lectures:[section]}} dashboardData={{subjectProgress:[{subjectId:36,lectures:[progress]}]}} onStartSession={params=>{starts.push(params);}} onOpenSession={id=>{opened.push(id);}}/>));
-  await click('Continue section');await click('Review answers');assert.deepEqual(opened,[102,101]);assert.equal(starts.length,0);
-  await click('Restart session');assert.equal(starts.length,0);assert.match(text(),/previous answers, grades, progress and bookmarks will stay saved/);
-  await click('Cancel');assert.equal(starts.length,0);
-  await click('Restart session');await click('Start fresh attempt');
-  assert.deepEqual(starts,[{mode:'study',lectureIds:[82],requestedCount:8,title:'Bones — Fresh attempt'}]);
-  assert.equal(progress.reviewSessionId,101);assert.equal(progress.uniqueQuestionsAttempted,3);assert.match(text(),/3\/8 questions/);
+  await act(async()=>root.render(<Fixture/>));
+  await click('Continue learning');await click('More actions for Bones');await click('Review answers');assert.deepEqual(opened,[[102,undefined],[101,true]]);
+  await click('Restart session');assert.match(text(),/Your bookmarks stay saved/);
+  await click('Cancel');assert.deepEqual(resets,[]);
+  await click('More actions for Bones');await click('Restart session');await click('Reset progress');
+  assert.match(text(),/Reset temporarily unavailable/);assert.match(text(),/3 of 8 questions completed/);
+  fail=false;await click('Reset progress');
+  assert.deepEqual(resets,[82,82]);assert.equal(starts.length,0);assert.match(text(),/0 of 8 questions completed/);
+  await click('Start learning');assert.deepEqual(starts[0].lectureIds,[82]);
  }finally{await act(async()=>root.unmount());}
 });
 
@@ -274,4 +284,78 @@ test('question images retry one temporary failure, reuse the loaded image, and r
   await click('Retry image');assert.equal(calls,3);assert.ok(host().querySelector('img'));
   await act(async()=>root.render(<QuestionImageProvider questions={[{images}]}><QuestionImages images={images}/></QuestionImageProvider>));assert.equal(calls,3);
  }finally{await act(async()=>root.unmount());globalThis.fetch=originalFetch;}
+});
+
+
+test('review starts at Question 1, preserves local drafts and pages without writing progress',async()=>{
+ reset();let saves=0,syncs=0;const batches:number[]=[];
+ const questions=Array.from({length:8},(_,index)=>({id:9100+index,index,questionText:`Review item ${index+1}`,contentLoaded:index<6,options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A',explanation:'Saved explanation',submitted:index===0,selectedDisplayed:index===0?'A':null,isBookmarked:index===0,images:[]}));
+ const session={id:91919,title:'Saved review',lectureId:82,mode:'study',status:'in_progress',reviewOnly:true,questions,totalQuestions:8,correctCount:1,incorrectCount:0,unansweredCount:7,elapsedSeconds:12,questionBatch:{size:6,offset:0}};
+ const draft=JSON.stringify({version:1,answers:{9107:'B'}});
+ localStorage.setItem('medatlas_session_draft_answers_91919',draft);localStorage.setItem('medatlas_session_question_91919','9107');
+ api.submitQuestionAnswer=async()=>{saves++;throw Error('Review must not save');};api.syncSessionProgress=async()=>{syncs++;return {} as any;};
+ api.getSessionQuestionBatch=async(_id,offset)=>{batches.push(offset);return {session:{...session,reviewOnly:undefined,questions:questions.slice(offset,offset+6).map(q=>({...q,contentLoaded:true}))}};};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<McqSessionPlayer initialSession={session} onExit={()=>{}} onSessionCompleted={()=>{}}/>));
+  assert.match(text(),/Review item 1/);assert.match(text(),/Answer review/);assert.equal(batches.length,0);
+  for(let index=0;index<6;index++)await click('Next Question');
+  assert.match(text(),/Review item 7/);assert.deepEqual(batches,[6]);assert.equal([...host().querySelectorAll('button')].some(b=>b.textContent?.trim()==='Finish Session'),false);
+  assert.equal(localStorage.getItem('medatlas_session_question_91919'),'9107');
+  await click('Back to Workspace');assert.equal(saves,0);assert.equal(syncs,0);
+ }finally{await act(async()=>root.unmount());}
+ assert.equal(localStorage.getItem('medatlas_session_draft_answers_91919'),draft);
+});
+
+test('lecture and practical cards keep the same compact controls and disclose secondary actions locally',async()=>{
+ const {SubjectsAndLecturesView}=await import('../components/StudentViews.tsx');
+ for(const practical of [false,true]){
+  reset();let requests=0;const starts:any[]=[],opened:any[]=[];
+  const lecture={id:82,title:'Bones',subjectId:36,contentType:practical?'practical':'lecture',lectureNumber:1,questionCount:8,pdfUrl:'/api/documents/preview',educationalNotes:'Useful notes',difficultyBreakdown:{Easy:0,Medium:5,Hard:3}};
+  const props={catalog:{subjects:[{id:36,title:'Anatomy',lectures:[lecture]}],lectures:[lecture]},dashboardData:{subjectProgress:[{subjectId:36,lectures:[{lectureId:82,uniqueQuestionsAttempted:3,activeSessionId:102,reviewSessionId:101,incorrectAnswers:1}]}]},onStartSession:(params:any)=>starts.push(params),onOpenSession:(...args:any[])=>opened.push(args),onResetProgress:async()=>{}};
+  globalThis.fetch=async()=>{requests++;throw Error('Opening controls must stay local');};
+  const root=createRoot(host());try{
+   await act(async()=>root.render(practical?<PracticalView {...props}/>:<SubjectsAndLecturesView {...props}/>));
+   assert.equal(host().querySelector('select[aria-label^="Difficulty for"]'),null);
+   assert.equal(host().querySelectorAll('.ma-lecture-actions > button').length,4);
+   assert.equal(host().querySelector('[aria-label="More actions for Bones"]')!.getAttribute('aria-expanded'),'false');
+   assert.equal([...host().querySelectorAll('button')].some(b=>b.textContent==='Restart session'),false);
+   assert.ok(findButton('Review Mistakes (1)').closest('.ma-lecture-actions'));
+   await click('More actions for Bones');assert.equal(findButton('Review answers').disabled,false);assert.ok(findButton('Restart session'));assert.equal(requests,0);
+   await click('Read Notes');assert.match(text(),/Useful notes/);
+   await click('Review answers');assert.deepEqual(opened,[[101,true]]);
+   await click('Review Mistakes (1)');assert.equal(starts[0].onlyMistakes,true);assert.deepEqual(starts[0].lectureIds,[82]);
+   await act(async()=>host().querySelector('.ma-lecture-extra')!.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+   assert.equal(host().querySelector('.ma-lecture-extra'),null);assert.equal(dom.window.document.activeElement?.id,'lecture-more-82');
+   await click('Continue learning');assert.deepEqual(opened[1],[102]);assert.equal(requests,0);
+  }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
+ }
+});
+
+test('simple practice filters stay local, preserve advanced tags and reset incompatible selections',async()=>{
+ reset();const {PracticeBuilder}=await import('../components/PracticeBuilder.tsx');let launched:any=null,requests=0;
+ const lectures=[{id:1,subjectId:10,title:'Bones',contentType:'practical',questionCount:8,difficultyBreakdown:{Medium:5,Hard:3},specialTagBreakdown:{Important:4}},{id:2,subjectId:20,title:'Sugars',questionCount:6,difficultyBreakdown:{Medium:6}}];
+ const root=createRoot(host());globalThis.fetch=async()=>{requests++;throw Error('Filters must not fetch');};
+ try{
+  await act(async()=>root.render(<PracticeBuilder catalog={{subjects:[{id:10,title:'Anatomy'},{id:20,title:'Biochemistry'}],lectures}} onStartSession={params=>{launched=params;}}/>));
+  assert.match(text(),/14 questions in your selection/);assert.equal(findButton('Start practice').disabled,false);
+  await click('Anatomy');await change('select','practical');assert.equal(findButton('Start practice').disabled,false);
+  const lectureCheckbox=host().querySelector('details input[type="checkbox"]') as HTMLInputElement;await act(async()=>lectureCheckbox.click());
+  const important=[...host().querySelectorAll('label')].find(label=>label.textContent==='Important')!.querySelector('input')!;await act(async()=>important.click());
+  await change('input[type="number"]','3');await change('fieldset.grid select','Hard');
+  await act(async()=>host().querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true})));
+  assert.deepEqual(launched.lectureIds,[1]);assert.deepEqual(launched.difficulties,['Hard']);assert.deepEqual(launched.specialTags,['Important']);assert.equal(launched.requestedCount,3);assert.equal(requests,0);
+  await change('select','lecture');assert.doesNotMatch(text(),/Important/);assert.match(text(),/0 questions in your selection/);
+  await change('fieldset.grid select','all');assert.match(text(),/6 questions in your selection/);
+ }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
+});
+
+test('exiting and unmounting a study attempt sync elapsed time once without resending answers',async()=>{
+ reset();let syncs=0,answers=0;const questions=[{id:9201,index:0,contentLoaded:true,questionText:'Local elapsed-time check',options:{A:'One',B:'Two',C:'Three',D:'Four'},correctDisplayedOption:'A',submitted:false,selectedDisplayed:null,images:[]}];
+ const session={id:92929,title:'Progress sync',mode:'study',status:'in_progress',questions,totalQuestions:1,correctCount:0,incorrectCount:0,unansweredCount:1,elapsedSeconds:0};
+ api.syncSessionProgress=async()=>{syncs++;return {} as any;};api.submitQuestionAnswer=async()=>{answers++;throw Error('Navigation must not save an answer');};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<McqSessionPlayer initialSession={session} onExit={()=>{}} onSessionCompleted={()=>{}}/>));await click('Exit');
+  await act(async()=>{dom.window.dispatchEvent(new dom.window.Event('beforeunload'));dom.window.dispatchEvent(new dom.window.Event('pagehide'));});
+ }finally{await act(async()=>root.unmount());}
+ assert.equal(syncs,1);assert.equal(answers,0);
 });

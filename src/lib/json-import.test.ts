@@ -78,9 +78,11 @@ test('Telegram images upload once, download once concurrently, validate bytes, a
   try{
     const [a,b]=await Promise.all([uploadQuestionImage('cell.png',bytes),uploadQuestionImage('renamed.png',bytes)]);
     assert.equal(uploads,1);assert.equal(a.id,createHash('sha256').update(bytes).digest('hex'));assert.deepEqual(a,b);
-    const [first,second]=await Promise.all([fetchQuestionImage(a),fetchQuestionImage(a)]);
+    assert.deepEqual(await fetchQuestionImage(a),bytes);assert.equal(downloads,0,'The upload seeds the image cache.');
+    const cold={...a,telegramFileId:a.telegramFileId+'-cold-cache'};
+    const [first,second]=await Promise.all([fetchQuestionImage(cold),fetchQuestionImage(cold)]);
     assert.deepEqual(first,bytes);assert.deepEqual(first,second);assert.equal(downloads,1);assert.equal(lookups,1);
-    await fetchQuestionImage(a);assert.equal(downloads,1);
+    await fetchQuestionImage(cold);assert.equal(downloads,1);
     await assert.rejects(fetchQuestionImage({...a,id:'f'.repeat(64)}),/integrity/);
   }finally{
     globalThis.fetch=oldFetch;

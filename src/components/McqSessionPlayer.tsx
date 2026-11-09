@@ -50,6 +50,7 @@ interface McqSessionPlayerProps {
   onSessionCompleted: (completedSession: any) => void;
   onQuestionAnswered?: (updatedSession: any) => void;
   service?: SessionPlayerApi;
+  onResetLectureProgress?: (lectureId: number) => Promise<void>;
   onPositionChange?: (index: number) => void;
 }
 
@@ -65,10 +66,11 @@ const SessionPlayerContent: React.FC<McqSessionPlayerProps> = (props) => {
 };
 
 const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
-  initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered, onPositionChange,
+  initialSession, shortfallNotice, onExit, onSessionCompleted, onQuestionAnswered, onPositionChange, onResetLectureProgress,
 }) => {
   const service = useSessionPlayerApi();
   const [session, setSession] = useState<any>(initialSession);
+  const [isResettingLecture, setIsResettingLecture] = useState(false);
   const textSaves=useQuizTextSaves();
   useSessionImagePrefetch(session.questions);
   const saves = useAnswerSaving(session, (result, answer) => {
@@ -127,7 +129,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const handleShortAnswer=(question:any,result:any)=>applyShortAnswer(question.id,result);
   useEffect(()=>textSaves.subscribeSaved?.(applyShortAnswer),[textSaves,onQuestionAnswered]);
   const handleMatchingChoice=(question:any,choice:string)=>{
-    if (session.status==='completed'||(session.mode!=='exam'&&question.submitted))return;
+    if (session.reviewOnly||session.status==='completed'||(session.mode!=='exam'&&question.submitted))return;
     const selected=session.mode==='exam'?'A':choice===question.matching.correctChoiceId?'A':'B';
     setMatchingChoices(previous=>({...previous,[question.id]:choice}));
     setLocalSelections(previous=>({...previous,[question.id]:selected}));
@@ -284,7 +286,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
 
   const autoSubmittedRef = useRef(false);
 
-  const isCompleted = session.status === 'completed';
+  const isCompleted = session.status === 'completed'||Boolean(session.reviewOnly);
   const isExamMode = session.mode === 'exam';
   const questions = session.questions || [];
   const currentQ = questions[currentIndex] || null;
@@ -466,6 +468,14 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const latestCurrentIndexRef = useRef<number>(currentIndex);
   const latestElapsedRef = useRef<number>(elapsedSeconds);
   const latestIsCompletedRef = useRef<boolean>(isCompleted);
+  const lastProgressSync=useRef<{id:number;elapsed:number}|null>(null);
+  const syncProgressOnce=(id:number,elapsed:number)=>{
+    if(lastProgressSync.current?.id===id&&lastProgressSync.current.elapsed===elapsed)return;
+    const sent={id,elapsed};lastProgressSync.current=sent;
+    service.syncSessionProgress(id,elapsed).catch(()=>{
+      if(lastProgressSync.current===sent)lastProgressSync.current=null;
+    });
+  };
 
   useEffect(() => {
     latestSessionIdRef.current = session?.id ?? null;
@@ -475,7 +485,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   }, [session?.id, currentIndex, elapsedSeconds, isCompleted]);
 
   useEffect(() => {
-    if (session?.id && currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
+    if (!session.reviewOnly && session?.id && currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
   }, [currentIndex, session?.id, currentQ?.id]);
 
   // Guarantee progress is saved on refresh, tab close, browser restart, tab switch, or component unmount
@@ -489,7 +499,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             String(latestCurrentIndexRef.current)
           );
         } catch {}
-        service.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
+        syncProgressOnce(sid, latestElapsedRef.current);
       }
     };
 
@@ -503,7 +513,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
           );
           if (!initialSession.privateQuiz) localStorage.setItem('medatlas_active_session_id', String(sid));
         } catch {}
-        service.syncSessionProgress(sid, latestElapsedRef.current).catch(() => {});
+        syncProgressOnce(sid, latestElapsedRef.current);
       }
     };
 
@@ -535,7 +545,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
       try {
         localStorage.setItem(`medatlas_session_curr_idx_${session.id}`, String(currentIndex));
       } catch {}
-      service.syncSessionProgress(session.id, elapsedSeconds).catch(() => {});
+      syncProgressOnce(session.id, elapsedSeconds);
     }
     try {
       if (!session.privateQuiz) localStorage.removeItem('medatlas_active_session_id');
@@ -911,36 +921,31 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
             <div className="space-y-0.5">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ma-brand)]">
                 <Award className="w-4 h-4" />
-                <span>Session Completed</span>
+                <span>{session.reviewOnly?'Answer review':'Session Completed'}</span>
               </div>
               <h2 className="text-lg font-bold text-slate-900">
                 {session.quizScore?.pendingGradingCount?'Provisional score':'Score'}: {session.scorePercentage}%
               </h2>
             </div>
             <div className="flex items-center gap-2">
-              {session.lectureId && !isExamMode && (
+              {session.lectureId && !isExamMode && onResetLectureProgress && (
                 <button
                   type="button"
+                  disabled={isResettingLecture}
                   onClick={async () => {
-                    if (window.confirm('Restart this lecture quiz fresh from Question 1?')) {
-                      try {
-                        await api.resetLectureProgress(session.lectureId);
-                        const res = await api.startSession({
-                          mode: 'study',
-                          lectureIds: [session.lectureId],
-                          title: session.title,
-                        });
-                        setSession(res.session);
-                        setCurrentIndex(0);
-                        setLocalSelections({});
-                      } catch (err: any) {
-                        setErrorMsg(err?.message || 'Could not restart quiz.');
-                      }
+                    if (!window.confirm('Clear your progress for this material? Your bookmarks stay saved.')) return;
+                    setIsResettingLecture(true);
+                    try {
+                      await onResetLectureProgress(session.lectureId);
+                    } catch (error: any) {
+                      setErrorMsg(error.message || 'Could not reset progress.');
+                    } finally {
+                      setIsResettingLecture(false);
                     }
                   }}
                   className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl transition-colors cursor-pointer"
                 >
-                  Restart Quiz
+                  {isResettingLecture ? 'Resetting…' : 'Reset progress'}
                 </button>
               )}
               <button

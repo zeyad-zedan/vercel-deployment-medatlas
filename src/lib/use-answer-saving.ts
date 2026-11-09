@@ -31,7 +31,7 @@ export function useAnswerSaving(session: any, onSaved: (result: any, answer: Ans
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = queue.subscribe(() => render(version => version + 1));
-    if (initial.current.status !== 'completed') {
+    if (initial.current.status !== 'completed' && !initial.current.reviewOnly) {
       for (const [questionId, selectedOption] of Object.entries(drafts)) {
         queue.save({ questionId: Number(questionId), selectedOption, lockAnswer: initial.current.mode !== 'exam', elapsedSeconds: initial.current.elapsedSeconds, matchingChoiceId: matchingDrafts[Number(questionId)] });
       }
@@ -40,8 +40,8 @@ export function useAnswerSaving(session: any, onSaved: (result: any, answer: Ans
   }, [queue, drafts]);
 
   useEffect(() => {
-    if (session.status === 'completed') queue.finish();
-  }, [queue, session.status]);
+    if (session.status === 'completed' || session.reviewOnly) queue.finish();
+  }, [queue, session.status, session.reviewOnly]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {

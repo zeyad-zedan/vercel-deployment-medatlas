@@ -45,7 +45,7 @@ test('published questions accept Telegram image edits across MCQ, matching group
   assert.equal(JSON.stringify((await pool.query('SELECT * FROM public.question_attempts WHERE session_id=$1',[session.id])).rows),before);assert.equal(JSON.stringify((await pool.query('SELECT * FROM public.bookmarks WHERE question_id=$1',[mcq.id])).rows),bookmarkBefore);
   assert.equal((await post({action:'save',...identity,id:mcq.id,revision:opened.data.revision,images:[]})).status,409);
   const detail=await post({action:'get',...identity,id:mcq.id});assert.equal(detail.data.images[0].alt,'Bone figure');assert.ok(!JSON.stringify(detail.data).includes('telegramFileId'));
-  const bytes=await fetch(origin+'/api/portal/question-image?source='+encodeURIComponent(detail.data.images[0].source));assert.equal(bytes.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await bytes.arrayBuffer()),png);assert.equal(downloads,1);
+  const bytes=await fetch(origin+'/api/portal/question-image?source='+encodeURIComponent(detail.data.images[0].source));assert.equal(bytes.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await bytes.arrayBuffer()),png);assert.equal(downloads,0,'Fresh uploads are served from the seeded cache.');
   const matchingDetail=(await post({action:'get',...identity,id:matches[0].id})).data;assert.equal(matchingDetail.groupSize,2);assert.equal(matchingDetail.matching,true);
   assert.equal((await post({action:'save',...identity,id:matches[0].id,revision:matchingDetail.revision,images:[]})).status,400);
   assert.equal((await post({action:'save',...identity,id:matches[0].id,revision:matchingDetail.revision,images:[image]})).data.updated,2);

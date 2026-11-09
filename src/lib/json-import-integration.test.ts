@@ -56,7 +56,7 @@ test('JSON + Telegram import roundtrips through API, sessions, review, bookmarks
     assert.equal((await request(q.images[0].source,null)).status,401);
     assert.equal((await request(q.images[0].source+'tampered',studentUid)).status,404);
     const imageResponse=await request(q.images[0].source,studentUid);assert.equal(imageResponse.status,200);assert.match(imageResponse.headers.get('cache-control')!,/no-store/);assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()),png);
-    await request(q.images[0].source,studentUid);assert.equal(telegramDownloads,1);assert.equal(telegramUploads,1);
+    await request(q.images[0].source,studentUid);assert.equal(telegramDownloads,0,'Fresh uploads are served from the seeded cache.');assert.equal(telegramUploads,1);
     await jsonRequest('/api/bookmarks/toggle',studentUid,{questionId:q.id,bookmarked:true});
     const saved=await jsonRequest('/api/bookmarks?view=saved',studentUid);assert.equal(saved.bookmarks[0].images[0].id,digest);
     await jsonRequest(`/api/sessions/${study.session.id}/answer`,studentUid,{questionId:q.id,selectedOption:'B',lockAnswer:true,slim:true});

@@ -1,4 +1,4 @@
-import { describe, it, after } from 'node:test';
+import { describe, it, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { eq, inArray } from 'drizzle-orm';
@@ -84,6 +84,12 @@ const createdSubjectIds: number[] = [];
 const createdLectureIds: number[] = [];
 const createdQuestionIds: number[] = [];
 const createdSessionIds: number[] = [];
+
+// Tests must never provision accounts or dispatch recovery emails through live Firebase.
+beforeEach(()=>{
+  setFirebaseProvisioningHandlerForTests(async()=>true);
+  setFirebaseEmailDispatchHandlerForTests(async()=>true);
+});
 
 after(async () => {
   setFirebaseTokenVerifierForTests(null);
@@ -684,6 +690,7 @@ describe('Security & Reliability Audit Regression Suite', () => {
       setFirebaseProvisioningHandlerForTests(null);
     }
 
+    setFirebaseProvisioningHandlerForTests(async()=>true);
     // 2. Firebase email-delivery failure:
     // When dispatchFirebasePasswordResetEmail fails (returns false), requestPasswordRecoveryToken
     // detects the failure, logs it safely, returns accepted: true with generic message, and does NOT leak existence.

@@ -170,6 +170,7 @@ export default function App() {
   const [authRetryVersion, setAuthRetryVersion] = useState(0);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
   const dashboardOwnerRef = useRef<string|null>(null);
+  const dashboardRequestId = useRef(0);
 
   const catalogLoadedRef = useRef(false);
   const loadCatalog = useCallback(async (force = false) => {
@@ -187,10 +188,11 @@ export default function App() {
   }, []);
 
   const loadStudentWorkspaceData = useCallback(async (silent = false) => {
+    const requestId = ++dashboardRequestId.current;
     if (!silent) setLoadingDashboard(true);
     try {
       const dash = await api.getDashboard();
-      setDashboardData(dash);
+      if (requestId === dashboardRequestId.current) setDashboardData(dash);
     } catch (err: any) {
       console.error('Error loading dashboard data:', err);
     } finally {
@@ -409,20 +411,40 @@ export default function App() {
       const res = await api.startSession(params);
       setActiveSession(res.session);
       setSessionShortfall(res.shortfallNotice);
+      return true;
     } catch (err: any) {
       setGlobalError(err.message || 'Could not start question session.');
+      return false;
     }
   };
 
-  const handleOpenExistingSession = async (sessionId: number) => {
+  const handleOpenExistingSession = async (sessionId: number, review = false) => {
     setGlobalError(null);
     try {
-      const res = await api.getSession(sessionId);
-      setActiveSession(res.session);
+      const res = await api.getSession(sessionId, review);
+      setActiveSession(review?{...res.session,reviewOnly:true}:res.session);
       setSessionShortfall(null);
     } catch (err: any) {
       setGlobalError(err.message || 'Could not load session.');
     }
+  };
+
+  const handleResetLectureProgress = async (lectureId: number) => {
+    const result = await api.resetLectureProgress(lectureId);
+    if (!result.success) throw new Error('Could not reset progress.');
+
+    // Clear the stale card immediately after the server confirms deletion.
+    setDashboardData((previous: any) => previous && ({
+      ...previous,
+      subjectProgress: previous.subjectProgress?.map((subject: any) => ({
+        ...subject,
+        lectures: subject.lectures?.filter((lecture: any) => lecture.lectureId !== lectureId),
+      })),
+      history: previous.history?.filter((session: any) => !result.resetSessionIds?.includes(session.id)),
+    }));
+    setActiveSession(null);
+    invalidateBookmarks();
+    await loadStudentWorkspaceData(true);
   };
 
   if (authConnectionError) {
@@ -553,6 +575,7 @@ export default function App() {
               </button>
             );
           })}
+          <a href="https://t.me/MedAtlasMCQ" target="_blank" rel="noopener noreferrer" className="ma-nav-item flex items-center gap-3 px-3.5 py-2.5 text-xs font-medium text-slate-600 hover:text-[var(--ma-brand)] rounded-lg"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M21.7 3.2 18.4 20c-.2 1.2-.9 1.5-1.8.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.3-8.4c.4-.4-.1-.6-.6-.3L5.8 13.4.9 11.9c-1.1-.3-1.1-1.1.2-1.6L20.3 2.9c.9-.3 1.6.2 1.4.3Z"/></svg>Telegram channel<span className="sr-only"> (opens in a new tab)</span></a>
         </nav>
 
         <div className="p-4 border-t border-slate-200 space-y-3 text-xs">
@@ -652,6 +675,7 @@ export default function App() {
             <McqSessionPlayer
               key={activeSession.id}
               initialSession={activeSession}
+              onResetLectureProgress={handleResetLectureProgress}
               shortfallNotice={sessionShortfall}
               onExit={() => {
                 setActiveSession(null);
@@ -686,6 +710,8 @@ export default function App() {
                   dashboardData={dashboardData}
                   initialSelectedSubjectId={selectedSubjectId}
                   onStartSession={handleStartSession}
+                  onOpenSession={handleOpenExistingSession}
+                  onResetProgress={handleResetLectureProgress}
                   onRefresh={() => {
                     loadStudentWorkspaceData();
                     loadCatalog(true);
@@ -697,7 +723,7 @@ export default function App() {
 
 
               {activeTab === 'practical' && (
-                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} initialSelectedSubjectId={selectedSubjectId} onStartSession={handleStartSession} onOpenSession={handleOpenExistingSession}/></Suspense>
+                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} initialSelectedSubjectId={selectedSubjectId} onStartSession={handleStartSession} onOpenSession={handleOpenExistingSession} onResetProgress={handleResetLectureProgress} isAdmin={user?.role==='admin'} onRefresh={()=>{loadStudentWorkspaceData();loadCatalog(true);}}/></Suspense>
               )}
 
               {activeTab === 'practice' && (
