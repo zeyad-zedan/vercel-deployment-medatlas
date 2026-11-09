@@ -1,6 +1,7 @@
 import {pool} from '../db/index.ts';
 import {saveShortAnswer,gradeShortAnswer,ShortAnswerError,publicShortAnswerAttempt} from './short-answer-service.ts';
 import {QUIZ_TOTALS_SQL,sqlQuizSummary} from './quiz-scoring.ts';
+import {tournamentsEnabled} from './study-rewards.ts';
 const validId=(value:unknown)=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<1)throw new ShortAnswerError('Choose a valid quiz and question.');return n;};
 
 export async function quizShortAnswerAttempts(uid:string,items:any[],examActive:boolean){
@@ -19,7 +20,7 @@ async function lockQuestion(client:any,uid:string,sessionId:number,questionId:nu
  if(!row.item?.shortAnswerId)throw new ShortAnswerError('Choose a short-answer question in this quiz.');
  return row;
 }
-async function writeState(client:any,uid:string,row:any,item:any){
+async function writeState(client:any,uid:string,row:any,item:any,action:'save'|'grade'){
  const totals=(await client.query(`WITH changed AS (
  SELECT jsonb_agg(CASE WHEN (value->>'questionId')::int=$3 THEN $4::jsonb ELSE value END ORDER BY ordinality) AS items
  FROM public.exam_sessions s,jsonb_array_elements(s.question_order_json::jsonb) WITH ORDINALITY e(value,ordinality) WHERE s.id=$1 AND s.user_uid=$2
@@ -34,6 +35,13 @@ async function writeState(client:any,uid:string,row:any,item:any){
   const snapshot={id:q.id,questionText:q.question_text,shortAnswerId:q.short_answer_id,shortAnswerMaxMarks:q.short_answer_max_marks,images:q.images,shortAnswerState:{shortAnswerId:item.shortAnswerId,shortAnswerAttemptId:item.shortAnswerAttemptId,shortAnswerStatus:item.shortAnswerStatus,shortAnswerScore:item.shortAnswerScore,maxMarks:item.maxMarks}};
   await client.query(`INSERT INTO public.question_attempts(session_id,user_uid,question_id,subject_id,lecture_id,selected_option,correct_option_snapshot,is_correct,question_snapshot_json,grading_status)
    VALUES($1,$2,$3,$4,$5,$6,'A',$7,$8,$9) ON CONFLICT(session_id,question_id) DO UPDATE SET selected_option=excluded.selected_option,is_correct=excluded.is_correct,question_snapshot_json=excluded.question_snapshot_json,grading_status=excluded.grading_status,answered_at=now()`,[row.id,uid,q.id,q.subject_id,q.lecture_id,item.selectedCanonical,item.shortAnswerStatus==='graded'&&item.shortAnswerScore===item.maxMarks,JSON.stringify(snapshot),item.shortAnswerStatus]);
+  const savedAnswer = action === 'save' && item.selectedCanonical !== null
+    && item.shortAnswerAttemptId !== row.item.shortAnswerAttemptId;
+  const newFullGrade = tournamentsEnabled && action === 'grade' && row.item.shortAnswerStatus !== 'graded'
+    && item.shortAnswerStatus === 'graded' && item.shortAnswerScore === item.maxMarks;
+  if (savedAnswer || newFullGrade) {
+    await client.query('SELECT gamification.record_answers($1, $2, ARRAY[$3]::int[], $4, $5)', [uid,row.id,q.id,savedAnswer,tournamentsEnabled]);
+  }
  }
  const hidden=row.mode==='exam'&&row.status!=='completed';
  return {id:row.id,status:row.status,correctCount:hidden?0:totals.correct_count,incorrectCount:hidden?0:totals.incorrect_count,unansweredCount:totals.unanswered_count,scorePercentage:hidden?0:totals.score_percentage,...(!hidden?{quizScore:sqlQuizSummary(totals)}:{})};
@@ -47,11 +55,11 @@ export async function saveQuizShortAnswer(uid:string,sessionValue:unknown,questi
   if(row.mode==='exam'&&row.time_limit_seconds!=null&&Date.now()>new Date(row.started_at).getTime()+row.time_limit_seconds*1000)throw new ShortAnswerError('The exam time has ended. Your previously saved answers are safe.',409);
   if(typeof answer==='string'&&!answer.trim()){
    const item={...row.item,shortAnswerAttemptId:null,shortAnswerStatus:'cleared',shortAnswerScore:null,selectedCanonical:null,selectedDisplayed:null,submitted:false};
-   const session=await writeState(client,uid,row,item);await client.query('COMMIT');return {attempt:null,session};
+   const session=await writeState(client,uid,row,item,'save');await client.query('COMMIT');return {attempt:null,session};
   }
   const attempt=await saveShortAnswer(uid,row.item.shortAnswerId,answer,client);
   const item={...row.item,maxMarks:attempt.maxScore||row.item.maxMarks,shortAnswerAttemptId:attempt.id,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,submitted:row.mode!=='exam',selectedCanonical:attempt.status==='graded'?(attempt.result.score===(attempt.maxScore||row.item.maxMarks)?'A':'B'):'C',selectedDisplayed:null};
-  const session=await writeState(client,uid,row,item);await client.query('COMMIT');
+  const session=await writeState(client,uid,row,item,'save');await client.query('COMMIT');
   return {attempt:row.mode==='exam'?{...attempt,status:'saved',result:null,model:null,modelAnswer:undefined,error:null}:attempt,session};
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
@@ -59,5 +67,5 @@ export async function gradeQuizShortAnswer(uid:string,sessionValue:unknown,quest
  const sessionId=validId(sessionValue),questionId=validId(questionValue);let attemptId:number;
  const client=await pool.connect();try{await client.query('BEGIN');const row=await lockQuestion(client,uid,sessionId,questionId);if(row.mode==='exam'&&row.status!=='completed')throw new ShortAnswerError('Submit the exam before requesting grading.',409);attemptId=row.item.shortAnswerAttemptId;if(!attemptId)throw new ShortAnswerError('Save your answer first.');await client.query('COMMIT');}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  const attempt=await gradeShortAnswer(uid,attemptId);
- const update=await pool.connect();try{await update.query('BEGIN');const row=await lockQuestion(update,uid,sessionId,questionId);if(row.item.shortAnswerAttemptId!==attemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);const item={...row.item,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===row.item.maxMarks?'A':'B'):'C',selectedDisplayed:null};const session=await writeState(update,uid,row,item);await update.query('COMMIT');return {attempt,session};}catch(error){await update.query('ROLLBACK');throw error;}finally{update.release();}
+ const update=await pool.connect();try{await update.query('BEGIN');const row=await lockQuestion(update,uid,sessionId,questionId);if(row.item.shortAnswerAttemptId!==attemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);const item={...row.item,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===row.item.maxMarks?'A':'B'):'C',selectedDisplayed:null};const session=await writeState(update,uid,row,item,'grade');await update.query('COMMIT');return {attempt,session};}catch(error){await update.query('ROLLBACK');throw error;}finally{update.release();}
 }

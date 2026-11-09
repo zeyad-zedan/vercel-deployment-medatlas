@@ -4,7 +4,11 @@ const control = 'rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus-vi
 const toggle = <T,>(value:T, values:T[]) => values.includes(value) ? values.filter(item => item !== value) : [...values,value];
 
 /** All filters use the catalog already loaded by the workspace. */
-export function PracticeBuilder({catalog,onStartSession}:{catalog:any;onStartSession:(params:any)=>any}) {
+export function PracticeBuilder({catalog,onStartSession,onShowMockExams}:{
+  catalog:any;
+  onStartSession:(params:any)=>any;
+  onShowMockExams?:()=>void;
+}) {
   const [subjects,setSubjects] = useState<number[]>([]);
   const [lectures,setLectures] = useState<number[]>([]);
   const [difficulty,setDifficulty] = useState('all');
@@ -44,8 +48,14 @@ export function PracticeBuilder({catalog,onStartSession}:{catalog:any;onStartSes
     } catch(error:any) {setError(error.message||'Could not start this quiz.');}
     finally {setBusy(false);}
   };
-  return <section className="max-w-4xl space-y-5">
-    <header><h1 className="text-2xl font-bold">Practice quizzes</h1><p className="mt-2 text-sm text-slate-600">Choose your material and quiz length. Extra settings are optional.</p></header>
+  return <section id="practice-quizzes" aria-labelledby="practice-quizzes-heading" className="max-w-4xl space-y-5 scroll-mt-24">
+    <header className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 id="practice-quizzes-heading" className="text-2xl font-bold">Practice quizzes</h1>
+        <p className="mt-2 text-sm text-slate-600">Choose your material and quiz length. Extra settings are optional.</p>
+      </div>
+      {onShowMockExams && <button type="button" className="ma-text-button min-h-10" onClick={onShowMockExams}>Jump to mock exams ↓</button>}
+    </header>
     <form className="space-y-6 rounded-xl border border-slate-200 bg-white p-4 sm:p-6" onSubmit={start}>
       <fieldset className="space-y-3" disabled={busy}>
         <legend className="mb-3 text-sm font-semibold">1. Choose your material</legend>

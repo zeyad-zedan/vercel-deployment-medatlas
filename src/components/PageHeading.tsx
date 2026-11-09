@@ -4,7 +4,7 @@ import React from 'react';
 export function PageHeading({ eyebrow, title, description, children }: {
   eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -12,7 +12,7 @@ export function PageHeading({ eyebrow, title, description, children }: {
       <div className="min-w-0">
         <p className="ma-eyebrow">{eyebrow}</p>
         <h1>{title}</h1>
-        <p className="ma-page-description">{description}</p>
+        {description && <p className="ma-page-description">{description}</p>}
       </div>
       {children && <div className="ma-page-actions">{children}</div>}
     </header>

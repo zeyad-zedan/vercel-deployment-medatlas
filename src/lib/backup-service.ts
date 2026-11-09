@@ -35,6 +35,15 @@ export interface EncryptedBackupEnvelope {
   metadata: BackupMetadata;
 }
 
+const rewardsTables = {
+  tournaments: 'tournaments',
+  tournamentEntries: 'entries',
+  tournamentAwards: 'awards',
+  goalPreferences: 'goal_preferences',
+  studyDays: 'study_days',
+  dailyQuestions: 'daily_questions',
+} as const;
+
 export interface BackupPayload {
   format: string;
   createdAt: string;
@@ -60,7 +69,7 @@ export interface BackupPayload {
     studentGeminiKeys?: unknown[];
     shortAnswerQuestions?: unknown[];
     shortAnswerAttempts?: unknown[];
-  };
+  } & Partial<Record<keyof typeof rewardsTables, unknown[]>>;
 }
 
 export interface RestoreVerificationResult {
@@ -227,6 +236,11 @@ export function decryptBackupPayload(
     throw new Error('Corrupted backup payload: studentGeminiKeys must be an array.');
   }
   for(const name of ['shortAnswerQuestions','shortAnswerAttempts'] as const)if(parsed.tables[name]!==undefined&&!Array.isArray(parsed.tables[name]))throw new Error(`Corrupted backup payload: ${name} must be an array.`);
+  for (const name of Object.keys(rewardsTables) as Array<keyof typeof rewardsTables>) {
+    if (parsed.tables[name] !== undefined && !Array.isArray(parsed.tables[name])) {
+      throw new Error(`Corrupted backup payload: ${name} must be an array.`);
+    }
+  }
 
   return parsed;
 }
@@ -273,6 +287,12 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
     const studentKeysRes = await client.query('SELECT * FROM public.student_gemini_keys ORDER BY user_uid ASC');
     const shortQuestionsRes=await client.query('SELECT * FROM public.short_answer_questions ORDER BY id ASC');
     const shortAttemptsRes=await client.query('SELECT * FROM public.short_answer_attempts ORDER BY id ASC');
+    const rewardsSnapshot: Partial<Record<keyof typeof rewardsTables, unknown[]>> = {};
+    for (const [name, table] of Object.entries(rewardsTables)) {
+      const columns = table === 'study_days' ? 'user_uid, study_day::text, target, answered'
+        : table === 'daily_questions' ? 'user_uid, study_day::text, question_id' : '*';
+      rewardsSnapshot[name as keyof typeof rewardsTables] = (await client.query(`SELECT ${columns} FROM gamification.${table}`)).rows;
+    }
 
     await client.query('COMMIT');
 
@@ -301,6 +321,7 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
         studentGeminiKeys: studentKeysRes.rows,
         shortAnswerQuestions: shortQuestionsRes.rows,
         shortAnswerAttempts: shortAttemptsRes.rows,
+        ...rewardsSnapshot,
       },
     };
   } catch (err) {
@@ -698,6 +719,36 @@ export async function testRestoreBackup(
           resolved_by TEXT REFERENCES "${isolatedSchema}".users(uid) ON DELETE SET NULL
         );
 
+        CREATE TABLE "${isolatedSchema}".tournaments (
+          id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ NOT NULL,
+          CHECK (starts_at < ends_at)
+        );
+        CREATE TABLE "${isolatedSchema}".tournament_entries (
+          tournament_id INTEGER REFERENCES "${isolatedSchema}".tournaments(id),
+          user_uid TEXT REFERENCES "${isolatedSchema}".users(uid),
+          nickname TEXT NOT NULL, joined_at TIMESTAMPTZ NOT NULL, points INTEGER NOT NULL CHECK (points >= 0),
+          PRIMARY KEY (tournament_id, user_uid)
+        );
+        CREATE TABLE "${isolatedSchema}".tournament_awards (
+          tournament_id INTEGER, user_uid TEXT, question_id INTEGER, points SMALLINT NOT NULL CHECK (points IN (2, 3, 5)),
+          PRIMARY KEY (tournament_id, user_uid, question_id),
+          FOREIGN KEY (tournament_id, user_uid) REFERENCES "${isolatedSchema}".tournament_entries
+        );
+        CREATE TABLE "${isolatedSchema}".goal_preferences (
+          user_uid TEXT PRIMARY KEY REFERENCES "${isolatedSchema}".users(uid),
+          target SMALLINT NOT NULL CHECK (target IN (5, 10, 20))
+        );
+        CREATE TABLE "${isolatedSchema}".study_days (
+          user_uid TEXT REFERENCES "${isolatedSchema}".users(uid), study_day DATE,
+          target SMALLINT NOT NULL CHECK (target IN (5, 10, 20)), answered INTEGER NOT NULL CHECK (answered >= 0),
+          PRIMARY KEY (user_uid, study_day)
+        );
+        CREATE TABLE "${isolatedSchema}".daily_questions (
+          user_uid TEXT, study_day DATE, question_id INTEGER,
+          PRIMARY KEY (user_uid, study_day, question_id),
+          FOREIGN KEY (user_uid, study_day) REFERENCES "${isolatedSchema}".study_days
+        );
+
         CREATE TABLE "${isolatedSchema}".admin_audit_logs (
           id SERIAL PRIMARY KEY,
           admin_uid TEXT NOT NULL,
@@ -762,6 +813,9 @@ export async function testRestoreBackup(
       await insertRows('admin_audit_logs', payload.tables.adminAuditLogs as any[]);
       await insertRows('app_settings', (payload.tables.appSettings || []) as any[]);
       await insertRows('question_reports', (payload.tables.questionReports || []) as any[]);
+      for (const key of Object.keys(rewardsTables) as Array<keyof typeof rewardsTables>) {
+        await insertRows(key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`), payload.tables[key] || []);
+      }
 
       // 4. Verify row counts and relationships in the disposable schema
       for (const [tableKey, expectedCount] of Object.entries(envelope.metadata.tables)) {

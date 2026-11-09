@@ -16,6 +16,7 @@ import { DEFAULT_FACULTY } from '../lib/academic-profile.ts';
 import { AcademicProfileFields } from './AcademicProfileFields.tsx';
 import { warmUpFirebaseAuth } from '../lib/firebase.ts';
 import { useDialogFocus } from '../lib/use-dialog-focus.ts';
+import { InstallMedAtlas } from './InstallMedAtlas.tsx';
 
 interface PublicLandingProps {
   catalog: {
@@ -606,6 +607,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
             <span className="font-semibold text-slate-800">MedAtlas MCQ</span> · Lecture-Based Medical Education Platform
           </div>
           <div className="flex flex-wrap items-center gap-6">
+            <InstallMedAtlas className="ma-text-button min-h-9" />
             <button
               type="button"
               onClick={() => setLegalModal('about')}

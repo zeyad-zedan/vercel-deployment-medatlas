@@ -4,16 +4,17 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-const PracticalView=lazy(()=>import('./components/PracticalView.tsx'));
 const CourseQuizView=lazy(()=>import('./components/CourseQuizView.tsx'));
+import PracticalView from './components/PracticalView.tsx';
+import TournamentsView from './components/TournamentsView.tsx';
+import { WorkspacePageBoundary } from './components/WorkspacePageBoundary.tsx';
+import { InstallMedAtlas } from './components/InstallMedAtlas.tsx';
 import {courseQuizSlug} from './lib/course-quiz-route.ts';
 import {setAuthToken} from './lib/api.ts';
 import {catalogByContentType} from './lib/lecture-kinds.ts';
 import {subjectLibraryTab} from './lib/subject-library.ts';
 import {
   BookOpen,
-  Bookmark,
-  Clock,
   GraduationCap,
   History,
   LayoutDashboard,
@@ -23,6 +24,7 @@ import {
   PanelLeftOpen,
   ShieldCheck,
   SlidersHorizontal,
+  Trophy,
   User,
   X,
 } from 'lucide-react';
@@ -40,6 +42,7 @@ import {
   ProfileSettingsView,
 } from './components/StudentViews.tsx';
 import { AdminConsole } from './components/AdminConsole.tsx';
+import { tournamentsEnabled, type DailyGoal } from './lib/study-rewards.ts';
 
 const VALID_TABS = [
   'dashboard',
@@ -51,9 +54,21 @@ const VALID_TABS = [
   'exams',
   'bookmarks',
   'progress',
+  'tournaments',
   'profile',
   'admin',
 ] as const;
+
+function workspaceNavTab(tab: string) {
+  if (tab === 'exams') return 'practice';
+  if (tab === 'bookmarks') return 'progress';
+  return tab;
+}
+
+function resolveWorkspaceTab(tab: string) {
+  if (tab === 'tournaments' && !tournamentsEnabled) return 'dashboard';
+  return ['subjects', 'short-answers'].includes(tab) ? 'lectures' : tab;
+}
 
 function parseCurrentRoute(): { tab: string; sessionId: number | null } {
   if (typeof window === 'undefined') {
@@ -73,7 +88,7 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
 
   const queryTab = searchParams.get('tab');
   if (queryTab && VALID_TABS.includes(queryTab as any)) {
-    return { tab: ['subjects','short-answers'].includes(queryTab) ? 'lectures' : queryTab, sessionId: null };
+    return { tab: resolveWorkspaceTab(queryTab), sessionId: null };
   }
 
   // Check path: /session/8
@@ -85,8 +100,14 @@ function parseCurrentRoute(): { tab: string; sessionId: number | null } {
 
   // Check path: /subjects, /lectures, /progress, etc.
   const firstSegment = pathname.split('/')[0]?.toLowerCase();
+  if (firstSegment === 'progress' && searchParams.get('view') === 'bookmarks') {
+    return { tab: 'bookmarks', sessionId: null };
+  }
+  if (firstSegment === 'mock-exams' || (firstSegment === 'practice' && window.location.hash === '#mock-exams')) {
+    return { tab: 'exams', sessionId: null };
+  }
   if (firstSegment && VALID_TABS.includes(firstSegment as any)) {
-    return { tab: ['subjects','short-answers'].includes(firstSegment) ? 'lectures' : firstSegment, sessionId: null };
+    return { tab: resolveWorkspaceTab(firstSegment), sessionId: null };
   }
 
   return { tab: 'dashboard', sessionId: null };
@@ -104,6 +125,9 @@ function updateBrowserUrl(tab: string, session: any | null, replace = false, pri
   } else if (session && session.id) {
     targetUrl = `/session/${session.id}`;
     targetTitle = `${session.title || 'MCQ Session'} · MedAtlas MCQ`;
+  } else if (tab === 'bookmarks' || tab === 'exams') {
+    targetUrl = tab === 'bookmarks' ? '/progress?view=bookmarks' : '/practice#mock-exams';
+    targetTitle = tab === 'bookmarks' ? 'Bookmarks · Dashboard · MedAtlas MCQ' : 'Mock exams · Practice quizzes · MedAtlas MCQ';
   } else if (tab && tab !== 'dashboard') {
     targetUrl = `/${tab}`;
     const capitalized = tab === 'progress' ? 'Dashboard' : tab.charAt(0).toUpperCase() + tab.slice(1);
@@ -112,9 +136,14 @@ function updateBrowserUrl(tab: string, session: any | null, replace = false, pri
 
   document.title = targetTitle;
 
-  const currentPath = window.location.pathname;
-  if (currentPath !== targetUrl) {
-    if (replace) {
+  const { pathname, search, hash } = window.location;
+  const currentUrl = targetUrl.startsWith('/progress') ? pathname + search
+    : targetUrl.startsWith('/practice') ? pathname + hash : pathname;
+  const previousPath = pathname.replace(/\/+$/, '').toLowerCase();
+  const legacySectionUrl = (tab === 'exams' && ['/exams', '/mock-exams'].includes(previousPath))
+    || (tab === 'bookmarks' && previousPath === '/bookmarks');
+  if (currentUrl !== targetUrl) {
+    if (replace || legacySectionUrl) {
       window.history.replaceState({ tab, sessionId: session?.id || null }, targetTitle, targetUrl);
     } else {
       window.history.pushState({ tab, sessionId: session?.id || null }, targetTitle, targetUrl);
@@ -171,6 +200,12 @@ export default function App() {
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | 'all'>('all');
   const dashboardOwnerRef = useRef<string|null>(null);
   const dashboardRequestId = useRef(0);
+  const currentUserUid = user?.uid;
+  const handleDailyGoalChange = useCallback((dailyGoal: DailyGoal) => {
+    if (dashboardOwnerRef.current === currentUserUid) {
+      setDashboardData((previous: any) => previous && { ...previous, dailyGoal });
+    }
+  }, [currentUserUid]);
 
   const catalogLoadedRef = useRef(false);
   const loadCatalog = useCallback(async (force = false) => {
@@ -351,6 +386,12 @@ export default function App() {
     updateBrowserUrl(activeTab, activeSession, false, privateSlug);
   }, [activeTab, activeSession, user, initializingAuth, privateSlug]);
 
+  useEffect(() => {
+    if (!user || activeSession || (activeTab !== 'practice' && activeTab !== 'exams')) return;
+    const id = activeTab === 'exams' ? 'mock-exams' : 'practice-quizzes';
+    document.getElementById(id)?.scrollIntoView?.({ block: 'start' });
+  }, [activeTab, activeSession, user]);
+
   // Handle browser native Back and Forward navigation buttons
   useEffect(() => {
     const handlePopState = () => {
@@ -372,13 +413,15 @@ export default function App() {
       } else {
         setActiveSession(null);
         setActiveTab(route.tab);
-        loadStudentWorkspaceData(true);
+        if (activeSession || workspaceNavTab(route.tab) !== workspaceNavTab(activeTab)) {
+          loadStudentWorkspaceData(true);
+        }
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [loadStudentWorkspaceData, user]);
+  }, [activeSession, activeTab, loadStudentWorkspaceData, user]);
 
   const handleAuthenticated = (loggedInUser: UserProfile, initialTab?: string) => {
     setUser(loggedInUser);
@@ -485,15 +528,15 @@ export default function App() {
     { id: 'lectures', label: 'Lectures', icon: BookOpen },
     { id: 'practical', label: 'Practical', icon: GraduationCap },
     { id: 'practice', label: 'Practice quizzes', icon: SlidersHorizontal },
-    { id: 'exams', label: 'Mock Exams', icon: Clock },
-    { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
     { id: 'progress', label: 'Dashboard', icon: History },
+    ...(tournamentsEnabled ? [{ id: 'tournaments', label: 'Tournaments', icon: Trophy }] : []),
     { id: 'profile', label: 'Profile & Settings', icon: User },
   ];
 
   if (user.role === 'admin') {
     navItems.push({ id: 'admin', label: 'Admin Console', icon: ShieldCheck });
   }
+  const activeNavTab = workspaceNavTab(activeTab);
 
   return (
     <div className="ma-workspace min-h-screen flex text-slate-900 relative">
@@ -541,7 +584,7 @@ export default function App() {
         >
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = !activeSession && activeTab === item.id;
+            const isActive = !activeSession && activeNavTab === item.id;
             return (
               <button
                 key={item.id}
@@ -579,6 +622,7 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-slate-200 space-y-3 text-xs">
+          <InstallMedAtlas className="ma-text-button min-h-9 px-2" />
           <div className="px-2">
             <p className="font-bold text-slate-900 truncate">{user.displayName}</p>
             <p className="text-slate-500 truncate">{user.email}</p>
@@ -627,7 +671,7 @@ export default function App() {
               {activeSession
                 ? `Active Session / ${activeSession.title}`
                 : `Workspace / ${
-                    activeTab === 'course-quiz' ? 'Private quiz' : navItems.find((n) => n.id === activeTab)?.label || 'Dashboard'
+                    activeTab === 'course-quiz' ? 'Private quiz' : navItems.find((n) => n.id === activeNavTab)?.label || 'Dashboard'
                   }`}
             </span>
           </div>
@@ -695,6 +739,7 @@ export default function App() {
                   onStartQuickSession={handleStartSession}
                   onOpenSession={handleOpenExistingSession}
                   onNavigateTab={setActiveTab}
+                  onDailyGoalChange={handleDailyGoalChange}
                   onOpenSubject={(subjectId) => {
                     setSelectedSubjectId(subjectId);
                     const subject = catalog?.subjects?.find((item: any) => item.id === subjectId)
@@ -702,6 +747,13 @@ export default function App() {
                     setActiveTab(subjectLibraryTab(subject?.title ?? ''));
                   }}
                 />
+              )}
+
+              {tournamentsEnabled && activeTab === 'tournaments' && (
+                <WorkspacePageBoundary key={`tournaments:${user.uid}`} pageName="Tournaments">
+                  <TournamentsView key={user.uid} isAdmin={user.role === 'admin'}
+                    onStudy={() => { setSelectedSubjectId('all'); setActiveTab('lectures'); }} />
+                </WorkspacePageBoundary>
               )}
 
               {activeTab === 'lectures' && (
@@ -723,42 +775,60 @@ export default function App() {
 
 
               {activeTab === 'practical' && (
-                <Suspense fallback={<p role="status">Loading practical sections…</p>}><PracticalView catalog={catalog} dashboardData={dashboardData} initialSelectedSubjectId={selectedSubjectId} onStartSession={handleStartSession} onOpenSession={handleOpenExistingSession} onResetProgress={handleResetLectureProgress} isAdmin={user?.role==='admin'} onRefresh={()=>{loadStudentWorkspaceData();loadCatalog(true);}}/></Suspense>
+                <WorkspacePageBoundary key="practical" pageName="Practical">
+                  {catalog ? (
+                    <PracticalView catalog={catalog} dashboardData={dashboardData}
+                      initialSelectedSubjectId={selectedSubjectId} onStartSession={handleStartSession}
+                      onOpenSession={handleOpenExistingSession} onResetProgress={handleResetLectureProgress}
+                      isAdmin={user.role === 'admin'} onRefresh={() => { loadStudentWorkspaceData(); loadCatalog(true); }} />
+                  ) : loadingCatalog ? (
+                    <p className="ma-dashboard-panel text-sm" role="status">Loading practical sections…</p>
+                  ) : (
+                    <div className="ma-dashboard-panel space-y-3 text-sm" role="alert">
+                      <p>Couldn’t load the practical sections.</p>
+                      <button type="button" className="ma-text-button min-h-9" onClick={() => loadCatalog()}>Try again</button>
+                    </div>
+                  )}
+                </WorkspacePageBoundary>
               )}
 
-              {activeTab === 'practice' && (
-                <CustomPracticeView
-                  catalog={catalog}
-                  onStartSession={handleStartSession}
-                />
+              {activeNavTab === 'practice' && (
+                <div className="max-w-4xl space-y-8">
+                  <CustomPracticeView catalog={catalog} onStartSession={handleStartSession}
+                    onShowMockExams={() => setActiveTab('exams')} />
+                  <MockExamsView
+                    catalog={catalog}
+                    dashboardData={dashboardData}
+                    onStartSession={handleStartSession}
+                    onOpenSession={handleOpenExistingSession}
+                    onRefresh={loadStudentWorkspaceData}
+                  />
+                </div>
               )}
 
-              {activeTab === 'exams' && (
-                <MockExamsView
-                  catalog={catalog}
-                  dashboardData={dashboardData}
-                  onStartSession={handleStartSession}
-                  onOpenSession={handleOpenExistingSession}
-                  onRefresh={loadStudentWorkspaceData}
-                />
-              )}
-
-              {activeTab === 'bookmarks' && (
-                <BookmarksView
-                  loading={!hasBookmarkData && (loadingBookmarks || !bookmarksError)}
-                  error={hasBookmarkData ? null : bookmarksError}
-                  bookmarksData={bookmarksData?.owner === bookmarkOwner ? bookmarksData : null}
-                  catalog={catalog}
-                  onRefresh={invalidateBookmarks}
-                  onLoadReview={query => { setReviewQuery(query); setIncludeBookmarkReview(true); }}
-                  onLoadSaved={() => setIncludeBookmarkReview(false)}
-                />
-              )}
-
-              {activeTab === 'progress' && (
+              {activeNavTab === 'progress' && (
                 <ProgressHistoryView
                   dashboardData={dashboardData}
                   onOpenSession={handleOpenExistingSession}
+                  navigation={
+                    <nav aria-label="Dashboard sections" className="ma-segmented-control w-fit">
+                      <button type="button" className="px-4 text-sm font-semibold" aria-pressed={activeTab === 'progress'}
+                        onClick={() => setActiveTab('progress')}>Sessions</button>
+                      <button type="button" className="px-4 text-sm font-semibold" aria-pressed={activeTab === 'bookmarks'}
+                        onClick={() => setActiveTab('bookmarks')}>Bookmarks</button>
+                    </nav>
+                  }
+                  bookmarks={activeTab === 'bookmarks' ? (
+                    <BookmarksView
+                      loading={!hasBookmarkData && (loadingBookmarks || !bookmarksError)}
+                      error={hasBookmarkData ? null : bookmarksError}
+                      bookmarksData={bookmarksData?.owner === bookmarkOwner ? bookmarksData : null}
+                      catalog={catalog}
+                      onRefresh={invalidateBookmarks}
+                      onLoadReview={query => { setReviewQuery(query); setIncludeBookmarkReview(true); }}
+                      onLoadSaved={() => setIncludeBookmarkReview(false)}
+                    />
+                  ) : undefined}
                 />
               )}
 

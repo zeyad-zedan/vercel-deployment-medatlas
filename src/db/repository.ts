@@ -11,6 +11,8 @@ import { DEFAULT_FACULTY, validateAcademicProfile } from '../lib/academic-profil
 import { isWholeLectureStudy, reconcileLectureStudyItems } from '../lib/lecture-study-progress.ts';
 import { eq, and, or, desc, asc, inArray, isNull, sql, getTableColumns } from 'drizzle-orm';
 import { db } from './index.ts';
+import { getDailyGoal } from './study-rewards.ts';
+import { tournamentsEnabled } from '../lib/study-rewards.ts';
 import {
   users,
   modules,
@@ -3633,6 +3635,9 @@ export async function saveSessionQuestionAnswer(
             subjectTitle: catalog.subjects.find((s: any) => s.id === q.subjectId)?.title || 'Medical Subject',
             lectureTitle: catalog.lectures.find((l: any) => l.id === q.lectureId)?.title || 'Lecture' }),
           timeSpentSeconds: 0 }).onConflictDoNothing();
+        if (row.mode !== 'exam' && lockAnswer) {
+          await tx.execute(sql`SELECT gamification.record_answers(${userUid}, ${sessionId}, ARRAY[${questionId}]::int[], true, ${tournamentsEnabled})`);
+        }
       }
     }
     const counts = updated.rows[0];
@@ -3714,6 +3719,9 @@ export async function completeExamSession(
       });
 
       const orderItems: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
+      const alreadyRecorded = new Set(session.mode === 'exam' ? [] : orderItems
+        .filter(item => item.submitted || item.shortAnswerId)
+        .map(item => item.questionId));
 
       if (finalDisplayedAnswers && typeof finalDisplayedAnswers === 'object') {
         // Check if client is attempting to alter answers after the server deadline expired
@@ -3740,7 +3748,7 @@ export async function completeExamSession(
           }
         } else {
           for (const item of orderItems) {
-            if (!item.isMatching && !item.shortAnswerId && item.questionId in finalDisplayedAnswers) {
+            if (!alreadyRecorded.has(item.questionId) && !item.isMatching && !item.shortAnswerId && item.questionId in finalDisplayedAnswers) {
               const rawDisp = finalDisplayedAnswers[item.questionId];
               const validDisp =
                 rawDisp && OPTION_KEYS.includes(rawDisp) ? rawDisp : null;
@@ -3891,6 +3899,11 @@ export async function completeExamSession(
           .insert(questionAttempts)
           .values(attemptRecords)
           .onConflictDoNothing();
+        const newQuestionIds = attemptRecords.filter(attempt => !alreadyRecorded.has(attempt.questionId) && attempt.selectedOption !== null)
+          .map(attempt => attempt.questionId);
+        if (newQuestionIds.length) {
+          await tx.execute(sql`SELECT gamification.record_answers(${userUid}, ${sessionId}, ARRAY[${sql.join(newQuestionIds.map(id => sql`${id}`), sql`, `)}]::int[], true, ${tournamentsEnabled})`);
+        }
       }
     });
 
@@ -4209,7 +4222,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       .filter((l: any) => l.status === 'published')
       .sort((a: any, b: any) => (a.lectureNumber || 0) - (b.lectureNumber || 0));
 
-    const [userSessions, userAttempts, [bookmarkTotals], allQuestions] =
+    const [userSessions, userAttempts, [bookmarkTotals], allQuestions, dailyGoal] =
       await Promise.all([
         db
           .select({ ...getTableColumns(examSessions), questionOrderJson: sql<string>`'[]'` })
@@ -4230,6 +4243,10 @@ export async function getStudentDashboardAnalytics(userUid: string) {
           .orderBy(questionAttempts.questionId, desc(questionAttempts.answeredAt), desc(questionAttempts.id)),
         db.select({ count: sql<number>`count(*)::int` }).from(bookmarks).where(eq(bookmarks.userUid, userUid)),
         getQuestionMetadata(),
+        getDailyGoal(userUid).catch(error => {
+          console.error('Failed to load daily study goal:', error);
+          return null;
+        }),
       ]);
 
     const completedSessions = userSessions.filter((s) => s.status === 'completed');
@@ -4408,6 +4425,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       subjectProgress,
       topicPerformance,
       history,
+      dailyGoal,
     };
   } catch (error) {
     console.error('Error building student dashboard analytics:', error);

@@ -1,0 +1,240 @@
+.ma-study-goal {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  border: 1px solid var(--ma-border);
+  border-radius: var(--ma-radius-card);
+  background: var(--ma-surface);
+}
+.ma-goal-main { padding: 10px 16px 13px; }
+.ma-goal-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.ma-goal-heading h2, .ma-goal-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ma-tournament-panel h2, .ma-leaderboard h2, .ma-tournament-message h1 {
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -.015em;
+}
+.ma-goal-heading h2 { font-size: 14px; font-weight: 750; }
+.ma-goal-heading button { justify-self: end; min-height: 36px; white-space: nowrap; }
+.ma-goal-heading .ma-reward-icon { width: 28px; height: 28px; border-radius: 8px; }
+.ma-reward-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ma-radius-control);
+  background: var(--ma-brand-soft);
+  color: var(--ma-brand-hover);
+}
+.ma-personal-rank dd, .ma-point-scale dd {
+  font-size: 27px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.035em;
+  line-height: 1.2;
+}
+.ma-goal-count strong, .ma-goal-streaks dd {
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.ma-goal-count strong span, .ma-goal-streaks dd span {
+  color: var(--ma-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ma-goal-count > span { display: flex; align-items: center; gap: 4px; color: var(--ma-brand-hover); font-size: 12px; font-weight: 650; }
+.ma-goal-main progress {
+  display: block;
+  width: 100%;
+  height: 5px;
+  margin: 5px 0 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ma-brand-soft);
+  accent-color: var(--ma-brand);
+}
+@media (forced-colors: none) {
+  .ma-goal-main progress { appearance: none; }
+  .ma-goal-main progress::-webkit-progress-bar { background: var(--ma-brand-soft); border-radius: 10px; }
+  .ma-goal-main progress::-webkit-progress-value { background: var(--ma-brand); border-radius: 10px; }
+  .ma-goal-main progress::-moz-progress-bar { background: var(--ma-brand); border-radius: 10px; }
+}
+.ma-goal-caption, .ma-goal-options p { color: var(--ma-muted); font-size: 13px; }
+.ma-goal-caption { margin-top: 5px; }
+.ma-goal-options { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ma-border); }
+.ma-goal-options > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ma-goal-streaks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: center;
+  margin: 0;
+  padding: 8px 0;
+  border-inline-start: 1px solid var(--ma-border);
+  background: var(--ma-brand-soft);
+  border-radius: 0 var(--ma-radius-card) var(--ma-radius-card) 0;
+}
+.ma-goal-streaks > div { padding: 4px clamp(8px, 1.5vw, 16px); }
+.ma-goal-streaks > div + div { border-inline-start: 1px solid #cbded7; }
+.ma-goal-streaks dt { display: flex; align-items: center; gap: 4px; color: var(--ma-brand-hover); font-size: 12px; font-weight: 650; }
+.ma-goal-streaks dt svg { flex: none; }
+.ma-goal-streaks dd { margin-top: 3px; }
+
+.ma-tournament-page { display: grid; gap: 20px; }
+.ma-tournament-event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(16px, 2.5vw, 24px);
+  border-radius: var(--ma-radius-card);
+  background: #123b35;
+  color: white;
+}
+.ma-event-content { min-width: 0; }
+.ma-event-content h1 { margin: 6px 0 4px; font-size: clamp(22px, 3vw, 30px); line-height: 1.2; font-weight: 750; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.ma-event-content p { display: flex; align-items: center; gap: 8px; color: #cbe4db; font-size: 13px; }
+.ma-event-content p svg { flex: none; }
+.ma-event-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 20px;
+  background: #dcebe5;
+  color: #244940;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ma-event-status-active { background: #c5f0d8; color: #164e35; }
+.ma-event-status-active::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #24804d; }
+.ma-tournament-select { display: grid; gap: 4px; min-width: 0; width: min(100%, 285px); color: #e3f1eb; font-size: 13px; font-weight: 650; }
+.ma-tournament-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(250px, 1fr);
+  grid-template-areas: "board entry" "board rules";
+  grid-template-rows: auto 1fr;
+  align-items: start;
+  gap: 16px;
+}
+.ma-tournament-entry { grid-area: entry; }
+.ma-tournament-gate { width: min(100%, 480px); }
+.ma-tournament-rules { grid-area: rules; }
+.ma-leaderboard, .ma-tournament-panel, .ma-tournament-message, .ma-tournament-admin form {
+  border: 1px solid var(--ma-border);
+  border-radius: var(--ma-radius-card);
+  background: var(--ma-surface);
+}
+.ma-leaderboard { grid-area: board; overflow: hidden; }
+.ma-leaderboard .ma-tournament-event { border-radius: 0; }
+.ma-leaderboard header, .ma-tournament-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; }
+.ma-tournament-message { justify-content: flex-start; }
+.ma-leaderboard header p, .ma-tournament-panel p, .ma-tournament-message p {
+  color: var(--ma-muted);
+  font-size: 13px;
+}
+.ma-leaderboard header p { display: flex; align-items: center; gap: 6px; }
+.ma-leaderboard table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: start; }
+.ma-leaderboard thead { background: var(--ma-canvas); font-size: 12px; color: #4d636a; }
+.ma-leaderboard th, .ma-leaderboard td { padding: 10px 16px; border-top: 1px solid var(--ma-border); text-align: start; }
+.ma-leaderboard th:first-child, .ma-leaderboard td:first-child { width: 1%; }
+.ma-leaderboard th:last-child, .ma-leaderboard td:last-child { width: 1%; text-align: end; }
+.ma-leaderboard tbody td { font-variant-numeric: tabular-nums; font-weight: 700; }
+.ma-leaderboard tbody th { overflow-wrap: anywhere; font-weight: 650; }
+.ma-rank-own { background: var(--ma-brand-soft); }
+.ma-rank-number { display: inline-grid; place-items: center; min-width: 27px; height: 26px; border-radius: 7px; }
+.ma-medal-gold { --ma-medal-row: #fff8e6; --ma-medal-surface: #f6e3a7; --ma-medal-ink: #684711; --ma-medal-edge: #bd8526; }
+.ma-medal-silver { --ma-medal-row: #f2f5f8; --ma-medal-surface: #dce4ec; --ma-medal-ink: #384a5e; --ma-medal-edge: #8798ad; }
+.ma-medal-bronze { --ma-medal-row: #fcf2eb; --ma-medal-surface: #efd5c2; --ma-medal-ink: #713d22; --ma-medal-edge: #b8754e; }
+.ma-medal-row { background: var(--ma-medal-row); }
+.ma-medal-row td:first-child { box-shadow: inset 3px 0 var(--ma-medal-edge); }
+.ma-medal-row .ma-rank-number, .ma-medal-banner { background: var(--ma-medal-surface); color: var(--ma-medal-ink); }
+.ma-medal-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 8px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ma-rank-you { display: inline-block; margin-inline-start: 6px; color: var(--ma-brand-hover); font-size: 11px; }
+.ma-leaderboard-empty { border-top: 1px solid var(--ma-border); padding: 16px 20px; color: var(--ma-muted); font-size: 13px; }
+.ma-tournament-panel { padding: 18px 20px; }
+.ma-tournament-panel p { margin-top: 6px; }
+.ma-tournament-panel form { display: grid; gap: 8px; }
+.ma-tournament-panel form p { margin-top: 0; }
+.ma-tournament-panel form label { margin-top: 4px; font-size: 13px; font-weight: 700; }
+.ma-tournament-panel .ma-tournament-nickname { color: var(--ma-brand-hover); font-weight: 700; overflow-wrap: anywhere; }
+.ma-personal-rank, .ma-point-scale { display: grid; margin: 12px 0; padding: 10px 0; border-block: 1px solid var(--ma-border); }
+.ma-personal-rank { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ma-point-scale { grid-template-columns: repeat(3, minmax(0, 1fr)); text-align: center; }
+.ma-personal-rank dt, .ma-point-scale dt { font-size: 12px; color: var(--ma-muted); font-weight: 650; }
+.ma-point-scale dd { margin-top: 3px; color: var(--ma-brand-hover); font-size: 22px; }
+.ma-tournament-admin form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; margin-top: 8px; }
+.ma-tournament-admin label { flex: 1 1 170px; display: grid; gap: 4px; font-size: 13px; font-weight: 650; }
+.ma-tournament-admin form > p { flex-basis: 100%; }
+.ma-tournament-page input, .ma-tournament-page select {
+  min-width: 0;
+  min-height: 42px;
+  padding: 6px 10px;
+  border: 1px solid #c4d2d2;
+  border-radius: var(--ma-radius-control);
+  background: var(--ma-surface);
+  color: var(--ma-ink);
+  font-size: 14px;
+}
+.ma-reward-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 7px 12px;
+  border: 1px solid #c4d2d2;
+  border-radius: var(--ma-radius-control);
+  background: var(--ma-surface);
+  color: var(--ma-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ma-reward-button:hover, .ma-reward-button[aria-pressed="true"] { background: var(--ma-brand-soft); border-color: var(--ma-brand); color: var(--ma-brand-hover); }
+.ma-reward-button:disabled { opacity: .65; cursor: wait; }
+.ma-reward-primary { background: var(--ma-brand); border-color: var(--ma-brand); color: white; }
+.ma-reward-primary:hover { background: var(--ma-brand-hover); color: white; }
+.ma-reward-button:focus-visible, .ma-goal-heading button:focus-visible, .ma-tournament-page input:focus-visible, .ma-tournament-page select:focus-visible {
+  outline: 2px solid var(--ma-brand); outline-offset: 3px;
+}
+.ma-tournament-event select:focus-visible { outline-color: white; }
+.ma-tournament-panel .ma-reward-error, .ma-goal-options .ma-reward-error, .ma-reward-error { color: var(--ma-review-ink); font-size: 13px; }
+
+@media (max-width: 760px) {
+  .ma-study-goal, .ma-tournament-grid { grid-template-columns: minmax(0, 1fr); }
+  .ma-goal-main { padding: 6px 12px 10px; }
+  .ma-goal-heading { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
+  .ma-goal-heading button { grid-column: 2; grid-row: 1; }
+  .ma-goal-count { grid-column: 1 / -1; justify-content: space-between; }
+  .ma-goal-options > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ma-goal-options button { padding-inline: 4px; font-size: 12px; }
+  .ma-goal-streaks { border-inline-start: 0; border-top: 1px solid var(--ma-border); border-radius: 0 0 var(--ma-radius-card) var(--ma-radius-card); padding: 5px 0; }
+  .ma-goal-streaks > div { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 2px 8px; }
+  .ma-goal-streaks dd { margin-top: 0; font-size: 15px; }
+  .ma-tournament-grid { grid-template-areas: "board" "entry" "rules"; grid-template-rows: auto; }
+  .ma-leaderboard th, .ma-leaderboard td { padding: 8px 12px; }
+}

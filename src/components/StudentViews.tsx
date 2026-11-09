@@ -10,6 +10,8 @@ import { ExamCompletionGate } from '../lib/exam-completion.ts';
 import { QuestionReportButton } from './QuestionReportButton.tsx';
 import { BookmarkButton } from './BookmarkButton.tsx';
 import { PageHeading } from './PageHeading.tsx';
+import { DailyStudyGoal } from './DailyStudyGoal.tsx';
+import type { DailyGoal } from '../lib/study-rewards.ts';
 import React, { useState, useEffect } from 'react';
 import {
   BookOpen,
@@ -56,6 +58,7 @@ export const DashboardView: React.FC<{
   onOpenSession: (sessionId: number) => void;
   onNavigateTab: (tab: string) => void;
   onOpenSubject?: (subjectId: number) => void;
+  onDailyGoalChange?: (goal: DailyGoal) => void;
 }> = ({
   dashboardData,
   loading,
@@ -63,6 +66,7 @@ export const DashboardView: React.FC<{
   onOpenSession,
   onNavigateTab,
   onOpenSubject,
+  onDailyGoalChange,
 }) => {
   if (loading || !dashboardData) {
     return (
@@ -88,8 +92,7 @@ export const DashboardView: React.FC<{
   return (
     <div className="space-y-8">
       <div className="space-y-4">
-        <PageHeading eyebrow="Your workspace" title="A little progress, every day."
-          description="Pick up where you left off, explore a lecture, or revisit a question." />
+        <PageHeading eyebrow="Your workspace" title="A little progress, every day." />
         <div className="ma-home-actions" role="group" aria-label="Study shortcuts">
           <div className="ma-home-study-actions">
             <button type="button" className="ma-home-primary" onClick={() => onNavigateTab('lectures')}>
@@ -108,6 +111,10 @@ export const DashboardView: React.FC<{
           </button>
         </div>
       </div>
+
+      {dashboardData.dailyGoal && onDailyGoalChange && (
+        <DailyStudyGoal goal={dashboardData.dailyGoal} onChange={onDailyGoalChange} />
+      )}
 
       {/* Welcome / Empty State message when no questions have been attempted */}
       {summary.totalQuestionsAnswered === 0 && (
@@ -935,7 +942,7 @@ export const MockExamsView: React.FC<{
     } else {
       setSelectedSubjectIds([]);
     }
-  }, [selectedModuleId]);
+  }, [selectedModuleId, catalog]);
 
   // 3. Lecture Selection ("make an option for all the lectures in the subject")
   const relevantLectures = allLectures.filter((l: any) =>
@@ -947,7 +954,7 @@ export const MockExamsView: React.FC<{
   // Automatically default all lectures selected when subjects change
   useEffect(() => {
     setSelectedLectureIds(relevantLectures.map((l: any) => l.id));
-  }, [selectedSubjectIds.join(',')]);
+  }, [selectedSubjectIds.join(','), catalog]);
 
   // 4. Exam Parameters
   const [questionCount, setQuestionCount] = useState<number>(30);
@@ -1058,9 +1065,11 @@ export const MockExamsView: React.FC<{
   };
 
   return (
-    <div className="space-y-6">
-      <PageHeading eyebrow="Prepare with purpose" title="Mock exams"
-        description="Choose your content and timing. Review your answers and explanations after submitting." />
+    <section id="mock-exams" aria-labelledby="mock-exams-heading" className="space-y-6 scroll-mt-24 border-t border-slate-200 pt-6">
+      <header>
+        <h2 id="mock-exams-heading" className="text-2xl font-bold">Mock exams</h2>
+        <p className="mt-2 text-sm text-slate-600">Choose your content and timing. Review your answers after submitting.</p>
+      </header>
       {expiryError && activeExam && <div role="alert" className="ma-dashboard-panel text-sm text-red-700">
         <p>{expiryError}</p><button type="button" onClick={() => finishExpiredExam(activeExam.id, true)} className="ma-text-button mt-3">Retry finishing exam</button>
       </div>}
@@ -1487,7 +1496,7 @@ export const MockExamsView: React.FC<{
           </button>
         </div>
       </form>
-    </div>
+    </section>
   );
 };
 
@@ -1535,11 +1544,9 @@ export const BookmarksView: React.FC<{
 
   return (
     <div className="space-y-6">
-      <PageHeading eyebrow="Your revision collection" title="Bookmarks & review"
-        description="Keep useful questions close. Bookmarks save as soon as you select Save.">
-
-        {/* Mode Switcher */}
-        <div className="ma-segmented-control">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-bold">Bookmarks &amp; review</h2>
+        <div className="ma-segmented-control" role="group" aria-label="Bookmark views">
           <button
             type="button"
             onClick={() => { setSubTab('bookmarks'); onLoadSaved?.(); }}
@@ -1565,7 +1572,7 @@ export const BookmarksView: React.FC<{
             Answered ({bookmarksData?.answeredCount ?? answered.length})
           </button>
         </div>
-      </PageHeading>
+      </header>
 
       {/* Filter Bar */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
@@ -1756,7 +1763,9 @@ export const BookmarksView: React.FC<{
 export const ProgressHistoryView: React.FC<{
   dashboardData: any;
   onOpenSession: (sessionId: number) => void;
-}> = ({ dashboardData, onOpenSession }) => {
+  navigation?: React.ReactNode;
+  bookmarks?: React.ReactNode;
+}> = ({ dashboardData, onOpenSession, navigation, bookmarks }) => {
   const [filter, setFilter] = useState<'all' | 'in_progress' | 'completed'>('all');
   const history = dashboardData?.history || [];
   const visible = history.filter((s: any) => filter === 'all' || s.status === filter);
@@ -1766,14 +1775,15 @@ export const ProgressHistoryView: React.FC<{
     <header className="ma-library-hero">
       <div><span className="ma-eyebrow"><TrendingUp size={14}/> Your study, at a glance</span>
         <h1>Dashboard<span className="ma-title-dot">.</span></h1>
-        <p>Every lecture and practice session, organized in one place.</p></div>
+        <p>Review your study sessions and saved questions.</p></div>
       <div className="ma-library-totals">
         <div><strong>{history.length}</strong><span>Sessions</span></div>
         <div><strong>{activeCount}</strong><span>In progress</span></div>
         <div><strong>{completedCount}</strong><span>Completed</span></div>
       </div>
     </header>
-    <section className="space-y-4" aria-labelledby="session-cards-title">
+    {navigation}
+    {bookmarks ?? <section className="space-y-4" aria-labelledby="session-cards-title">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="session-cards-title" className="text-lg font-bold">Your sessions</h2>
         <div className="flex flex-wrap gap-2">{([{id:'all',label:'All sessions'},{id:'in_progress',label:'In progress'},{id:'completed',label:'Completed'}] as const).map((item)=><button key={item.id} type="button" aria-pressed={filter===item.id} onClick={()=>setFilter(item.id)} className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${filter===item.id?'border-sky-200 bg-sky-50 text-sky-800':'border-slate-200 bg-white text-slate-500'}`}>{item.label}</button>)}</div>
       </div>
@@ -1793,7 +1803,7 @@ export const ProgressHistoryView: React.FC<{
             </div>
           </article>;
         })}</div>}
-    </section>
+    </section>}
   </div>;
 };
 

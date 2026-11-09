@@ -1,4 +1,5 @@
 import type { ImportImageFile, QuestionImage } from './question-images.ts';
+import type { DailyGoal, DailyGoalTarget, TournamentBoard } from './study-rewards.ts';
 import { clearResetSessionStorage } from './session-progress.ts';
 import {
   signInWithPopup,
@@ -791,6 +792,19 @@ export const api = {
 
   // Bookmarks & Dashboard
   getDashboard: () => apiRequest<any>('/api/dashboard'),
+  getDailyGoal: () => apiRequest<DailyGoal>('/api/study-goal'),
+  setDailyGoal: (target: DailyGoalTarget) => apiRequest<DailyGoal>('/api/study-goal', {
+    method: 'PUT', body: JSON.stringify({ target }),
+  }),
+  getTournaments: (id?: number, signal?: AbortSignal) => apiRequest<TournamentBoard>(
+    id ? `/api/tournaments?id=${id}` : '/api/tournaments', { signal },
+  ),
+  joinTournament: (id: number, nickname: string) => apiRequest<TournamentBoard>(`/api/tournaments/${id}/join`, {
+    method: 'POST', body: JSON.stringify({ nickname }),
+  }),
+  createTournament: (event: { title: string; startsAt: string; endsAt: string }) => apiRequest<{ id: number }>('/api/admin/tournaments', {
+    method: 'POST', body: JSON.stringify(event),
+  }),
 
   getBookmarks: (savedOnly = false, review?: ReviewQuery) => {
     const query = new URLSearchParams({ view: savedOnly ? 'saved' : review ? 'answered' : 'all', page: String(review?.page || 1), pageSize: '25' });

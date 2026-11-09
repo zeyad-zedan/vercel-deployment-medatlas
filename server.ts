@@ -76,6 +76,8 @@ import {
   attachPdfToLectureAdmin,
 } from './src/db/repository.ts';
 import { pool, isDatabaseConfigured } from './src/db/index.ts';
+import { createTournament, getDailyGoal, getTournamentBoard, joinTournament, setDailyGoal, StudyRewardsError } from './src/db/study-rewards.ts';
+import { tournamentsEnabled } from './src/lib/study-rewards.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
 import {
@@ -849,6 +851,51 @@ app.get('/api/dashboard', requireAuth, async (req: AuthRequest, res) => {
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to load dashboard.', 500);
   }
+});
+
+function sendStudyRewardsError(res: Response, error: unknown) {
+  if (error instanceof StudyRewardsError) return res.status(error.status).json({ error: error.message });
+  console.error('Study rewards request failed:', error);
+  return res.status(500).json({ error: 'Could not update study rewards. Please try again.' });
+}
+
+app.get('/api/study-goal', requireAuth, async (req: AuthRequest, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  try { return res.json(await getDailyGoal(req.user!.uid)); }
+  catch (error) { return sendStudyRewardsError(res, error); }
+});
+
+app.put('/api/study-goal', requireAuth, async (req: AuthRequest, res) => {
+  try { return res.json(await setDailyGoal(req.user!.uid, req.body?.target)); }
+  catch (error) { return sendStudyRewardsError(res, error); }
+});
+
+if (!tournamentsEnabled) {
+  app.use(['/api/tournaments', '/api/admin/tournaments'], (_req, res) => {
+    res.status(404).json({ error: 'Not found.' });
+  });
+}
+
+app.get('/api/tournaments', requireAuth, async (req: AuthRequest, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  const rawId = req.query.id;
+  if (rawId !== undefined && (typeof rawId !== 'string' || !/^[1-9]\d{0,9}$/.test(rawId) || Number(rawId) > 2147483647)) {
+    return res.status(400).json({ error: 'Choose a valid tournament.' });
+  }
+  try { return res.json(await getTournamentBoard(req.user!.uid, rawId === undefined ? undefined : Number(rawId))); }
+  catch (error) { return sendStudyRewardsError(res, error); }
+});
+
+app.post('/api/tournaments/:id/join', requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ error: 'Choose a valid tournament.' });
+  try { return res.json(await joinTournament(req.user!.uid, id, req.body?.nickname)); }
+  catch (error) { return sendStudyRewardsError(res, error); }
+});
+
+app.post('/api/admin/tournaments', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try { return res.status(201).json(await createTournament(req.body)); }
+  catch (error) { return sendStudyRewardsError(res, error); }
 });
 
 app.get('/api/bookmarks', requireAuth, async (req: AuthRequest, res) => {

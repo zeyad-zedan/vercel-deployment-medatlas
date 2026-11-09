@@ -3,6 +3,7 @@ import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,randomBytes} from 'node:crypto';
 import {quizScore} from './quiz-scoring.ts';
+import {tournamentsEnabled} from './study-rewards.ts';
 process.env.NODE_ENV='test';process.env.STUDENT_API_KEY_ENCRYPTION_KEY=randomBytes(32).toString('hex');
 const enabled=/^postgres(?:ql)?:\/\/[^/]*@(?:localhost|127\.0\.0\.1):/.test(process.env.DATABASE_URL||'');
 const {pool}=await import('../db/index.ts');after(()=>pool.end());
@@ -19,9 +20,10 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
  const tokens=Object.fromEntries([uid,other].map(id=>[id,createServerSessionToken({uid:id,email:id+'@example.invalid',emailVerified:true})]));
  const request=async(path:string,body?:any,owner=uid)=>{const response=await fetch(origin+path,{method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${tokens[owner]}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:await response.json()};};
  const ok=async(path:string,body?:any)=>{const result=await request(path,body);assert.ok(result.status<300,`${path} ${result.status}: ${JSON.stringify(result.data)}`);return result.data;};
- const realFetch=globalThis.fetch;let googleCalls=0;
- globalThis.fetch=(async(input:any,init:any)=>{if(String(input).startsWith('https://generativelanguage.googleapis.com/')){googleCalls++;const content=JSON.parse(JSON.parse(init.body).contents[0].parts[0].text);assert.deepEqual(Object.keys(content).sort(),['model_answer','question','rubric','student_answer']);assert.ok(!JSON.stringify(content).includes('telegram'));return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({feedback:'Partial credit.',points:content.rubric.map((p:any,i:number)=>({id:p.id,awarded:i?0:2,feedback:'Checked against the model.'}))})}]}}]});}return realFetch(input,init);}) as typeof fetch;
+ const realFetch=globalThis.fetch;let googleCalls=0;let fullCredit=false;
+ globalThis.fetch=(async(input:any,init:any)=>{if(String(input).startsWith('https://generativelanguage.googleapis.com/')){googleCalls++;const content=JSON.parse(JSON.parse(init.body).contents[0].parts[0].text);assert.deepEqual(Object.keys(content).sort(),['model_answer','question','rubric','student_answer']);assert.ok(!JSON.stringify(content).includes('telegram'));return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({feedback:fullCredit?'Full credit.':'Partial credit.',points:content.rubric.map((p:any,i:number)=>({id:p.id,awarded:i?Number(fullCredit):2,feedback:'Checked against the model.'}))})}]}}]});}return realFetch(input,init);}) as typeof fetch;
  const model='PRIVATE MODEL '+marker;
+ let tournamentId: number | undefined;
  try{
   const source=JSON.stringify({questions:[...Array.from({length:6},(_,i)=>({question_type:'mcq',question_text:`MCQ ${marker} ${i}`,options:{A:'One',B:'Two',C:'Three',D:'Four'},correct_answer:'A',explanation:'Explanation',tags:['Foundation'],status:'published'})),{question_type:'short_answer',question_text:'Describe the bone functions '+marker,model_answer:model,rubric:[{description:'Support',marks:2},{description:'Protection',marks:1}],tags:['Anatomy'],status:'published'}]});
   const imported=await repo.executeCsvImportAdmin({uid:admin,email:admin+'@example.invalid'},marker+'.json',source,lecture.id,undefined,{format:'json',imageFiles:[]});assert.equal(imported.batch.importedCount,7);
@@ -44,6 +46,34 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
   const examDone=(await ok(`/api/sessions/${exam.id}/complete`,{answers:{},batchSize:6})).session;assert.equal(examDone.quizScore.pendingGradingCount,1);const examGrade=await ok(`/api/sessions/${exam.id}/short-answer/grade`,{questionId:q.id,consent:true});assert.equal(examGrade.attempt.result.score,2);assert.equal(examGrade.session.quizScore.pendingGradingCount,0);assert.equal(googleCalls,2);
   const original=(await ok(`/api/sessions/${start.id}?batchSize=6&offset=6`)).session.questions[0];assert.equal(original.shortAnswerAttempt.answer,'Support and protection','A different quiz must not replace historical answers.');
   const bookmarks=await ok('/api/bookmarks?view=saved');assert.ok(bookmarks.bookmarks.some((b:any)=>b.questionId===q.id&&b.shortAnswerId));
+  const { rows: [tournament] } = await pool.query<{ id: number }>(`
+    INSERT INTO gamification.tournaments (title,starts_at,ends_at)
+    VALUES ('Short answer tournament test',now()-interval '1 minute',now()+interval '1 minute') RETURNING id
+  `);
+  tournamentId = tournament.id;
+  const joinRoute = `/api/tournaments/${tournamentId}/join`;
+  const boardRoute = `/api/tournaments?id=${tournamentId}`;
+  const rewards = await import('../db/study-rewards.ts');
+  if (tournamentsEnabled) {
+    await ok(joinRoute, { nickname: 'Written Atlas' });
+  } else {
+    assert.equal((await request(joinRoute, { nickname: 'Written Atlas' })).status, 404);
+    assert.equal((await request(boardRoute)).status, 404);
+    await rewards.joinTournament(uid, tournamentId, 'Written Atlas');
+  }
+  const readBoard = () => tournamentsEnabled ? ok(boardRoute) : rewards.getTournamentBoard(uid, tournamentId);
+  const written = (await ok('/api/sessions',{mode:'custom',lectureIds:[lecture.id]})).session;
+  const writtenRoute = `/api/sessions/${written.id}/short-answer`;
+  await ok(writtenRoute, {questionId:q.id, answer:'A new partial response'});
+  await ok(`${writtenRoute}/grade`, {questionId:q.id, consent:true});
+  assert.equal((await readBoard()).ownRank.points, 0);
+  fullCredit = true;
+  await ok(writtenRoute, {questionId:q.id, answer:'A new full response'});
+  const beforeGrade = await ok('/api/study-goal');
+  await ok(`${writtenRoute}/grade`, {questionId:q.id, consent:true});
+  await ok(`${writtenRoute}/grade`, {questionId:q.id, consent:true});
+  assert.equal((await readBoard()).ownRank.points, tournamentsEnabled ? 3 : 0);
+  assert.equal((await ok('/api/study-goal')).answered, beforeGrade.answered);
   // Standalone answers saved before this integration stay reachable through their new quiz entry.
   const legacyLecture=(await pool.query("INSERT INTO lectures(subject_id,title,description) VALUES($1,'Legacy written answers','Fixture') RETURNING id",[subject.id])).rows[0];
   const service=await import('./short-answer-service.ts'),{shortAnswerTemplate}=await import('./short-answer-model.ts');const legacyJson=JSON.parse(shortAnswerTemplate);legacyJson.questions[0].status='published';await service.importShortAnswers(legacyLecture.id,JSON.stringify(legacyJson),true,true);
@@ -54,6 +84,7 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
   const {createEncryptedBackup,testRestoreBackup}=await import('./backup-service.ts');assert.equal((await testRestoreBackup((await createEncryptedBackup()).envelope)).status,'verified');
  }finally{
   globalThis.fetch=realFetch;await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  if (tournamentId) await pool.query('DELETE FROM gamification.tournaments WHERE id=$1', [tournamentId]);
   await pool.query('DELETE FROM exam_sessions WHERE user_uid=ANY($1::text[])',[[uid,other]]);await pool.query('DELETE FROM import_batches WHERE admin_uid=$1',[admin]);await pool.query('DELETE FROM admin_audit_logs WHERE admin_uid=$1',[admin]);await pool.query('DELETE FROM subjects WHERE id=$1',[subject.id]);await pool.query('DELETE FROM users WHERE uid=ANY($1::text[])',[[uid,other,admin]]);repo.invalidateCatalogCache();
  }
 });
