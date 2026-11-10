@@ -768,8 +768,14 @@ app.get('/api/sessions/:id', requireAuth, async (req: AuthRequest, res) => {
 });
 
 app.post(['/api/sessions/:id/short-answer','/api/sessions/:id/short-answer/grade'],requireAuth,async(req:AuthRequest,res)=>{
- try{const {saveQuizShortAnswer,gradeQuizShortAnswer}=await import('./src/lib/mixed-quiz-short-answers.ts');
- if(req.path.endsWith('/grade')){if(req.body?.consent!==true)return res.status(400).json({error:'Confirm sending your answer to Google for grading.'});return res.json(await gradeQuizShortAnswer(req.user!.uid,req.params.id,req.body?.questionId));}
+ try{const {saveQuizShortAnswer,gradeQuizShortAnswer,saveAndGradeQuizShortAnswer}=await import('./src/lib/mixed-quiz-short-answers.ts');
+ if(req.path.endsWith('/grade')){
+  if(req.body?.consent!==true)return res.status(400).json({error:'Confirm sending your answer to Google for grading.'});
+  const {questionId,answer}=req.body;
+  return res.json(await (answer===undefined
+   ?gradeQuizShortAnswer(req.user!.uid,req.params.id,questionId)
+   :saveAndGradeQuizShortAnswer(req.user!.uid,req.params.id,questionId,answer)));
+ }
  return res.json(await saveQuizShortAnswer(req.user!.uid,req.params.id,req.body?.questionId,req.body?.answer));
  }catch(error:any){return res.status(error.status||500).json({error:error.status?error.message:'Could not save or grade this answer. Your previous progress is safe.'});}
 });

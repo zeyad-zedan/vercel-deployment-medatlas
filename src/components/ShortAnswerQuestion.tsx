@@ -15,12 +15,26 @@ export function ShortAnswerQuestion({question,sessionId,exam=false,completed=fal
  useEffect(()=>{setAttempt(question.shortAnswerAttempt||null);},[question.shortAnswerAttempt]);
  const same=attempt?.answer===answer.trim().normalize('NFC'),grade=same&&(!exam||completed)?attempt?.result:null;
  const button='px-4 py-2 rounded-lg border border-slate-300 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
+ const acknowledgeSave=()=>{textSaves.acknowledge(question.id,answer);try{localStorage.removeItem(key);}catch{}};
+ const applyGrade=(result:any)=>{
+  setAttempt(result.attempt);onSaved(result);
+  if(result.attempt.errorCode==='KEY_MISSING'){setShowGuide(true);setNotice('');return;}
+  if(result.attempt.status==='graded')setScrollToken(n=>n+1);
+  setNotice(result.attempt.status==='graded'?'Grade saved.':result.gradingError||result.attempt.error||'Your answer is saved. Grading has not finished; retry shortly.');
+ };
  const submit=async(grading:boolean)=>{
   if(busy||!answer.trim())return;setBusy(true);setError('');setNotice('');
   try{
-   let saved:any;
-   if(!completed){saved=await api.saveQuizShortAnswer(sessionId,question.id,answer);setAttempt(saved.attempt);onSaved(saved);textSaves.acknowledge(question.id,answer);try{localStorage.removeItem(key);}catch{}setNotice('Answer saved in this quiz.');}
-   if(grading){const result=await api.gradeQuizShortAnswer(sessionId,question.id);setAttempt(result.attempt);onSaved(result);if(result.attempt.errorCode==='KEY_MISSING'){setShowGuide(true);setNotice('');return;}if(result.attempt.status==='graded')setScrollToken(n=>n+1);setNotice(result.attempt.status==='graded'?'Grade saved.':result.attempt.error||'Your answer is saved. Grading has not finished; retry shortly.');}
+   if(grading&&!completed&&!exam&&!same&&api.saveAndGradeQuizShortAnswer){
+    setNotice('Saving and grading your answer…');
+    const result=await api.saveAndGradeQuizShortAnswer(sessionId,question.id,answer);
+    acknowledgeSave();applyGrade(result);return;
+   }
+   if(!completed&&(!grading||!same)){
+    const saved=await api.saveQuizShortAnswer(sessionId,question.id,answer);
+    setAttempt(saved.attempt);onSaved(saved);acknowledgeSave();setNotice('Answer saved in this quiz.');
+   }
+   if(grading){setNotice('Grading your saved answer…');applyGrade(await api.gradeQuizShortAnswer(sessionId,question.id));}
   }catch(e:any){setError(e.message||'Could not save. Your typed answer remains on this device.');}finally{setBusy(false);}
  };
  return <section aria-label="Short-answer question" className="space-y-4">

@@ -5,6 +5,7 @@ import {api} from './api.ts';
 // away from public sessions, progress, question reports and bookmarks.
 export type SessionPlayerApi = Pick<typeof api,
   'submitQuestionAnswer' | 'getSessionQuestionBatch' | 'syncSessionProgress' |
-  'completeSession' | 'saveQuizShortAnswer' | 'gradeQuizShortAnswer'>;
+  'completeSession' | 'saveQuizShortAnswer' | 'gradeQuizShortAnswer'> &
+  Partial<Pick<typeof api,'saveAndGradeQuizShortAnswer'>>;
 export const SessionPlayerApiContext = createContext<SessionPlayerApi>(api);
 export const useSessionPlayerApi = () => useContext(SessionPlayerApiContext);

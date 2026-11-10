@@ -42,6 +42,7 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
   const review=(await ok(`/api/sessions/${start.id}?batchSize=6&offset=6`)).session.questions[0];assert.equal(review.shortAnswerAttempt.modelAnswer,model);assert.equal(review.shortAnswerAttempt.answer,'Support and protection');
   const exam=(await ok('/api/sessions',{mode:'exam',lectureIds:[lecture.id],requestedCount:7,timeLimitMinutes:10,shuffleQuestions:false,batchSize:6})).session;
   const draft=await ok(`/api/sessions/${exam.id}/short-answer`,{questionId:q.id,answer:'A different exam answer'});assert.equal(draft.attempt.result,null);assert.equal(draft.attempt.modelAnswer,undefined);
+  assert.equal((await request(`/api/sessions/${exam.id}/short-answer/grade`,{questionId:q.id,answer:'Attempt to grade early',consent:true})).status,409);
   assert.equal((await request(`/api/sessions/${exam.id}/short-answer/grade`,{questionId:q.id,consent:true})).status,409);assert.equal((await request(`/api/short-answers/answers/${draft.attempt.id}/grade`,{consent:true})).status,409);assert.equal(googleCalls,1);
   const examDone=(await ok(`/api/sessions/${exam.id}/complete`,{answers:{},batchSize:6})).session;assert.equal(examDone.quizScore.pendingGradingCount,1);const examGrade=await ok(`/api/sessions/${exam.id}/short-answer/grade`,{questionId:q.id,consent:true});assert.equal(examGrade.attempt.result.score,2);assert.equal(examGrade.session.quizScore.pendingGradingCount,0);assert.equal(googleCalls,2);
   const original=(await ok(`/api/sessions/${start.id}?batchSize=6&offset=6`)).session.questions[0];assert.equal(original.shortAnswerAttempt.answer,'Support and protection','A different quiz must not replace historical answers.');
@@ -64,8 +65,11 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
   const readBoard = () => tournamentsEnabled ? ok(boardRoute) : rewards.getTournamentBoard(uid, tournamentId);
   const written = (await ok('/api/sessions',{mode:'custom',lectureIds:[lecture.id]})).session;
   const writtenRoute = `/api/sessions/${written.id}/short-answer`;
-  await ok(writtenRoute, {questionId:q.id, answer:'A new partial response'});
-  await ok(`${writtenRoute}/grade`, {questionId:q.id, consent:true});
+  assert.equal((await request(`${writtenRoute}/grade`,{questionId:q.id,answer:'A new partial response'})).status,400);
+  const combined=await ok(`${writtenRoute}/grade`, {questionId:q.id, answer:'A new partial response', consent:true});
+  assert.equal(combined.attempt.answer,'A new partial response');
+  assert.equal(combined.attempt.result.score,2);
+  assert.equal(combined.session.quizScore.pendingGradingCount,0);
   assert.equal((await readBoard()).ownRank.points, 0);
   fullCredit = true;
   await ok(writtenRoute, {questionId:q.id, answer:'A new full response'});
