@@ -97,6 +97,50 @@ test('successful grade survives a failed lease release; no blind provider retry 
  assert.equal(calls,2);
 });
 
+test('an upstream outage keeps its diagnostic code after passing through the shared pool',async()=>{
+ const {store}=fixture();
+ let calls=0;
+ globalThis.fetch=(async()=>{
+  calls++;
+  return Response.json({error:{message:'Provider unavailable'}},{status:503});
+ }) as typeof fetch;
+ await assert.rejects(createPoolGrader(store)(question,'Support',readGradingPool(config(1))),
+  (error:any)=>error.code==='GEMINI_UNAVAILABLE'&&error.delaySeconds===15);
+ assert.equal(calls,1);
+});
+
+test('a temporary Gemini outage retries once using another eligible key and returns the grade',async()=>{
+ const {store,state}=fixture(),entries=readGradingPool(config(2)),seen:string[]=[];
+ globalThis.fetch=(async(_url,init)=>{
+  seen.push(new Headers(init?.headers).get('x-goog-api-key')!);
+  if(seen.length===1)return new Response(null,{status:503});
+  return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({
+   feedback:'Correct',points:question.rubric.map(point=>({id:point.id,awarded:point.marks,feedback:'Correct'})),
+  })}]}}]});
+ }) as typeof fetch;
+ const result=await createPoolGrader(store)(question,'Support',entries);
+ assert.equal(result.grade.score,result.grade.maxScore);
+ assert.equal(seen.length,2);
+ assert.notEqual(seen[0],seen[1]);
+ assert.ok(Object.values(state.keys).every(key=>key.until===0&&!key.lease));
+});
+
+test('a second outage stops after two calls; a longer Retry-After defers grading',async()=>{
+ const entries=readGradingPool(config(3));
+ let calls=0,retryAfter='0';
+ globalThis.fetch=(async()=>{
+  calls++;
+  return new Response(null,{status:503,headers:{'Retry-After':retryAfter}});
+ }) as typeof fetch;
+ await assert.rejects(createPoolGrader(fixture().store)(question,'Support',entries),
+  (error:any)=>error.code==='GEMINI_UNAVAILABLE'&&error.delaySeconds===15);
+ assert.equal(calls,2);
+ retryAfter='30';
+ await assert.rejects(createPoolGrader(fixture().store)(question,'Support',entries),
+  (error:any)=>error.code==='GEMINI_UNAVAILABLE'&&error.delaySeconds===30);
+ assert.equal(calls,3);
+});
+
 test('replacing a key cannot bypass a running project lease',async()=>{
  const {store,advance}=fixture();
  const old=readGradingPool(JSON.stringify([{key:fakeKey(1),project:'same-project',rpm:10000,concurrency:1}]));

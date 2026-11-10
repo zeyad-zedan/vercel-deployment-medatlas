@@ -47,7 +47,8 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
    assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'minimal');
    if(mode==='quota')return Response.json({error:{message:fakeKey+' must never leak'}},{status:429});
    if(mode==='invalid')return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"points":[],"feedback":"bad"}'}]}}]});
-   if(mode==='timeout')throw new Error(fakeKey+' network issue');
+   if(mode==='timeout')throw new DOMException(fakeKey+' timed out','TimeoutError');
+   if(mode==='network')throw new Error(fakeKey+' network issue');
    started?.();if(mode==='wait')await new Promise<void>(r=>{release=r;});
    return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({score:999,feedback:'Two correct functions.',points:content.rubric.map((p:any,i:number)=>({id:p.id,awarded:i<2?1:0,feedback:i<2?'Correct.':'Movement is missing.'}))})}]}}]});
   }
@@ -77,7 +78,7 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
   await api(`/answers/${id}/grade`,{consent:true});await api('/answers/'+id);assert.equal(providerCalls,1,'reopening/repeating a grade must consume no Gemini quota');
   assert.equal((await api('/history')).data.attempts.length,1);assert.equal((await api('/history',undefined,other)).data.attempts.length,0);
   // Reuse a saved attempt fixture to exercise retry failures without new provider prompts.
-  for(const [failure,expected] of [['quota','QUOTA'],['invalid','INVALID_RESPONSE'],['timeout','TIMEOUT']]){
+  for(const [failure,expected] of [['quota','QUOTA'],['invalid','INVALID_RESPONSE'],['timeout','TIMEOUT'],['network','GEMINI_UNAVAILABLE']]){
    mode=failure;await pool.query("UPDATE public.short_answer_attempts SET status='saved',result=null,retry_at=null,grade_started_at=null WHERE id=$1",[id]);
    const failed=await api(`/answers/${id}/grade`,{consent:true});assert.equal(failed.data.attempt.status,'failed');assert.equal(failed.data.attempt.answer,'Support and protection');assert.ok(!JSON.stringify(failed.data).includes(fakeKey));
    const [row]=(await pool.query('SELECT error_code FROM public.short_answer_attempts WHERE id=$1',[id])).rows;assert.equal(row.error_code,expected);

@@ -25,7 +25,7 @@ Keys remain in Vercel's server environment and are sent to Google in the `x-goog
 ## Behavior
 
 - Least-recently-used selection distributes work across eligible keys. Separate server instances coordinate through a small PostgreSQL row; it contains hashes, timestamps and leases only.
-- One provider call per grading attempt; no automatic retry with another key after a quota or uncertain network failure. The next explicit grading request can select an eligible project.
+- A temporary Google server error can trigger one automatic retry with an eligible key. Both calls share a 22-second grading budget. A longer `Retry-After` defers grading and keeps the answer saved. Quota errors, timeouts and uncertain network failures do not trigger another provider call.
 - A Google 429 pauses **every configured key in that project**, honoring `Retry-After` (at least 60 seconds, up to 24 hours). A rejected key pauses for ten minutes. Busy keys have 30-second leases so crashed work recovers.
 - If all entries are unavailable, the answer stays saved with a retry message. Student keys are not silently used as paid/shared fallbacks. Existing grades, marking rubrics and the per-student request controls remain in place.
 - Grading is text-only; no question images, student names or emails are sent to Google. AI feedback still requires instructor review when uncertain.

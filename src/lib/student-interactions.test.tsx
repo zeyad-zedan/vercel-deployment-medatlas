@@ -223,6 +223,28 @@ test('quota failures do not open key setup, and closing setup preserves the save
 });
 
 
+test('a delayed grade preserves a newer draft and waits out the retry cooldown',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');
+ const {quizTextDraftKey}=await import('./quiz-text-drafts.tsx');
+ const key=quizTextDraftKey(99124,703),answer='First response';
+ let finish!:(result:any)=>void;
+ api.saveAndGradeQuizShortAnswer=()=>new Promise(resolve=>{finish=resolve;});
+ const root=createRoot(host()),question={id:703,maxMarks:1,questionText:'Question',images:[]};
+ const failure={id:703,answer,status:'failed',maxScore:1,result:null,errorCode:'GEMINI_UNAVAILABLE',error:'Your answer is saved.',retryAt:new Date(Date.now()+15000).toISOString()};
+ try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={question} sessionId={99124} onSaved={()=>{}}/>));
+  await change('textarea',answer);
+  await click('Save & grade');
+  dom.window.localStorage.setItem(key,'Newer response in another tab');
+  await act(async()=>finish({attempt:failure,session:{}}));
+  assert.equal(dom.window.localStorage.getItem(key),'Newer response in another tab');
+  const retry=[...host().querySelectorAll('button')].find(button=>button.textContent?.startsWith('Retry in '));
+  assert.ok(retry?.disabled,'A saved answer cannot be retried before the server deadline.');
+  await act(async()=>root.render(<ShortAnswerQuestion question={{...question,shortAnswerAttempt:{...failure,retryAt:new Date(Date.now()-1).toISOString()}}} sessionId={99124} onSaved={()=>{}}/>));
+  assert.equal(findButton('Retry grading').disabled,false);
+ }finally{await act(async()=>root.unmount());}
+});
+
 test('grading feedback distinguishes marking outcomes and scrolls only for a requested new result',async()=>{
  const {GradeFeedback}=await import('../components/GradeFeedback.tsx');let scrolls=0;
  const previousScroll=dom.window.HTMLElement.prototype.scrollIntoView;

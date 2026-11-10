@@ -1,5 +1,5 @@
 import {pool} from '../db/index.ts';
-import {saveShortAnswer,gradeShortAnswer,ShortAnswerError,publicShortAnswerAttempt} from './short-answer-service.ts';
+import {saveShortAnswer,gradeShortAnswer,getShortAnswerAttempt,ShortAnswerError,publicShortAnswerAttempt} from './short-answer-service.ts';
 import {QUIZ_TOTALS_SQL,sqlQuizSummary} from './quiz-scoring.ts';
 import {tournamentsEnabled} from './study-rewards.ts';
 const validId=(value:unknown)=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<1)throw new ShortAnswerError('Choose a valid quiz and question.');return n;};
@@ -67,8 +67,21 @@ export async function saveQuizShortAnswer(uid:string,sessionValue:unknown,questi
 export async function gradeQuizShortAnswer(uid:string,sessionValue:unknown,questionValue:unknown,expectedAttemptId?:number){
  const sessionId=validId(sessionValue),questionId=validId(questionValue);let attemptId:number;
  const client=await pool.connect();try{await client.query('BEGIN');const row=await lockQuestion(client,uid,sessionId,questionId);if(row.mode==='exam'&&row.status!=='completed')throw new ShortAnswerError('Submit the exam before requesting grading.',409);attemptId=row.item.shortAnswerAttemptId;if(!attemptId)throw new ShortAnswerError('Save your answer first.');if(expectedAttemptId!==undefined&&attemptId!==expectedAttemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
- const attempt=await gradeShortAnswer(uid,attemptId);
- const update=await pool.connect();try{await update.query('BEGIN');const row=await lockQuestion(update,uid,sessionId,questionId);if(row.item.shortAnswerAttemptId!==attemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);const item={...row.item,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===row.item.maxMarks?'A':'B'):'C',selectedDisplayed:null};const session=await writeState(update,uid,row,item,'grade');await update.query('COMMIT');return {attempt,session};}catch(error){await update.query('ROLLBACK');throw error;}finally{update.release();}
+ const result=await gradeShortAnswer(uid,attemptId);
+ const update=await pool.connect();
+ try{
+  await update.query('BEGIN');
+  const row=await lockQuestion(update,uid,sessionId,questionId);
+  if(row.item.shortAnswerAttemptId!==attemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);
+  // A duplicate request can observe an in-flight grade before the first request commits it to the quiz.
+  const attempt=result.status!=='graded'&&row.item.shortAnswerStatus==='graded'
+   ?await getShortAnswerAttempt(uid,attemptId,update)
+   :result;
+  const item={...row.item,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===row.item.maxMarks?'A':'B'):'C',selectedDisplayed:null};
+  const session=await writeState(update,uid,row,item,'grade');
+  await update.query('COMMIT');
+  return {attempt,session};
+ }catch(error){await update.query('ROLLBACK');throw error;}finally{update.release();}
 }
 
 export async function saveAndGradeQuizShortAnswer(uid:string,sessionId:unknown,questionId:unknown,answer:unknown){

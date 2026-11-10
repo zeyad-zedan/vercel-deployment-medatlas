@@ -1,6 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {validStudentGeminiKey} from './gemini-key-input.ts';
-import {gradeWithGemini,GradingError,shortAnswerModel} from './gemini-short-answer.ts';
+import {gradeWithGemini,gradeWithTemporaryRetry,GradingError,shortAnswerModel} from './gemini-short-answer.ts';
 import type {ShortAnswerDefinition} from './short-answer-model.ts';
 
 type Entry={key:string;id:string;project:string;rpm:number;concurrency:number};
@@ -32,7 +32,8 @@ export function readGradingPool(raw=process.env.GEMINI_GRADING_POOL):Entry[]{
 
 // One small private row per model coordinates all Vercel instances. No credential is stored here.
 export const postgresPoolStore:PoolStore=async(model,change)=>{
- const {pool}=await import('../db/index.ts'),client=await pool.connect();
+ const {pool}=await import('../db/index.ts');
+ const client=await pool.connect().catch(()=>{throw new GradingError('POOL_STORAGE',15);});
  try{
   await client.query('BEGIN');
   await client.query("SET LOCAL lock_timeout='3s'");
@@ -43,11 +44,11 @@ export const postgresPoolStore:PoolStore=async(model,change)=>{
   await client.query('UPDATE public.gemini_grading_pool_state SET state=$2::jsonb WHERE model=$1',[model,JSON.stringify(row.state)]);
   await client.query('COMMIT');
   return result;
- }catch{await client.query('ROLLBACK').catch(()=>{});throw new GradingError('UNAVAILABLE',15);}finally{client.release();}
+ }catch{await client.query('ROLLBACK').catch(()=>{});throw new GradingError('POOL_STORAGE',15);}finally{client.release();}
 };
 
 export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWithGemini){
- return async(question:ShortAnswerDefinition,answer:string,entries=readGradingPool())=>{
+ const gradeOnce=async(question:ShortAnswerDefinition,answer:string,entries:Entry[],deadline:number)=>{
   if(!entries.length)throw configurationError();
   const model=shortAnswerModel(),lease=randomUUID();
   const claim=await store(model,(state,now)=>{
@@ -67,10 +68,11 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
   });
   if(!claim)throw new GradingError('POOL_BUSY',15);
   let failure:GradingError|undefined;
-  try{return await grade(claim.key,question,answer);}
+  try{return await grade(claim.key,question,answer,deadline);}
   catch(error){
    failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
    const code=failure.code==='QUOTA'?'POOL_QUOTA':failure.code==='KEY_OR_ACCESS'?'POOL_ACCESS':failure.code==='MODEL_UNAVAILABLE'?'POOL_MODEL_UNAVAILABLE':failure.code;
+   if(code===failure.code&&failure.delaySeconds)throw failure;
    throw new GradingError(code,failure.delaySeconds||15);
   }finally{
    // Preserve a valid grade even if releasing the lease fails. The 30s lease expires on its own.
@@ -88,6 +90,8 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
    }).catch(()=>{});
   }
  };
+ return (question:ShortAnswerDefinition,answer:string,entries=readGradingPool())=>
+  gradeWithTemporaryRetry(deadline=>gradeOnce(question,answer,entries,deadline));
 }
 export const gradeWithPool=createPoolGrader();
 
@@ -97,5 +101,5 @@ export async function gradeWithConfiguredCredentials(uid:string,question:ShortAn
  const {readStudentGeminiKeyForGrading}=await import('./student-gemini-keys.ts');
  const key=await readStudentGeminiKeyForGrading(uid);
  if(!key)throw new GradingError('KEY_MISSING');
- return gradeWithGemini(key,question,answer);
+ return gradeWithTemporaryRetry(deadline=>gradeWithGemini(key,question,answer,deadline));
 }

@@ -3,19 +3,34 @@ import {useSessionPlayerApi} from '../lib/session-player-api.tsx';
 const GeminiSetupGuide=lazy(()=>import('./GeminiSetupGuide.tsx'));
 import {GradeFeedback} from './GradeFeedback.tsx';
 import {QuestionImages} from './QuestionImages.tsx';
-import {useQuizTextSaves} from '../lib/quiz-text-drafts.tsx';
+import {clearSavedQuizTextDraft,quizTextDraftKey,useQuizTextSaves} from '../lib/quiz-text-drafts.tsx';
 
 export function ShortAnswerQuestion({question,sessionId,exam=false,completed=false,disabled=false,onSaved}:{question:any;sessionId:number;exam?:boolean;completed?:boolean;disabled?:boolean;onSaved:(result:any)=>void}){
  const [scrollToken,setScrollToken]=useState(0);
  const api=useSessionPlayerApi();
  const textSaves=useQuizTextSaves();
- const key=`medatlas_quiz_short_${sessionId}_${question.id}`;
+ const key=quizTextDraftKey(sessionId,question.id);
  const [attempt,setAttempt]=useState(question.shortAnswerAttempt||null),[answer,setAnswer]=useState(()=>{try{return !completed?(localStorage.getItem(key)??question.shortAnswerAttempt?.answer??''):question.shortAnswerAttempt?.answer??'';}catch{return question.shortAnswerAttempt?.answer||'';}});
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[showGuide,setShowGuide]=useState(false);
+ const [now,setNow]=useState(Date.now);
  useEffect(()=>{setAttempt(question.shortAnswerAttempt||null);},[question.shortAnswerAttempt]);
  const same=attempt?.answer===answer.trim().normalize('NFC'),grade=same&&(!exam||completed)?attempt?.result:null;
+ const retryAt=same&&attempt?.retryAt?Date.parse(attempt.retryAt):0;
+ const retrySeconds=retryAt>now?Math.ceil((retryAt-now)/1000):0;
+ useEffect(()=>{
+  if(!retryAt)return;
+  const current=Date.now();
+  setNow(current);
+  if(retryAt<=current)return;
+  const timer=window.setInterval(()=>{
+   const current=Date.now();
+   setNow(current);
+   if(current>=retryAt)window.clearInterval(timer);
+  },1000);
+  return ()=>window.clearInterval(timer);
+ },[retryAt]);
  const button='px-4 py-2 rounded-lg border border-slate-300 text-sm disabled:opacity-50 disabled:cursor-not-allowed';
- const acknowledgeSave=()=>{textSaves.acknowledge(question.id,answer);try{localStorage.removeItem(key);}catch{}};
+ const acknowledgeSave=()=>{textSaves.acknowledge(question.id,answer);clearSavedQuizTextDraft(key,answer);};
  const applyGrade=(result:any)=>{
   setAttempt(result.attempt);onSaved(result);
   if(result.attempt.errorCode==='KEY_MISSING'){setShowGuide(true);setNotice('');return;}
@@ -23,7 +38,7 @@ export function ShortAnswerQuestion({question,sessionId,exam=false,completed=fal
   setNotice(result.attempt.status==='graded'?'Grade saved.':result.gradingError||result.attempt.error||'Your answer is saved. Grading has not finished; retry shortly.');
  };
  const submit=async(grading:boolean)=>{
-  if(busy||!answer.trim())return;setBusy(true);setError('');setNotice('');
+  if(busy||disabled||!answer.trim()||(grading&&retryAt>Date.now()))return;setBusy(true);setError('');setNotice('');
   try{
    if(grading&&!completed&&!exam&&!same&&api.saveAndGradeQuizShortAnswer){
     setNotice('Saving and grading your answer…');
@@ -44,7 +59,7 @@ export function ShortAnswerQuestion({question,sessionId,exam=false,completed=fal
   <textarea id={`short-answer-${question.id}`} value={answer} disabled={busy||completed||disabled} maxLength={4000} rows={5} className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm disabled:bg-slate-50" placeholder="Write your answer…" onChange={event=>{setAnswer(event.target.value);textSaves.remember(question.id,event.target.value);try{localStorage.setItem(key,event.target.value);}catch{}}}/>
   {!completed&&<p className="text-xs text-slate-500">Typing stays on this device. Save answer stores it in your quiz, even without a Gemini key.</p>}
   {exam&&!completed?<p className="text-xs text-slate-500">Grading and the model answer become available after you submit the exam.</p>:!grade&&<p className="text-xs text-slate-500">Grading sends your answer and marking guide to Google. Images are not sent.</p>}
-  <div className="flex flex-wrap gap-3">{!completed&&<button className={button} disabled={busy||!answer.trim()} onClick={()=>submit(false)}>{busy?'Working…':'Save answer'}</button>}{(!exam||completed)&&!grade&&<button className={button+' bg-[var(--ma-brand)] text-white border-transparent'} disabled={busy||!answer.trim()||completed&&!attempt} onClick={()=>submit(true)}>{attempt?.status==='failed'?'Retry grading':completed?'Grade saved answer':'Save & grade'}</button>}</div>
+  <div className="flex flex-wrap gap-3">{!completed&&<button className={button} disabled={busy||disabled||!answer.trim()} onClick={()=>submit(false)}>{busy?'Working…':'Save answer'}</button>}{(!exam||completed)&&!grade&&<button className={button+' bg-[var(--ma-brand)] text-white border-transparent'} disabled={busy||disabled||retrySeconds>0||!answer.trim()||completed&&!attempt} onClick={()=>submit(true)}>{retrySeconds>0?`Retry in ${retrySeconds}s`:same&&attempt?.status==='failed'?'Retry grading':completed?'Grade saved answer':'Save & grade'}</button>}</div>
   {attempt?.errorCode==='KEY_MISSING'&&!showGuide&&<button type="button" className="text-sm underline text-[var(--ma-brand)]" onClick={()=>setShowGuide(true)}>افتح شرح إضافة مفتاح Gemini</button>}
   {error&&<p role="alert" className="text-sm text-red-700">{error}</p>}{notice&&<p role="status" className="text-sm text-emerald-800">{notice}</p>}
   {grade&&attempt.guideChanged&&<p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The marking guide was updated after this answer was graded. Your saved grade is preserved; the feedback and model answer below show the guide used for that grade.</p>}

@@ -9,6 +9,10 @@ import {syncShortAnswerQuizEntries} from './short-answer-quiz-links.ts';
 export class ShortAnswerError extends Error {constructor(message:string,public status=400){super(message);}}
 export const gradingMessages:Record<string,string>={KEY_MISSING:'Add your Gemini API key in Profile & Settings, then retry.',KEY_OR_ACCESS:'Google rejected the key or model access. Check your key and Google project settings.',QUOTA:'Your Google quota is currently exhausted. Your answer is saved. Wait for your quota to reset, then retry.',TIMEOUT:'Google took too long to respond. Your answer is saved; you can retry.',MODEL_UNAVAILABLE:'This grading model is unavailable to your Google project. Contact the site administrator.',UNAVAILABLE:'Grading is temporarily unavailable. Your answer is saved.',INVALID_RESPONSE:'Google returned an incomplete or invalid grade. Your answer is saved; retry shortly.'};
 Object.assign(gradingMessages,{POOL_BUSY:'Grading is busy or cooling down. Your answer is saved; retry shortly.',POOL_QUOTA:'The grading service has reached its Google quota. Your answer is saved; retry later.',POOL_ACCESS:'A grading credential needs administrator attention. Your answer is saved; retry shortly.',POOL_CONFIG:'The grading service needs administrator setup. Your answer is saved.',POOL_RETRY:'Shared grading is now available. Retry grading your saved answer.',POOL_MODEL_UNAVAILABLE:'The grading model needs administrator attention. Your answer is saved.'});
+Object.assign(gradingMessages,{
+ GEMINI_UNAVAILABLE:'Google grading is temporarily unavailable. Your answer is saved.',
+ POOL_STORAGE:'Grading is temporarily unavailable. Your answer is saved.',
+});
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const numericId=(value:unknown)=>{const id=Number(value);if(!Number.isSafeInteger(id)||id<1)throw new ShortAnswerError('Invalid question or attempt.');return id;};
 export function publicShortAnswerAttempt(row:any){
@@ -27,7 +31,7 @@ export async function shortAnswerQuestions(uid:string,lectureId:unknown,after:un
  return {questions:rows.slice(0,6),nextCursor:rows.length>6?rows[5].id:null};
 }
 export async function shortAnswerHistory(uid:string,after:unknown){const cursor=after==null?2147483647:numericId(after);const rows=(await pool.query(`SELECT id,question_id,snapshot->>'question_text' AS question,status,result->>'score' AS score,result->>'maxScore' AS max_score,created_at FROM public.short_answer_attempts WHERE user_uid=$1 AND id<$2 ORDER BY id DESC LIMIT 21`,[uid,cursor])).rows;return {attempts:rows.slice(0,20),nextCursor:rows.length>20?rows[19].id:null};}
-export async function getShortAnswerAttempt(uid:string,id:unknown){const [row]=(await pool.query('SELECT * FROM public.short_answer_attempts WHERE id=$1 AND user_uid=$2',[numericId(id),uid])).rows;if(!row)throw new ShortAnswerError('Answer not found.',404);return clientAttempt(row);}
+export async function getShortAnswerAttempt(uid:string,id:unknown,runner:Pick<typeof pool,'query'>=pool){const [row]=(await runner.query('SELECT * FROM public.short_answer_attempts WHERE id=$1 AND user_uid=$2',[numericId(id),uid])).rows;if(!row)throw new ShortAnswerError('Answer not found.',404);return clientAttempt(row);}
 export async function saveShortAnswer(uid:string,id:unknown,answer:unknown,runner:Pick<typeof pool,'query'>=pool){
  if(typeof answer!=='string'||!answer.trim()||answer.length>4000)throw new ShortAnswerError('Write an answer of 1–4,000 characters.');
  const normalized=answer.trim().normalize('NFC');

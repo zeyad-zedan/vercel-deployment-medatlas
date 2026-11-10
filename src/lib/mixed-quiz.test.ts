@@ -20,8 +20,9 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
  const tokens=Object.fromEntries([uid,other].map(id=>[id,createServerSessionToken({uid:id,email:id+'@example.invalid',emailVerified:true})]));
  const request=async(path:string,body?:any,owner=uid)=>{const response=await fetch(origin+path,{method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${tokens[owner]}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:await response.json()};};
  const ok=async(path:string,body?:any)=>{const result=await request(path,body);assert.ok(result.status<300,`${path} ${result.status}: ${JSON.stringify(result.data)}`);return result.data;};
- const realFetch=globalThis.fetch;let googleCalls=0;let fullCredit=false;
- globalThis.fetch=(async(input:any,init:any)=>{if(String(input).startsWith('https://generativelanguage.googleapis.com/')){googleCalls++;const content=JSON.parse(JSON.parse(init.body).contents[0].parts[0].text);assert.deepEqual(Object.keys(content).sort(),['model_answer','question','rubric','student_answer']);assert.ok(!JSON.stringify(content).includes('telegram'));return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({feedback:fullCredit?'Full credit.':'Partial credit.',points:content.rubric.map((p:any,i:number)=>({id:p.id,awarded:i?Number(fullCredit):2,feedback:'Checked against the model.'}))})}]}}]});}return realFetch(input,init);}) as typeof fetch;
+ const realFetch=globalThis.fetch;let googleCalls=0;let fullCredit=false,unavailableOnce=false;
+ let holdProvider:undefined|(()=>Promise<void>);
+ globalThis.fetch=(async(input:any,init:any)=>{if(String(input).startsWith('https://generativelanguage.googleapis.com/')){googleCalls++;const content=JSON.parse(JSON.parse(init.body).contents[0].parts[0].text);assert.deepEqual(Object.keys(content).sort(),['model_answer','question','rubric','student_answer']);assert.ok(!JSON.stringify(content).includes('telegram'));await holdProvider?.();if(unavailableOnce){unavailableOnce=false;return new Response(null,{status:503});}return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({feedback:fullCredit?'Full credit.':'Partial credit.',points:content.rubric.map((p:any,i:number)=>({id:p.id,awarded:i?Number(fullCredit):2,feedback:'Checked against the model.'}))})}]}}]});}return realFetch(input,init);}) as typeof fetch;
  const model='PRIVATE MODEL '+marker;
  let tournamentId: number | undefined;
  try{
@@ -66,7 +67,21 @@ test('one lecture quiz mixes all types with six-question reads, safe grading, bo
   const written = (await ok('/api/sessions',{mode:'custom',lectureIds:[lecture.id]})).session;
   const writtenRoute = `/api/sessions/${written.id}/short-answer`;
   assert.equal((await request(`${writtenRoute}/grade`,{questionId:q.id,answer:'A new partial response'})).status,400);
-  const combined=await ok(`${writtenRoute}/grade`, {questionId:q.id, answer:'A new partial response', consent:true});
+  let providerStarted!:()=>void,releaseProvider!:()=>void;
+  const providerReady=new Promise<void>(resolve=>{providerStarted=resolve;});
+  const providerGate=new Promise<void>(resolve=>{releaseProvider=resolve;});
+  holdProvider=async()=>{providerStarted();await providerGate;};
+  unavailableOnce=true;
+  const previousProviderCalls=googleCalls;
+  const pending=ok(`${writtenRoute}/grade`,{questionId:q.id,answer:'A new partial response',consent:true});
+  try{
+   await Promise.race([providerReady,pending.then(()=>{throw new Error('Grade completed before the provider call.');})]);
+   const duplicate=await ok(`${writtenRoute}/grade`,{questionId:q.id,consent:true});
+   assert.equal(duplicate.attempt.status,'grading');
+   assert.equal(googleCalls,previousProviderCalls+1,'A concurrent request must reuse the active grading lease.');
+  }finally{holdProvider=undefined;releaseProvider();}
+  const combined=await pending;
+  assert.equal(googleCalls,previousProviderCalls+2,'A 503 must recover within the original grading request.');
   assert.equal(combined.attempt.answer,'A new partial response');
   assert.equal(combined.attempt.result.score,2);
   assert.equal(combined.session.quizScore.pendingGradingCount,0);
