@@ -3328,9 +3328,9 @@ export async function getExamSessionForStudent(
     if (!session) {
       const rows = await db
         .select(options.batchOnly ? { ...getTableColumns(examSessions), questionOrderJson: sql<string>`
-          COALESCE((SELECT jsonb_agg(e.value ORDER BY e.ordinality)::text
+          CASE WHEN ${examSessions.status} = 'completed' THEN ${examSessions.questionOrderJson} ELSE COALESCE((SELECT jsonb_agg(e.value ORDER BY e.ordinality)::text
           FROM jsonb_array_elements(${examSessions.questionOrderJson}::jsonb) WITH ORDINALITY e(value, ordinality)
-          WHERE e.ordinality > ${options.offset ?? 0} AND e.ordinality <= ${(options.offset ?? 0) + SESSION_BATCH_SIZE}), '[]')` } : getTableColumns(examSessions))
+          WHERE e.ordinality > ${options.offset ?? 0} AND e.ordinality <= ${(options.offset ?? 0) + SESSION_BATCH_SIZE}), '[]') END` } : getTableColumns(examSessions))
         .from(examSessions)
         .where(and(eq(examSessions.id, sessionId), eq(examSessions.userUid, userUid)));
 
@@ -3359,7 +3359,21 @@ export async function getExamSessionForStudent(
     }
 
     if (session.userUid !== userUid) throw new ClientSafeError('Forbidden: Session not found for this user.', 403);
-    const orderItems: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
+    const savedOrder: SessionOrderItem[] = JSON.parse(session.questionOrderJson || '[]');
+    const anatomyReview = new Map<number, boolean>();
+    if (session.status === 'completed' && savedOrder.length) {
+      const anatomy = await db.select({ id: questions.id, status: questions.status, lectureStatus: lectures.status })
+        .from(questions).innerJoin(lectures, eq(questions.lectureId, lectures.id))
+        .where(and(eq(questions.subjectId, 45), eq(lectures.contentType, 'practical'),
+          inArray(questions.id, savedOrder.map(item => item.questionId))));
+      for (const q of anatomy) anatomyReview.set(q.id, q.status === 'published' && q.lectureStatus === 'published');
+    }
+    const visibleOrder = savedOrder.filter(item => anatomyReview.get(item.questionId) !== false);
+    const reviewBatch = session.status === 'completed' && options.batchOnly;
+    const orderItems = reviewBatch
+      ? visibleOrder.slice(options.offset ?? 0, (options.offset ?? 0) + SESSION_BATCH_SIZE)
+      : visibleOrder;
+    const totalQuestions = session.status === 'completed' ? visibleOrder.length : session.totalQuestions;
     // Older saved sessions may predate embedded grading keys. Keep their navigator/filter
     // accurate using tiny keys, preferring historical answers over an edited live key.
     if (options.batched && !(session.mode === 'exam' && session.status === 'in_progress')) {
@@ -3376,12 +3390,14 @@ export async function getExamSessionForStudent(
     const resumeIndex = session.mode === 'study' && session.status === 'in_progress'
       ? Math.max(0, orderItems.findIndex(item => !item.submitted && !item.selectedDisplayed)) : 0;
     const offset = options.offset ?? questionBatchOffset(resumeIndex);
-    if (options.batched && (!Number.isSafeInteger(offset) || offset < 0 || offset % SESSION_BATCH_SIZE !== 0 || (offset >= session.totalQuestions && session.totalQuestions > 0))) {
+    if (options.batched && (!Number.isSafeInteger(offset) || offset < 0 || offset % SESSION_BATCH_SIZE !== 0 || (offset >= totalQuestions && totalQuestions > 0))) {
       throw new ClientSafeError('Invalid question batch offset.', 400);
     }
     const windowItems = options.batched && !options.batchOnly ? orderItems.slice(offset, offset + SESSION_BATCH_SIZE) : orderItems;
     const qIds = windowItems.map(item => item.questionId);
-    const questionsPromise = loadSessionQuestions(session.id, qIds);
+    const questionsPromise = qIds.some(id => anatomyReview.has(id))
+      ? db.select().from(questions).where(inArray(questions.id, qIds))
+      : loadSessionQuestions(session.id, qIds);
 
     // Parallelize all remote queries together with cached catalog:
     const [allQuestions, userBookmarks, catalog, savedAttempts] = await Promise.all([
@@ -3391,7 +3407,7 @@ export async function getExamSessionForStudent(
             .where(and(eq(bookmarks.userUid, userUid), inArray(bookmarks.questionId, qIds)))
         : Promise.resolve([]),
       getCachedCatalog(),
-      session.status === 'completed'
+      session.status === 'completed' && qIds.length
         ? db
             .select({ questionId: questionAttempts.questionId, questionSnapshotJson: questionAttempts.questionSnapshotJson })
             .from(questionAttempts)
@@ -3431,7 +3447,8 @@ export async function getExamSessionForStudent(
       .map((item, idx) => {
         const snapshot = attemptSnapshotMap.get(item.questionId);
         const liveQ = qMap.get(item.questionId);
-        const source = snapshot || liveQ;
+        const currentAnatomy = anatomyReview.has(item.questionId);
+        const source = currentAnatomy ? liveQ : snapshot || liveQ;
         const index = options.batchOnly ? offset + idx : idx;
         if (!source) return options.batched ? {
           ...(item.isMatching ? {questionType:'matching'} : {}),
@@ -3486,6 +3503,10 @@ export async function getExamSessionForStudent(
         const hideAnswers = isExamActive;
 
         const clientQ = formatQuestionForClient(canonicalQ, item.permutation, hideAnswers);
+        const selectedKey = item.selectedCanonical;
+        const selectedField = selectedKey ? `option${selectedKey}` : '';
+        const selectedDisplayed = currentAnatomy && selectedField && snapshot &&
+          snapshot[selectedField] !== source[selectedField] ? null : item.selectedDisplayed;
         return {
           ...clientQ,
           pageNumber: canonicalQ.pageNumber ?? liveQ?.pageNumber ?? null,
@@ -3495,8 +3516,9 @@ export async function getExamSessionForStudent(
             null,
           index,
           ...(options.batched ? { contentLoaded: true } : {}),
-          selectedDisplayed: item.selectedDisplayed,
-          matchingChoiceId: item.matchingChoiceId ?? null,
+          selectedDisplayed,
+          matchingChoiceId: currentAnatomy && !canonicalQ.matching?.choices.some(choice => choice.id === item.matchingChoiceId)
+            ? null : item.matchingChoiceId ?? null,
           submitted: item.submitted,
           isBookmarked: bookmarkedSet.has(item.questionId),
         };
@@ -3524,12 +3546,12 @@ export async function getExamSessionForStudent(
       subjectId: session.subjectId,
       lectureId: session.lectureId,
       status: session.status,
-      totalQuestions: session.totalQuestions,
+      totalQuestions,
       correctCount: isExamActive ? 0 : session.correctCount,
       incorrectCount: isExamActive ? 0 : session.incorrectCount,
       unansweredCount: session.unansweredCount,
       scorePercentage: isExamActive ? 0 : session.scorePercentage,
-      ...(!isExamActive&&orderItems.some(item=>item.shortAnswerId)?{quizScore:quizScore(orderItems).quizScore}:{}),
+      ...(!isExamActive&&savedOrder.some(item=>item.shortAnswerId)?{quizScore:quizScore(savedOrder).quizScore}:{}),
       timeLimitSeconds: session.timeLimitSeconds,
       elapsedSeconds:
         session.status === 'completed'
