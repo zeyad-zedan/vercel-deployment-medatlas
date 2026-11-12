@@ -1,4 +1,5 @@
 import type { ImportImageFile, QuestionImage } from './question-images.ts';
+import type { PracticalMockAttempt, PracticalMockCard, PracticalStationUpload } from './practical-mock.ts';
 import type { DailyGoal, DailyGoalTarget, TournamentBoard } from './study-rewards.ts';
 import { clearResetSessionStorage } from './session-progress.ts';
 import {
@@ -502,6 +503,15 @@ function saveBookmarkImmediately(questionId: number, note?: string, bookmarked?:
 }
 
 export const api = {
+  getPracticalMocks: () => apiRequest<PracticalMockCard[]>('/api/practical-mocks'),
+  publishPracticalMock: (id: string, title: string, stations: PracticalStationUpload[]) =>
+    apiRequest<{ id: string }>('/api/practical-mocks', { method: 'POST', body: JSON.stringify({ id, title, stations }) }),
+  startPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/start`, { method: 'POST' }),
+  getPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}`),
+  savePracticalMockAnswer: (id: string, stationIndex: number, answer: string, revision: number) =>
+    apiRequest<{ revision: number }>(`/api/practical-mocks/${id}/answer`, { method: 'PUT', body: JSON.stringify({ stationIndex, answer, revision }) }),
+  gradePracticalMock: (id: string, signal: AbortSignal) =>
+    apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/grade`, { method: 'POST', signal }),
   // Public Catalog
   getCatalog: () =>
     apiRequest<{

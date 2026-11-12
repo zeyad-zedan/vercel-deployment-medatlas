@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 const CourseQuizView=lazy(()=>import('./components/CourseQuizView.tsx'));
 import PracticalView from './components/PracticalView.tsx';
+import { PracticalMockView } from './components/PracticalMockView.tsx';
 import TournamentsView from './components/TournamentsView.tsx';
 import { WorkspacePageBoundary } from './components/WorkspacePageBoundary.tsx';
 import { InstallMedAtlas } from './components/InstallMedAtlas.tsx';
@@ -16,6 +17,7 @@ import {subjectLibraryTab} from './lib/subject-library.ts';
 import {
   BookOpen,
   GraduationCap,
+  ClipboardCheck,
   History,
   LayoutDashboard,
   LogOut,
@@ -49,6 +51,7 @@ const VALID_TABS = [
   'subjects',
   'lectures',
   'practical',
+  'practical-mocks',
   'short-answers',
   'practice',
   'exams',
@@ -427,7 +430,8 @@ export default function App() {
     setUser(loggedInUser);
     const route = parseCurrentRoute();
     setPrivateSlug(courseQuizSlug(window.location.pathname));
-    setActiveTab(route.tab === 'course-quiz' ? route.tab : initialTab || route.tab || 'dashboard');
+    const keepDestination = route.tab === 'course-quiz' || route.tab === 'practical-mocks';
+    setActiveTab(keepDestination ? route.tab : initialTab || route.tab || 'dashboard');
     setGlobalError(null);
     setAuthRedirectError(null);
   };
@@ -527,6 +531,7 @@ export default function App() {
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'lectures', label: 'Lectures', icon: BookOpen },
     { id: 'practical', label: 'Practical', icon: GraduationCap },
+    { id: 'practical-mocks', label: 'Practical Mock Exams', icon: ClipboardCheck },
     { id: 'practice', label: 'Practice quizzes', icon: SlidersHorizontal },
     { id: 'progress', label: 'Dashboard', icon: History },
     ...(tournamentsEnabled ? [{ id: 'tournaments', label: 'Tournaments', icon: Trophy }] : []),
@@ -791,6 +796,10 @@ export default function App() {
                   )}
                 </WorkspacePageBoundary>
               )}
+
+              {activeTab === 'practical-mocks' && <WorkspacePageBoundary key="practical-mocks" pageName="Practical Mock Exams">
+                <PracticalMockView key={user.uid} isAdmin={user.role === 'admin'} />
+              </WorkspacePageBoundary>}
 
               {activeNavTab === 'practice' && (
                 <div className="max-w-4xl space-y-8">

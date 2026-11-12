@@ -44,6 +44,9 @@ const rewardsTables = {
   dailyQuestions: 'daily_questions',
 } as const;
 
+const practicalMockTables = { practicalMockExams: 'exams', practicalMockAttempts: 'attempts' } as const;
+type ExtraBackupTable = keyof typeof rewardsTables | keyof typeof practicalMockTables;
+
 export interface BackupPayload {
   format: string;
   createdAt: string;
@@ -69,7 +72,7 @@ export interface BackupPayload {
     studentGeminiKeys?: unknown[];
     shortAnswerQuestions?: unknown[];
     shortAnswerAttempts?: unknown[];
-  } & Partial<Record<keyof typeof rewardsTables, unknown[]>>;
+  } & Partial<Record<ExtraBackupTable, unknown[]>>;
 }
 
 export interface RestoreVerificationResult {
@@ -236,7 +239,7 @@ export function decryptBackupPayload(
     throw new Error('Corrupted backup payload: studentGeminiKeys must be an array.');
   }
   for(const name of ['shortAnswerQuestions','shortAnswerAttempts'] as const)if(parsed.tables[name]!==undefined&&!Array.isArray(parsed.tables[name]))throw new Error(`Corrupted backup payload: ${name} must be an array.`);
-  for (const name of Object.keys(rewardsTables) as Array<keyof typeof rewardsTables>) {
+  for (const name of [...Object.keys(rewardsTables), ...Object.keys(practicalMockTables)] as ExtraBackupTable[]) {
     if (parsed.tables[name] !== undefined && !Array.isArray(parsed.tables[name])) {
       throw new Error(`Corrupted backup payload: ${name} must be an array.`);
     }
@@ -287,11 +290,17 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
     const studentKeysRes = await client.query('SELECT * FROM public.student_gemini_keys ORDER BY user_uid ASC');
     const shortQuestionsRes=await client.query('SELECT * FROM public.short_answer_questions ORDER BY id ASC');
     const shortAttemptsRes=await client.query('SELECT * FROM public.short_answer_attempts ORDER BY id ASC');
-    const rewardsSnapshot: Partial<Record<keyof typeof rewardsTables, unknown[]>> = {};
+    const extraSnapshot: Partial<Record<ExtraBackupTable, unknown[]>> = {};
     for (const [name, table] of Object.entries(rewardsTables)) {
       const columns = table === 'study_days' ? 'user_uid, study_day::text, target, answered'
         : table === 'daily_questions' ? 'user_uid, study_day::text, question_id' : '*';
-      rewardsSnapshot[name as keyof typeof rewardsTables] = (await client.query(`SELECT ${columns} FROM gamification.${table}`)).rows;
+      extraSnapshot[name as ExtraBackupTable] = (await client.query(`SELECT ${columns} FROM gamification.${table}`)).rows;
+    }
+    const { rows: [mockSchema] } = await client.query("SELECT to_regnamespace('practical_mock') IS NOT NULL AS installed");
+    if (mockSchema.installed) {
+      for (const [name, table] of Object.entries(practicalMockTables)) {
+        extraSnapshot[name as ExtraBackupTable] = (await client.query(`SELECT * FROM practical_mock.${table}`)).rows;
+      }
     }
 
     await client.query('COMMIT');
@@ -321,7 +330,7 @@ export async function createConsistentDatabaseSnapshot(): Promise<BackupPayload>
         studentGeminiKeys: studentKeysRes.rows,
         shortAnswerQuestions: shortQuestionsRes.rows,
         shortAnswerAttempts: shortAttemptsRes.rows,
-        ...rewardsSnapshot,
+        ...extraSnapshot,
       },
     };
   } catch (err) {
@@ -749,6 +758,16 @@ export async function testRestoreBackup(
           FOREIGN KEY (user_uid, study_day) REFERENCES "${isolatedSchema}".study_days
         );
 
+        CREATE TABLE "${isolatedSchema}".practical_mock_exams (
+          id UUID PRIMARY KEY, title TEXT NOT NULL, stations JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
+        );
+        CREATE TABLE "${isolatedSchema}".practical_mock_attempts (
+          exam_id UUID REFERENCES "${isolatedSchema}".practical_mock_exams(id),
+          user_uid TEXT REFERENCES "${isolatedSchema}".users(uid), started_at TIMESTAMPTZ NOT NULL,
+          answers JSONB NOT NULL, grades JSONB, lease UUID, lease_until TIMESTAMPTZ,
+          retry_at TIMESTAMPTZ, grade_error TEXT, PRIMARY KEY (exam_id, user_uid)
+        );
+
         CREATE TABLE "${isolatedSchema}".admin_audit_logs (
           id SERIAL PRIMARY KEY,
           admin_uid TEXT NOT NULL,
@@ -780,7 +799,8 @@ export async function testRestoreBackup(
             const rowPlaceholders: string[] = [];
             for (const key of keys) {
               rowPlaceholders.push(`$${paramIdx++}`);
-              values.push((key === 'images' || key === 'explanation_images') && Array.isArray(row[key]) ? JSON.stringify(row[key]) : row[key]);
+              const jsonArray = ['images', 'explanation_images', 'stations', 'grades'].includes(key) && Array.isArray(row[key]);
+              values.push(jsonArray ? JSON.stringify(row[key]) : row[key]);
             }
             valueClauses.push(`(${rowPlaceholders.join(', ')})`);
           }
@@ -813,7 +833,7 @@ export async function testRestoreBackup(
       await insertRows('admin_audit_logs', payload.tables.adminAuditLogs as any[]);
       await insertRows('app_settings', (payload.tables.appSettings || []) as any[]);
       await insertRows('question_reports', (payload.tables.questionReports || []) as any[]);
-      for (const key of Object.keys(rewardsTables) as Array<keyof typeof rewardsTables>) {
+      for (const key of [...Object.keys(rewardsTables), ...Object.keys(practicalMockTables)] as ExtraBackupTable[]) {
         await insertRows(key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`), payload.tables[key] || []);
       }
 

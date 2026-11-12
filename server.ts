@@ -4,6 +4,7 @@ import { validImageFileName } from './src/lib/question-images.ts';
 import 'dotenv/config';
 import {impulseRouter} from './src/lib/impulse-routes.ts';
 import {shortAnswerRouter} from './src/lib/short-answer-routes.ts';
+import { practicalMockRouter } from './src/lib/practical-mock-routes.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -142,6 +143,7 @@ const adminCsvImportJsonParser = express.json({ limit: '5mb' });
 const adminPdfUploadJsonParser = express.json({ limit: '50mb' });
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path.startsWith('/api/impulse')) return next();
+  if (req.method === 'POST' && /^\/api\/practical-mocks\/?$/.test(req.path)) return next();
   if (
     req.path.startsWith('/api/admin/import/preview') ||
     req.path.startsWith('/api/admin/import/execute')
@@ -655,6 +657,7 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
 });
 
 app.use('/api/short-answers', requireAuth, shortAnswerRouter);
+app.use('/api/practical-mocks', requireAuth, practicalMockRouter(requireAdmin));
 
 app.all('/api/auth/gemini-key', requireAuth, async (req: AuthRequest, res) => {
   res.setHeader('Cache-Control','no-store');

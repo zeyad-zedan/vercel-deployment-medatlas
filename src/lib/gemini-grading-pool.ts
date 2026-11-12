@@ -47,8 +47,8 @@ export const postgresPoolStore:PoolStore=async(model,change)=>{
  }catch{await client.query('ROLLBACK').catch(()=>{});throw new GradingError('POOL_STORAGE',15);}finally{client.release();}
 };
 
-export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWithGemini){
- const gradeOnce=async(question:ShortAnswerDefinition,answer:string,entries:Entry[],deadline:number)=>{
+function createPoolRequest(store:PoolStore){
+ return async<T>(request:(key:string,deadline:number)=>Promise<T>,entries:Entry[],deadline:number)=>{
   if(!entries.length)throw configurationError();
   const model=shortAnswerModel(),lease=randomUUID();
   const claim=await store(model,(state,now)=>{
@@ -68,7 +68,7 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
   });
   if(!claim)throw new GradingError('POOL_BUSY',15);
   let failure:GradingError|undefined;
-  try{return await grade(claim.key,question,answer,deadline);}
+  try{return await request(claim.key,deadline);}
   catch(error){
    failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
    const code=failure.code==='QUOTA'?'POOL_QUOTA':failure.code==='KEY_OR_ACCESS'?'POOL_ACCESS':failure.code==='MODEL_UNAVAILABLE'?'POOL_MODEL_UNAVAILABLE':failure.code;
@@ -90,16 +90,25 @@ export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWi
    }).catch(()=>{});
   }
  };
+}
+
+export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWithGemini){
+ const requestInPool=createPoolRequest(store);
  return (question:ShortAnswerDefinition,answer:string,entries=readGradingPool())=>
-  gradeWithTemporaryRetry(deadline=>gradeOnce(question,answer,entries,deadline));
+  gradeWithTemporaryRetry(deadline=>requestInPool((key,limit)=>grade(key,question,answer,limit),entries,deadline));
 }
 export const gradeWithPool=createPoolGrader();
+const requestInPool=createPoolRequest(postgresPoolStore);
 
-export async function gradeWithConfiguredCredentials(uid:string,question:ShortAnswerDefinition,answer:string){
+export async function gradeWithAvailableCredentials<T>(uid:string,request:(key:string,deadline:number)=>Promise<T>){
  const entries=readGradingPool();
- if(entries.length)return gradeWithPool(question,answer,entries);
+ if(entries.length)return gradeWithTemporaryRetry(deadline=>requestInPool(request,entries,deadline));
  const {readStudentGeminiKeyForGrading}=await import('./student-gemini-keys.ts');
  const key=await readStudentGeminiKeyForGrading(uid);
  if(!key)throw new GradingError('KEY_MISSING');
- return gradeWithTemporaryRetry(deadline=>gradeWithGemini(key,question,answer,deadline));
+ return gradeWithTemporaryRetry(deadline=>request(key,deadline));
+}
+
+export function gradeWithConfiguredCredentials(uid:string,question:ShortAnswerDefinition,answer:string){
+ return gradeWithAvailableCredentials(uid,(key,deadline)=>gradeWithGemini(key,question,answer,deadline));
 }
