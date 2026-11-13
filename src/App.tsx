@@ -170,6 +170,7 @@ export default function App() {
   }, [user]);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
+      if (window.innerWidth < 1024) return false;
       let saved: string | null = null;
       try { saved = localStorage.getItem('sidebar_open'); } catch {}
       if (saved !== null) return saved === 'true';
@@ -182,7 +183,7 @@ export default function App() {
     setSidebarOpen((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem('sidebar_open', String(next));
+        if (window.innerWidth >= 1024) localStorage.setItem('sidebar_open', String(next));
       } catch {}
       return next;
     });
@@ -563,9 +564,8 @@ export default function App() {
       <aside
         id="workspace-navigation"
         inert={!sidebarOpen}
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out shadow-xl lg:shadow-none ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        style={{ transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)', visibility: sidebarOpen ? 'visible' : 'hidden' }}
+        className="fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out shadow-xl lg:shadow-none"
       >
         <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
           <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
@@ -668,12 +668,12 @@ export default function App() {
               aria-controls="workspace-navigation"
               title={sidebarOpen ? 'Close side panel' : 'Open side panel'}
               onClick={toggleSidebar}
-              className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center justify-center"
+              className="h-11 w-11 touch-manipulation text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0 flex items-center justify-center"
             >
               {sidebarOpen ? (
-                <PanelLeftClose className="w-5 h-5 text-slate-700" />
+                <PanelLeftClose className="pointer-events-none w-5 h-5 text-slate-700" />
               ) : (
-                <PanelLeftOpen className="w-5 h-5 text-slate-700" />
+                <PanelLeftOpen className="pointer-events-none w-5 h-5 text-slate-700" />
               )}
             </button>
             <span className="text-sm font-semibold text-slate-700 truncate">
