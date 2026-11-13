@@ -2,7 +2,7 @@ import type { QuestionImage } from './question-images.ts';
 import type { ShortAnswerGrade } from './short-answer-model.ts';
 
 export const practicalStationSeconds = 120;
-export const maxPracticalStations = 12;
+export const maxPracticalStations = 25;
 export const maxPracticalAnswerLength = 2000;
 export const maxPracticalMarkingPoints = 6;
 
