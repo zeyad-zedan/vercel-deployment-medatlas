@@ -161,6 +161,7 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
 }
 
 export function PracticalMockView({ isAdmin }: { isAdmin: boolean }) {
+  const exam = new URLSearchParams(window.location.search).get('exam') || undefined;
   const [cards, setCards] = useState<PracticalMockCard[] | null>(null);
   const [attempt, setAttempt] = useState<PracticalMockAttempt | null>(null);
   const [authoring, setAuthoring] = useState(false);
@@ -170,9 +171,9 @@ export function PracticalMockView({ isAdmin }: { isAdmin: boolean }) {
 
   const load = useCallback(async () => {
     setError('');
-    try { setCards(await api.getPracticalMocks()); }
+    try { setCards(await api.getPracticalMocks(exam)); }
     catch (error) { setError((error as Error).message); }
-  }, []);
+  }, [exam]);
   useEffect(() => { void load(); }, [load]);
 
   async function open(card: PracticalMockCard) {
@@ -194,7 +195,7 @@ export function PracticalMockView({ isAdmin }: { isAdmin: boolean }) {
     {error && <div className="ma-dashboard-panel space-y-2" role="alert"><p className="text-sm text-red-700">{error}</p>
       <button type="button" className={secondary} onClick={() => { void load(); }}>Try again</button></div>}
     {!cards && !error && <p role="status">Loading exams…</p>}
-    {cards?.length === 0 && <div className="ma-dashboard-panel text-sm text-slate-600">No practical mock exams have been published yet.</div>}
+    {cards?.length === 0 && <div className="ma-dashboard-panel text-sm text-slate-600">{exam ? 'This exam is unavailable.' : 'No practical mock exams have been published yet.'}</div>}
     <div className="grid gap-4 sm:grid-cols-2">
       {cards?.map(card => <article key={card.id} className="ma-session-card gap-3">
         <ClipboardCheck size={22} className="text-[var(--ma-brand)]" aria-hidden="true" />

@@ -503,7 +503,8 @@ function saveBookmarkImmediately(questionId: number, note?: string, bookmarked?:
 }
 
 export const api = {
-  getPracticalMocks: () => apiRequest<PracticalMockCard[]>('/api/practical-mocks'),
+  getPracticalMocks: (exam?: string) => apiRequest<PracticalMockCard[]>(
+    '/api/practical-mocks' + (exam ? '?exam=' + encodeURIComponent(exam) : '')),
   publishPracticalMock: (id: string, title: string, stations: PracticalStationUpload[]) =>
     apiRequest<{ id: string }>('/api/practical-mocks', { method: 'POST', body: JSON.stringify({ id, title, stations }) }),
   startPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/start`, { method: 'POST' }),

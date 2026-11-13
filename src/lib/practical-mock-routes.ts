@@ -16,7 +16,11 @@ export function practicalMockRouter(requireAdmin: RequestHandler) {
     }
   };
 
-  router.get('/', handle(async (req, res) => res.json(await listPracticalMocks(req.user!.uid))));
+  router.get('/', handle(async (req, res) => {
+    const id = req.query.exam;
+    if (id !== undefined && typeof id !== 'string') throw new PracticalMockError('Exam not found.', 404);
+    res.json(await listPracticalMocks(req.user!.uid, id));
+  }));
   router.post('/', requireAdmin, json({ limit: '192kb' }),
     handle(async (req, res) => res.status(201).json({ id: await publishPracticalMock(req.body) })));
   router.get('/:id', handle(async (req, res) => res.json(await readPracticalMock(req.user!.uid, req.params.id))));

@@ -140,7 +140,11 @@ function updateBrowserUrl(tab: string, session: any | null, replace = false, pri
   document.title = targetTitle;
 
   const { pathname, search, hash } = window.location;
-  const currentUrl = targetUrl.startsWith('/progress') ? pathname + search
+  if (targetUrl === '/practical-mocks') {
+    const exam = new URLSearchParams(search).get('exam');
+    if (pathname === '/practical-mocks' && exam) targetUrl += '?exam=' + encodeURIComponent(exam);
+  }
+  const currentUrl = targetUrl.startsWith('/progress') || targetUrl.startsWith('/practical-mocks') ? pathname + search
     : targetUrl.startsWith('/practice') ? pathname + hash : pathname;
   const previousPath = pathname.replace(/\/+$/, '').toLowerCase();
   const legacySectionUrl = (tab === 'exams' && ['/exams', '/mock-exams'].includes(previousPath))

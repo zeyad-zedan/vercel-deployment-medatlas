@@ -25,15 +25,16 @@ const studentStation = (station: ShortAnswerDefinition) => ({
   maxMarks: station.rubric.reduce((total, point) => total + point.marks, 0),
 });
 
-export async function listPracticalMocks(uid: string) {
+export async function listPracticalMocks(uid: string, examId?: string) {
   const { rows } = await pool.query<PracticalMockCard>(`
     SELECT e.id, e.title, jsonb_array_length(e.stations) AS "stationCount",
       CASE WHEN a.grades IS NOT NULL THEN 'graded' WHEN a.started_at IS NULL THEN 'ready'
         WHEN clock_timestamp() >= a.started_at + jsonb_array_length(e.stations) * $2::interval THEN 'finished'
         ELSE 'active' END AS status
     FROM practical_mock.exams e LEFT JOIN practical_mock.attempts a ON a.exam_id=e.id AND a.user_uid=$1
+    WHERE CASE WHEN $3::uuid IS NULL THEN NOT e.unlisted ELSE e.id=$3 END
     ORDER BY e.created_at DESC, e.id
-  `, [uid, stationInterval]);
+  `, [uid, stationInterval, examId === undefined ? null : validId(examId)]);
   return rows;
 }
 
