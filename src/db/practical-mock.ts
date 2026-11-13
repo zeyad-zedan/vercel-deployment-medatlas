@@ -12,6 +12,8 @@ export class PracticalMockError extends Error {
 }
 
 const stationInterval = `${practicalStationSeconds} seconds`;
+// Shift effective start backwards by skipped_ms so skip jumps straight to the next station without changing elapsed-time queries.
+const effectiveStart = `(a.started_at - a.skipped_ms * interval '1 millisecond')`;
 const validId = (value: string) => {
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value)) throw new PracticalMockError('Exam not found.', 404);
   return value;
@@ -29,7 +31,7 @@ export async function listPracticalMocks(uid: string, examId?: string) {
   const { rows } = await pool.query<PracticalMockCard>(`
     SELECT e.id, e.title, jsonb_array_length(e.stations) AS "stationCount",
       CASE WHEN a.grades IS NOT NULL THEN 'graded' WHEN a.started_at IS NULL THEN 'ready'
-        WHEN clock_timestamp() >= a.started_at + jsonb_array_length(e.stations) * $2::interval THEN 'finished'
+        WHEN clock_timestamp() >= ${effectiveStart} + jsonb_array_length(e.stations) * $2::interval THEN 'finished'
         ELSE 'active' END AS status
     FROM practical_mock.exams e LEFT JOIN practical_mock.attempts a ON a.exam_id=e.id AND a.user_uid=$1
     WHERE CASE WHEN $3::uuid IS NULL THEN NOT e.unlisted ELSE e.id=$3 END
@@ -78,11 +80,12 @@ export async function readPracticalMock(uid: string, examId: string): Promise<Pr
   const { rows: [row] } = await pool.query(`
     WITH attempt AS MATERIALIZED (
       SELECT e.title, e.stations, a.*, clock_timestamp() AS server_now,
+        ${effectiveStart} AS effective_start,
         jsonb_array_length(e.stations) AS station_count
       FROM practical_mock.attempts a JOIN practical_mock.exams e ON e.id=a.exam_id
       WHERE a.exam_id=$1 AND a.user_uid=$2
     ), timing AS (
-      SELECT *, floor(extract(epoch FROM (server_now - started_at)) / $3::int)::int AS idx FROM attempt
+      SELECT *, floor(extract(epoch FROM (server_now - effective_start)) / $3::int)::int AS idx FROM attempt
     )
     SELECT title, station_count, idx, grades, grade_error,
       greatest(0, ceil(extract(epoch FROM (retry_at - server_now))*1000))::int AS retry_ms,
@@ -92,7 +95,7 @@ export async function readPracticalMock(uid: string, examId: string): Promise<Pr
       CASE WHEN grades IS NOT NULL THEN stations END AS completed_stations,
       CASE WHEN grades IS NOT NULL THEN answers END AS completed_answers,
       CASE WHEN idx < station_count THEN ceil(extract(epoch FROM
-        (started_at + (idx+1) * $3::int * interval '1 second' - server_now))*1000)::int END AS remaining_ms
+        (effective_start + (idx+1) * $3::int * interval '1 second' - server_now))*1000)::int END AS remaining_ms
     FROM timing
   `, [validId(examId), uid, practicalStationSeconds]);
   if (!row) throw new PracticalMockError('Exam attempt not found.', 404);
@@ -119,12 +122,33 @@ export async function savePracticalMockAnswer(uid: string, examId: string, value
     SET answers=jsonb_set(a.answers, ARRAY[$3::int::text], jsonb_build_object('text',$4::text,'revision',$5::int+1))
     FROM practical_mock.exams e
     WHERE a.exam_id=$1 AND a.user_uid=$2 AND e.id=a.exam_id AND $3 < jsonb_array_length(e.stations)
-      AND clock_timestamp() >= a.started_at + $3 * $6::interval
-      AND clock_timestamp() < a.started_at + ($3+1) * $6::interval
+      AND clock_timestamp() >= ${effectiveStart} + $3 * $6::interval
+      AND clock_timestamp() < ${effectiveStart} + ($3+1) * $6::interval
       AND coalesce((a.answers->$3::int::text->>'revision')::int,0)=$5
   `, [validId(examId), uid, stationIndex, answer, revision, stationInterval]);
   if (!rowCount) throw new PracticalMockError('This station closed or its answer changed in another tab.', 409);
   return { revision: revision + 1 };
+}
+
+export async function skipPracticalMock(uid: string, examId: string, value: { stationIndex?: unknown }) {
+  const stationIndex = value?.stationIndex;
+  if (typeof stationIndex !== 'number' || !Number.isInteger(stationIndex) || stationIndex < 0 || stationIndex >= maxPracticalStations) {
+    throw new PracticalMockError('Invalid station.');
+  }
+  // Single materialized clock snapshot prevents clock drift between active-window verification and skipped_ms calculation.
+  const { rowCount } = await pool.query(`
+    WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+    UPDATE practical_mock.attempts a
+    SET skipped_ms = GREATEST(0::bigint,
+      (($3::int + 1)::bigint * $4::int * 1000) - floor(extract(epoch FROM (clock.now - a.started_at)) * 1000)::bigint)
+    FROM practical_mock.exams e, clock
+    WHERE a.exam_id=$1 AND a.user_uid=$2 AND e.id=a.exam_id AND a.grades IS NULL
+      AND $3 < jsonb_array_length(e.stations)
+      AND clock.now >= ${effectiveStart} + $3 * $5::interval
+      AND clock.now < ${effectiveStart} + ($3 + 1) * $5::interval
+  `, [validId(examId), uid, stationIndex, practicalStationSeconds, stationInterval]);
+  if (!rowCount) throw new PracticalMockError('This station has already closed.', 409);
+  return readPracticalMock(uid, examId);
 }
 
 function emptyGrade(station: ShortAnswerDefinition): ShortAnswerGrade {
@@ -138,7 +162,7 @@ export async function gradePracticalMock(uid: string, examId: string) {
     UPDATE practical_mock.attempts a SET lease=$3, lease_until=clock_timestamp()+interval '35 seconds', grade_error=NULL
     FROM practical_mock.exams e
     WHERE a.exam_id=$1 AND a.user_uid=$2 AND e.id=a.exam_id AND a.grades IS NULL
-      AND clock_timestamp() >= a.started_at + jsonb_array_length(e.stations) * $4::interval
+      AND clock_timestamp() >= ${effectiveStart} + jsonb_array_length(e.stations) * $4::interval
       AND (a.lease_until IS NULL OR a.lease_until <= clock_timestamp())
       AND (a.retry_at IS NULL OR a.retry_at <= clock_timestamp())
     RETURNING e.stations, a.answers

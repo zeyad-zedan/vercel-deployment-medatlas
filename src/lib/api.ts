@@ -511,6 +511,8 @@ export const api = {
   getPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}`),
   savePracticalMockAnswer: (id: string, stationIndex: number, answer: string, revision: number) =>
     apiRequest<{ revision: number }>(`/api/practical-mocks/${id}/answer`, { method: 'PUT', body: JSON.stringify({ stationIndex, answer, revision }) }),
+  skipPracticalMock: (id: string, stationIndex: number) =>
+    apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/skip`, { method: 'POST', body: JSON.stringify({ stationIndex }) }),
   gradePracticalMock: (id: string, signal: AbortSignal) =>
     apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/grade`, { method: 'POST', signal }),
   // Public Catalog

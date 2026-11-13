@@ -759,11 +759,13 @@ export async function testRestoreBackup(
         );
 
         CREATE TABLE "${isolatedSchema}".practical_mock_exams (
-          id UUID PRIMARY KEY, title TEXT NOT NULL, stations JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
+          id UUID PRIMARY KEY, title TEXT NOT NULL, stations JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+          unlisted BOOLEAN NOT NULL DEFAULT false
         );
         CREATE TABLE "${isolatedSchema}".practical_mock_attempts (
           exam_id UUID REFERENCES "${isolatedSchema}".practical_mock_exams(id),
           user_uid TEXT REFERENCES "${isolatedSchema}".users(uid), started_at TIMESTAMPTZ NOT NULL,
+          skipped_ms BIGINT NOT NULL DEFAULT 0,
           answers JSONB NOT NULL, grades JSONB, lease UUID, lease_until TIMESTAMPTZ,
           retry_at TIMESTAMPTZ, grade_error TEXT, PRIMARY KEY (exam_id, user_uid)
         );

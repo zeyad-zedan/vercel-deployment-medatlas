@@ -5,7 +5,7 @@ import { after, test } from 'node:test';
 const local = /^postgres(?:ql)?:\/\/[^/]*@(?:localhost|127\.0\.0\.1):/.test(process.env.DATABASE_URL || '');
 process.env.NODE_ENV = 'test';
 process.env.AUTH_SESSION_SECRET = 'medatlas-practical-mock-isolated-test-secret';
-process.env.GEMINI_GRADING_POOL = JSON.stringify([{ key: 'AIza' + 'P'.repeat(35), project: 'mock-exam-test' }]);
+process.env.GEMINI_GRADING_POOL = JSON.stringify([{ key: 'AIza' + 'P'.repeat(35), project: 'mock-exam-test', rpm: 10000 }]);
 const { pool } = await import('../db/index.ts');
 after(() => pool.end());
 
@@ -28,7 +28,8 @@ test('timed practical exams keep stations private, save answers and release one 
     gradingCalls++;
     const request = JSON.parse(String(init?.body));
     const { stations } = JSON.parse(request.contents[0].parts[0].text);
-    assert.deepEqual(stations.map((station: any) => station.student_answer), ['First answer', 'Second answer']);
+    assert.deepEqual(stations.map((station: any) => station.student_answer),
+      gradingCalls === 1 ? ['First answer', 'Second answer'] : ['Skipped early']);
     for (const station of stations) assert.deepEqual(Object.keys(station).sort(), ['index', 'model_answer', 'question', 'rubric', 'student_answer']);
     const grades = stations.map(({index, rubric}: any) => ({ index, feedback: 'Good.', points: rubric.map((point: any) => ({ id: point.id, awarded: point.marks, feedback: 'Correct.' })) }));
     return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ grades }) }] } }] });
@@ -84,6 +85,24 @@ test('timed practical exams keep stations private, save answers and release one 
     assert.equal(result.stations[0].modelAnswer, 'First model');
     assert.deepEqual((await call(`/${id}/grade`, { method: 'POST' })).stations.map((station: any) => station.grade.score), [2, 2]);
     assert.equal(gradingCalls, 1);
+
+    const skippedStart = await call(`/${id}/start`, { uid: other, method: 'POST' });
+    assert.equal(skippedStart.stationIndex, 0);
+    await call(`/${id}/skip`, { uid: other, method: 'POST', body: { stationIndex: 1 }, status: 409 });
+    await call(`/${id}/answer`, { uid: other, method: 'PUT', body: { stationIndex: 0, answer: 'Skipped early', revision: 0 } });
+    const afterSkip = await call(`/${id}/skip`, { uid: other, method: 'POST', body: { stationIndex: 0 } });
+    assert.equal(afterSkip.stationIndex, 1);
+    assert.ok(afterSkip.remainingMs > 110_000 && afterSkip.remainingMs <= 120_000);
+    await call(`/${id}/answer`, { uid: other, method: 'PUT', body: { stationIndex: 0, answer: 'Too late', revision: 1 }, status: 409 });
+    await call(`/${id}/skip`, { uid: other, method: 'POST', body: { stationIndex: 0 }, status: 409 });
+    const finishedBySkip = await call(`/${id}/skip`, { uid: other, method: 'POST', body: { stationIndex: 1 } });
+    assert.equal(finishedBySkip.status, 'finished');
+    await call(`/${id}/skip`, { uid: other, method: 'POST', body: { stationIndex: 1 }, status: 409 });
+    const skippedGraded = await call(`/${id}/grade`, { uid: other, method: 'POST' });
+    assert.equal(skippedGraded.status, 'graded');
+    assert.equal(skippedGraded.stations[0].answer, 'Skipped early');
+    assert.equal(skippedGraded.stations[1].answer, '');
+
     const { createEncryptedBackup, testRestoreBackup } = await import('./backup-service.ts');
     const restored = await testRestoreBackup((await createEncryptedBackup()).envelope);
     assert.equal(restored.status, 'verified', restored.error ?? restored.reason);

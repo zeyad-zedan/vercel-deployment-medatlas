@@ -382,3 +382,28 @@ test('exiting and unmounting a study attempt sync elapsed time once without rese
  }finally{await act(async()=>root.unmount());}
  assert.equal(syncs,1);assert.equal(answers,0);
 });
+
+test('practical mock skip asks for confirmation, warns you cannot go back, and skips to next station',async()=>{
+ reset();const {PracticalMockView}=await import('../components/PracticalMockView.tsx');
+ let skipCalls=0,savedCalls=0;const mockId='11111111-1111-4111-8111-111111111111';
+ api.getPracticalMocks=async()=>[{id:mockId,title:'Mock Exam 1',stationCount:2,status:'active'}];
+ api.getPracticalMock=async()=>({id:mockId,title:'Mock Exam 1',stationCount:2,status:'active',stationIndex:0,station:{question:'Identify specimen 1',images:[],maxMarks:2},answer:'',revision:0,remainingMs:118_000});
+ api.savePracticalMockAnswer=async(_id,_idx,_ans,rev)=>{savedCalls++;return {revision:rev+1};};
+ api.skipPracticalMock=async(id,stationIndex)=>{skipCalls++;assert.equal(id,mockId);assert.equal(stationIndex,0);return {id:mockId,title:'Mock Exam 1',stationCount:2,status:'active',stationIndex:1,station:{question:'Identify specimen 2',images:[],maxMarks:2},answer:'',revision:0,remainingMs:120_000};};
+ const root=createRoot(host());
+ try{
+  await act(async()=>root.render(<PracticalMockView isAdmin={false}/>));
+  await click('Resume exam');
+  assert.match(text(),/Station 1 of 2/);
+  await click('Skip image');
+  assert.equal(skipCalls,0);
+  assert.match(text(),/You cannot go back once you skip/i);
+  await click('Cancel');
+  assert.doesNotMatch(text(),/You cannot go back once you skip/i);
+  assert.equal(skipCalls,0);
+  await click('Skip image');
+  await click('Confirm skip');
+  assert.equal(skipCalls,1);assert.equal(savedCalls,0);
+  assert.match(text(),/Station 2 of 2/);assert.match(text(),/Identify specimen 2/);
+ }finally{await act(async()=>root.unmount());}
+});

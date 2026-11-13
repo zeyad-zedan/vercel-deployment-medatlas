@@ -1,7 +1,7 @@
 import { json, Router, type RequestHandler, type Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
 import { gradePracticalMock, listPracticalMocks, PracticalMockError, publishPracticalMock,
-  readPracticalMock, savePracticalMockAnswer, startPracticalMock } from '../db/practical-mock.ts';
+  readPracticalMock, savePracticalMockAnswer, skipPracticalMock, startPracticalMock } from '../db/practical-mock.ts';
 
 export function practicalMockRouter(requireAdmin: RequestHandler) {
   const router = Router();
@@ -26,6 +26,7 @@ export function practicalMockRouter(requireAdmin: RequestHandler) {
   router.get('/:id', handle(async (req, res) => res.json(await readPracticalMock(req.user!.uid, req.params.id))));
   router.post('/:id/start', handle(async (req, res) => res.json(await startPracticalMock(req.user!.uid, req.params.id))));
   router.put('/:id/answer', handle(async (req, res) => res.json(await savePracticalMockAnswer(req.user!.uid, req.params.id, req.body))));
+  router.post('/:id/skip', handle(async (req, res) => res.json(await skipPracticalMock(req.user!.uid, req.params.id, req.body))));
   router.post('/:id/grade', handle(async (req, res) => res.json(await gradePracticalMock(req.user!.uid, req.params.id))));
   return router;
 }
