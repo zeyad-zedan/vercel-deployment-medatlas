@@ -236,6 +236,7 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
 
   const subjects = catalog?.subjects || [];
   const lectures = catalog?.lectures || [];
+  const practicalCount = lectures.filter(lecture => lecture.contentType === 'practical').length;
   const totalQuestions = catalog?.totalPublishedQuestions || 0;
 
   return (
@@ -485,10 +486,32 @@ export const PublicLanding: React.FC<PublicLandingProps> = ({
           )}
         </section>
 
-        {/* Featured & Recently Added Lectures */}
         <section id="lectures" className="max-w-7xl mx-auto px-6 lg:px-12 py-14 border-b border-slate-200">
           <h2 className="text-2xl font-bold text-slate-900">Practical</h2>
-          <p className="mt-3 text-sm text-slate-500">No practical content has been added yet.</p>
+          {practicalCount > 0 ? (
+            <>
+              <p className="mt-3 text-sm text-slate-600">
+                {practicalCount === 1 ? '1 practical section is available.' : `${practicalCount} practical sections are available.`}{' '}
+                Sign in to open the practicals and start studying.
+              </p>
+              <button
+                type="button"
+                onClick={() => openAuth('login')}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[var(--ma-brand)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--ma-brand-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ma-brand)]"
+              >
+                Sign in to open practicals
+                <ArrowRight size={16} aria-hidden="true" />
+              </button>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-slate-600">
+              {loadingCatalog
+                ? 'Checking practical availability…'
+                : catalog
+                  ? 'No practical sections are available yet.'
+                  : 'Practical availability could not be loaded.'}
+            </p>
+          )}
         </section>
 
         {/* Practice & Examination Features */}
