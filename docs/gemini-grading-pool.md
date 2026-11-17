@@ -25,13 +25,21 @@ Keys remain in Vercel's server environment and are sent to Google in the `x-goog
 ## Behavior
 
 - Least-recently-used selection distributes work across eligible keys. Separate server instances coordinate through a small PostgreSQL row; it contains hashes, timestamps and leases only.
-- A temporary Google server error can trigger one automatic retry with an eligible key. Both calls share a 22-second grading budget. A longer `Retry-After` defers grading and keeps the answer saved. Quota errors, timeouts and uncertain network failures do not trigger another provider call.
-- A Google 429 pauses **every configured key in that project**, honoring `Retry-After` (at least 60 seconds, up to 24 hours). A rejected key pauses for ten minutes. Busy keys have 30-second leases so crashed work recovers.
+- A temporary Google server error can trigger one automatic retry with an eligible key. Both calls share a 22-second grading budget. A longer `Retry-After` defers grading and keeps the answer saved. Timeouts and uncertain network failures wait for a later grading attempt.
+- A Google 429 pauses **every configured key in that project**, honoring `Retry-After` (at least 60 seconds, up to 24 hours). The current request can try one eligible key from another project. A rejected or model-ineligible key pauses for ten minutes and can also trigger one failover. A malformed request is reported separately. Busy keys have 30-second leases so crashed work recovers.
 - If all entries are unavailable, the answer stays saved with a retry message. Student keys are not silently used as paid/shared fallbacks. Existing grades, marking rubrics and the per-student request controls remain in place.
 - Grading is text-only; no question images, student names or emails are sent to Google. AI feedback still requires instructor review when uncertain.
 
 Apply `supabase/migrations/20261106044218_gemini_grading_pool.sql` before enabling the pool. Its transient coordination table has RLS and no client-role grants. Credentials are never backed up in that table. Restore/deployment environments need their own Vercel Secret configuration.
 
 To disable the pool, remove or empty `GEMINI_GRADING_POOL` and redeploy. Rotate a key by replacing its entry in the Secret and redeploying. The key fingerprint changes automatically; keys in the same project retain their project cooldown.
+
+## Timed practical mock grading
+
+New timed attempts are scheduled for grading when the exam closes, including when the student leaves the page. The worker handles up to five answered stations per batch, stores successful batches, and retries temporary failures with a delay. The next run can resume a batch after the worker lease expires. Students see the final result once all answered stations are graded. Older unfinished grading attempts can be queued from their result screen.
+
+Apply `supabase/migrations/20261117212043_practical_mock_grading_queue.sql` before deploying the app. Set the server-only Vercel secret `PRACTICAL_GRADING_CRON_SECRET` and store the same value in Supabase Vault under `medatlas_practical_grading_cron`. After deployment, run `supabase/ops/schedule_practical_mock_grading.sql` on the production database. Supabase Cron checks for due attempts every minute and calls the Vercel worker when there is work. The scheduler sends only a Unix timestamp in seconds and its hex HMAC-SHA256 signature. The endpoint accepts signatures within two minutes of the server clock.
+
+The save API reports account checks, connection wait and database round-trip time in the `Server-Timing` header. Slow saves, deferred grading batches and worker totals emit structured logs for investigating spikes. These logs exclude answers and API keys.
 
 Run mocked-provider checks with `node --import tsx --test src/lib/gemini-grading-pool.test.ts`. No real Google calls or keys are required.

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
 import * as dotenv from 'dotenv';
-import { eq, or } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { db } from '../db/index.ts';
 import { users, deletedAccounts } from '../db/schema.ts';
@@ -650,32 +650,35 @@ export async function lookupUserSessionState(
     );
   }
 
-  const tombstones = await withDbRetry(() =>
-    db
-      .select({ uid: deletedAccounts.uid, firebaseUid: deletedAccounts.firebaseUid, deletedAt: deletedAccounts.deletedAt })
-      .from(deletedAccounts)
-      .where(or(...tombstoneConditions))
-  );
-
-  // Any tombstone matching the exact UID or firebaseUid is permanently deleted forever
-  const directUidTombstone = tombstones.some(
-    (t) => t.uid === uid || (t.firebaseUid !== null && t.firebaseUid === uid)
-  );
-
-  // 2. Look up user by uid or firebaseUid (and check email for identity conflict)
   const userLookupConditions = [eq(users.uid, uid), eq(users.firebaseUid, uid)];
   if (normalizedEmail) {
     userLookupConditions.push(eq(users.email, normalizedEmail));
   }
 
-  const matchedUsers = await withDbRetry(() =>
-    db
-      .select({ uid: users.uid, firebaseUid: users.firebaseUid, email: users.email,
-        displayName: users.displayName, deletedAt: users.deletedAt, accountStatus: users.accountStatus,
-        createdAt: users.createdAt, sessionsRevokedAt: users.sessionsRevokedAt,
-        tokenVersion: users.tokenVersion, emailVerified: users.emailVerified })
-      .from(users)
-      .where(or(...userLookupConditions))
+  // Both lookups use the same database snapshot and one pool round trip.
+  type Tombstone = Pick<typeof deletedAccounts.$inferSelect, 'uid' | 'firebaseUid'> & { deletedAtMs: number };
+  type SessionUser = Pick<typeof users.$inferSelect, 'uid' | 'firebaseUid' | 'email' | 'displayName' |
+    'accountStatus' | 'tokenVersion' | 'emailVerified'> & {
+      deleted: boolean; createdAtMs: number; sessionsRevokedAtMs: number | null;
+    };
+  const [{ tombstones, matchedUsers }] = await withDbRetry(() => db.select({
+    tombstones: sql<Tombstone[]>`coalesce((
+      select jsonb_agg(jsonb_build_object('uid', ${deletedAccounts.uid}, 'firebaseUid', ${deletedAccounts.firebaseUid},
+        'deletedAtMs', extract(epoch from ${deletedAccounts.deletedAt}) * 1000))
+      from ${deletedAccounts} where ${or(...tombstoneConditions)}
+    ), '[]'::jsonb)`,
+    matchedUsers: sql<SessionUser[]>`coalesce((
+      select jsonb_agg(jsonb_build_object('uid', ${users.uid}, 'firebaseUid', ${users.firebaseUid},
+        'email', ${users.email}, 'displayName', ${users.displayName}, 'deleted', ${users.deletedAt} is not null,
+        'accountStatus', ${users.accountStatus}, 'createdAtMs', extract(epoch from ${users.createdAt}) * 1000,
+        'sessionsRevokedAtMs', extract(epoch from ${users.sessionsRevokedAt}) * 1000, 'tokenVersion', ${users.tokenVersion},
+        'emailVerified', ${users.emailVerified}))
+      from ${users} where ${or(...userLookupConditions)}
+    ), '[]'::jsonb)`,
+  }).from(sql`(select 1) as session_lookup`));
+
+  const directUidTombstone = tombstones.some(
+    (t) => t.uid === uid || (t.firebaseUid !== null && t.firebaseUid === uid)
   );
 
   const dbUserByIdentity =
@@ -689,7 +692,7 @@ export async function lookupUserSessionState(
   if (
     !dbUserByIdentity &&
     dbUserByEmail &&
-    dbUserByEmail.deletedAt === null &&
+    !dbUserByEmail.deleted &&
     dbUserByEmail.accountStatus !== 'deleted'
   ) {
     return {
@@ -718,12 +721,9 @@ export async function lookupUserSessionState(
 
   // Also check if an email tombstone is newer than or equal to the current user's creation time
   // or newer than the presented token's issuance timestamp
-  const latestEmailTombstoneMs = tombstones.reduce((maxMs, t) => {
-    const tMs = t.deletedAt ? new Date(t.deletedAt).getTime() : 0;
-    return Math.max(maxMs, tMs);
-  }, 0);
+  const latestEmailTombstoneMs = tombstones.reduce((maxMs, t) => Math.max(maxMs, t.deletedAtMs), 0);
 
-  const userCreatedAtMs = dbUser.createdAt ? new Date(dbUser.createdAt).getTime() : 0;
+  const userCreatedAtMs = dbUser.createdAtMs;
   const isTombstonedByTimestamp =
     latestEmailTombstoneMs > 0 &&
     (userCreatedAtMs < latestEmailTombstoneMs ||
@@ -733,7 +733,7 @@ export async function lookupUserSessionState(
   const isDeleted =
     directUidTombstone ||
     isTombstonedByTimestamp ||
-    dbUser.deletedAt !== null ||
+    dbUser.deleted ||
     dbUser.accountStatus === 'deleted';
 
   const isSuspendedOrInactive = !isDeleted && dbUser.accountStatus !== 'active';
@@ -744,9 +744,7 @@ export async function lookupUserSessionState(
   );
 
   // Dedicated session revocation timestamp: ONLY derived from users.sessionsRevokedAt (never updatedAt)
-  const dbRevokedAtMs = dbUser.sessionsRevokedAt
-    ? new Date(dbUser.sessionsRevokedAt).getTime()
-    : null;
+  const dbRevokedAtMs = dbUser.sessionsRevokedAtMs;
 
   const revokedAtMs =
     dbRevokedAtMs !== null && memRevokedAtMs !== null

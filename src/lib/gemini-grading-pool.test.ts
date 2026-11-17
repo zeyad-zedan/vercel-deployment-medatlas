@@ -47,21 +47,48 @@ test('same-project keys share spacing and quota cooldown; no hidden second provi
  const grader=createPoolGrader(store,async()=>{calls++;throw new GradingError('QUOTA',125);});
  await assert.rejects(grader(question,'Support',entries),(e:any)=>e.code==='POOL_QUOTA'&&e.delaySeconds===125);
  advance(12000);
- await assert.rejects(grader(question,'Support',entries),(e:any)=>e.code==='POOL_BUSY');
+ await assert.rejects(grader(question,'Support',entries),(e:any)=>e.code==='POOL_BUSY'&&e.delaySeconds===113);
  assert.equal(calls,1);
  advance(113001);
  await assert.rejects(grader(question,'Support',entries),(e:any)=>e.code==='POOL_QUOTA');
  assert.equal(calls,2);
 });
 
-test('least recently used selection rotates keys; rejected key pauses while another project remains usable',async()=>{
+test('a rejected key pauses and the same grading request uses an eligible credential',async()=>{
  const {store,advance}=fixture(),entries=readGradingPool(config(3)),seen:string[]=[];
  const grader=createPoolGrader(store,async key=>{seen.push(key);if(seen.length===1)throw new GradingError('KEY_OR_ACCESS');return success();});
- await assert.rejects(grader(question,'Support',entries),(e:any)=>e.code==='POOL_ACCESS');
- for(let i=0;i<2;i++){advance(1);await grader(question,'Support',entries);}
+ await grader(question,'Support',entries);
+ advance(1);await grader(question,'Support',entries);
  assert.equal(new Set(seen).size,3);
  advance(13000);await grader(question,'Support',entries);
  assert.notEqual(seen[0],seen[3]);
+});
+
+test('quota failure switches projects without retrying a sibling key', async () => {
+ const {store}=fixture(), entries=readGradingPool(config(4,i=>i<2?'first-project':'second-project'));
+ const seen:string[]=[];
+ const grader=createPoolGrader(store, async key => {
+  seen.push(entries.find(entry=>entry.key===key)!.project);
+  if(seen.length===1)throw new GradingError('QUOTA',60);
+  return success();
+ });
+ await grader(question,'Support',entries);
+ assert.equal(seen.length,2);
+ assert.notEqual(seen[0],seen[1]);
+});
+
+test('a malformed Gemini request does not cool down an otherwise usable API key as invalid', async () => {
+ const {store,state}=fixture(), entries=readGradingPool(config(2));
+ let calls=0;
+ globalThis.fetch=(async()=>{
+  calls++;
+  return Response.json({error:{status:'INVALID_ARGUMENT'}},{status:400});
+ }) as typeof fetch;
+ await assert.rejects(createPoolGrader(store)(question,'Support',entries),(e:any)=>e.code==='GEMINI_BAD_REQUEST');
+ assert.equal(calls,1,'Changing keys does not fix a malformed payload');
+ assert.ok(Object.values(state.keys).every(key=>key.blocked===0));
+ globalThis.fetch=(async()=>Response.json({error:{details:[{reason:'API_KEY_INVALID'}]}},{status:400})) as typeof fetch;
+ await assert.rejects(gradeWithGemini(fakeKey(0),question,'Support'),(e:any)=>e.code==='KEY_OR_ACCESS');
 });
 
 test('expired crashed leases recover; project concurrency prevents parallel work even after spacing',async()=>{

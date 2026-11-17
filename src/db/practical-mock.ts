@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { pool } from './index.ts';
 import { GradingError, gradePracticalStationsWithGemini } from '../lib/gemini-short-answer.ts';
 import { gradeWithAvailableCredentials } from '../lib/gemini-grading-pool.ts';
@@ -12,6 +13,11 @@ export class PracticalMockError extends Error {
 }
 
 const stationInterval = `${practicalStationSeconds} seconds`;
+const saveProcessingGraceSeconds = 5;
+const gradeBatchSize = 5;
+const gradeLeaseSeconds = 60;
+const gradeSliceStartBudgetMs = 55_000;
+const gradeWorkerConcurrency = 6;
 // Shift effective start backwards by skipped_ms so skip jumps straight to the next station without changing elapsed-time queries.
 const effectiveStart = `(a.started_at - a.skipped_ms * interval '1 millisecond')`;
 const validId = (value: string) => {
@@ -70,11 +76,13 @@ export async function publishPracticalMock(value: { id?: unknown; title?: unknow
 
 export async function startPracticalMock(uid: string, examId: string) {
   await pool.query(`
-    INSERT INTO practical_mock.attempts (exam_id, user_uid)
-    SELECT id, $2 FROM practical_mock.exams WHERE id=$1
+    WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+    INSERT INTO practical_mock.attempts (exam_id, user_uid, started_at, grade_available_at)
+    SELECT id, $2, clock.now, clock.now + jsonb_array_length(stations) * $3::interval + $4 * interval '1 second'
+    FROM practical_mock.exams, clock WHERE id=$1
       AND (opens_at IS NULL OR opens_at <= statement_timestamp())
     ON CONFLICT (exam_id, user_uid) DO NOTHING
-  `, [validId(examId), uid]);
+  `, [validId(examId), uid, stationInterval, saveProcessingGraceSeconds]);
   return readPracticalMock(uid, examId);
 }
 
@@ -90,8 +98,8 @@ export async function readPracticalMock(uid: string, examId: string): Promise<Pr
       SELECT *, floor(extract(epoch FROM (server_now - effective_start)) / $3::int)::int AS idx FROM attempt
     )
     SELECT title, station_count, idx, grades, grade_error,
-      greatest(0, ceil(extract(epoch FROM (retry_at - server_now))*1000))::int AS retry_ms,
-      (lease_until > server_now) IS TRUE AS grading,
+      greatest(0, ceil(extract(epoch FROM (coalesce(grade_available_at, retry_at) - server_now))*1000))::int AS retry_ms,
+      (grade_available_at IS NOT NULL OR lease_until > server_now) IS TRUE AS grading,
       CASE WHEN idx < station_count THEN stations->idx END AS station,
       CASE WHEN idx < station_count THEN answers->idx::text END AS answer,
       CASE WHEN grades IS NOT NULL THEN stations END AS completed_stations,
@@ -114,22 +122,43 @@ export async function readPracticalMock(uid: string, examId: string): Promise<Pr
   return { ...exam, status: row.grading ? 'grading' : 'finished', retryInMs: row.retry_ms, gradingError: row.grade_error };
 }
 
-export async function savePracticalMockAnswer(uid: string, examId: string, value: { stationIndex?: unknown; answer?: unknown; revision?: unknown }) {
+export async function savePracticalMockAnswer(
+  uid: string, examId: string, value: { stationIndex?: unknown; answer?: unknown; revision?: unknown }, receivedAt = Date.now(),
+) {
   const { stationIndex, answer, revision } = value ?? {};
   if (typeof stationIndex !== 'number' || !Number.isInteger(stationIndex) || stationIndex < 0 || stationIndex >= maxPracticalStations ||
     typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0 || revision >= 2147483647 ||
     typeof answer !== 'string' || answer.length > maxPracticalAnswerLength) throw new PracticalMockError('Invalid station or answer.');
-  const { rowCount } = await pool.query(`
+  const id = validId(examId);
+  const waitingSince = performance.now();
+  const client = await pool.connect();
+  const acquiredAt = performance.now();
+  try {
+    const { rowCount } = await client.query(`
     UPDATE practical_mock.attempts a
     SET answers=jsonb_set(a.answers, ARRAY[$3::int::text], jsonb_build_object('text',$4::text,'revision',$5::int+1))
     FROM practical_mock.exams e
     WHERE a.exam_id=$1 AND a.user_uid=$2 AND (e.opens_at IS NULL OR e.opens_at <= statement_timestamp()) AND e.id=a.exam_id AND $3 < jsonb_array_length(e.stations)
-      AND clock_timestamp() >= ${effectiveStart} + $3 * $6::interval
-      AND clock_timestamp() < ${effectiveStart} + ($3+1) * $6::interval
+      AND a.grades IS NULL
+      AND to_timestamp($7::double precision/1000) >= ${effectiveStart} + $3 * $6::interval
+      AND to_timestamp($7::double precision/1000) < ${effectiveStart} + ($3+1) * $6::interval
+      AND clock_timestamp() < ${effectiveStart} + ($3+1) * $6::interval + $8 * interval '1 second'
       AND coalesce((a.answers->$3::int::text->>'revision')::int,0)=$5
-  `, [validId(examId), uid, stationIndex, answer, revision, stationInterval]);
-  if (!rowCount) throw new PracticalMockError('This station closed or its answer changed in another tab.', 409);
-  return { revision: revision + 1 };
+    `, [id, uid, stationIndex, answer, revision, stationInterval, receivedAt, saveProcessingGraceSeconds]);
+    if (!rowCount) {
+      // A committed save can lose its response. A replay of that revision is safe.
+      const saved = await client.query(`
+        SELECT 1 FROM practical_mock.attempts
+        WHERE exam_id=$1 AND user_uid=$2
+          AND (answers->$3::int::text->>'revision')::int=$4 AND answers->$3::int::text->>'text'=$5
+      `, [id, uid, stationIndex, revision + 1, answer]);
+      if (!saved.rowCount) throw new PracticalMockError('This station closed or its answer changed in another tab.', 409);
+    }
+    return { revision: revision + 1, poolMs: Math.round(acquiredAt - waitingSince),
+      databaseMs: Math.round(performance.now() - acquiredAt) };
+  } finally {
+    client.release();
+  }
 }
 
 export async function skipPracticalMock(uid: string, examId: string, value: { stationIndex?: unknown }) {
@@ -142,13 +171,16 @@ export async function skipPracticalMock(uid: string, examId: string, value: { st
     WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
     UPDATE practical_mock.attempts a
     SET skipped_ms = GREATEST(0::bigint,
-      (($3::int + 1)::bigint * $4::int * 1000) - floor(extract(epoch FROM (clock.now - a.started_at)) * 1000)::bigint)
+      (($3::int + 1)::bigint * $4::int * 1000) - floor(extract(epoch FROM (clock.now - a.started_at)) * 1000)::bigint),
+      grade_available_at = CASE WHEN a.grade_available_at IS NOT NULL THEN
+        clock.now + (jsonb_array_length(e.stations) - $3::int - 1) * $5::interval + $6 * interval '1 second'
+      END
     FROM practical_mock.exams e, clock
     WHERE a.exam_id=$1 AND a.user_uid=$2 AND (e.opens_at IS NULL OR e.opens_at <= statement_timestamp()) AND e.id=a.exam_id AND a.grades IS NULL
       AND $3 < jsonb_array_length(e.stations)
       AND clock.now >= ${effectiveStart} + $3 * $5::interval
       AND clock.now < ${effectiveStart} + ($3 + 1) * $5::interval
-  `, [validId(examId), uid, stationIndex, practicalStationSeconds, stationInterval]);
+  `, [validId(examId), uid, stationIndex, practicalStationSeconds, stationInterval, saveProcessingGraceSeconds]);
   if (!rowCount) throw new PracticalMockError('This station has already closed.', 409);
   return readPracticalMock(uid, examId);
 }
@@ -159,41 +191,132 @@ function emptyGrade(station: ShortAnswerDefinition): ShortAnswerGrade {
 }
 
 export async function gradePracticalMock(uid: string, examId: string) {
-  const lease = randomUUID();
-  const { rows: [claimed] } = await pool.query<{ stations: ShortAnswerDefinition[]; answers: ExamAnswers }>(`
-    UPDATE practical_mock.attempts a SET lease=$3, lease_until=clock_timestamp()+interval '35 seconds', grade_error=NULL
+  const current = await readPracticalMock(uid, examId);
+  if (current.status === 'active') throw new PracticalMockError('Grading starts after the final station closes.', 409);
+  if (current.status !== 'finished') return current;
+
+  // Existing attempts and jobs that need a student's intervention can be queued again.
+  await pool.query(`
+    UPDATE practical_mock.attempts a
+    SET grade_available_at=greatest(clock_timestamp(),
+      ${effectiveStart} + jsonb_array_length(e.stations) * $3::interval + $4 * interval '1 second'),
+      grade_error=NULL, grade_failures=0, retry_at=NULL
     FROM practical_mock.exams e
-    WHERE a.exam_id=$1 AND a.user_uid=$2 AND (e.opens_at IS NULL OR e.opens_at <= statement_timestamp()) AND e.id=a.exam_id AND a.grades IS NULL
-      AND clock_timestamp() >= ${effectiveStart} + jsonb_array_length(e.stations) * $4::interval
+    WHERE a.exam_id=$1 AND a.user_uid=$2 AND e.id=a.exam_id AND a.grades IS NULL
+      AND a.grade_available_at IS NULL
       AND (a.lease_until IS NULL OR a.lease_until <= clock_timestamp())
-      AND (a.retry_at IS NULL OR a.retry_at <= clock_timestamp())
-    RETURNING e.stations, a.answers
-  `, [validId(examId), uid, lease, stationInterval]);
-  if (!claimed) {
-    const current = await readPracticalMock(uid, examId);
-    if (current.status === 'active') throw new PracticalMockError('Grading starts after the final station closes.', 409);
-    return current;
+  `, [validId(examId), uid, stationInterval, saveProcessingGraceSeconds]);
+  return readPracticalMock(uid, examId);
+}
+
+type GradingJob = {
+  exam_id: string;
+  user_uid: string;
+  stations: ShortAnswerDefinition[];
+  answers: ExamAnswers;
+  grade_progress: Record<number, ShortAnswerGrade>;
+  grade_failures: number;
+};
+
+async function processPracticalMockBatch() {
+  const lease = randomUUID();
+  const { rows: [job] } = await pool.query<GradingJob>(`
+    WITH next_attempt AS (
+      SELECT a.exam_id, a.user_uid, e.stations
+      FROM practical_mock.attempts a JOIN practical_mock.exams e ON e.id=a.exam_id
+      WHERE a.grade_available_at <= statement_timestamp() AND a.grades IS NULL
+        AND (a.lease_until IS NULL OR a.lease_until <= statement_timestamp())
+        AND (e.opens_at IS NULL OR e.opens_at <= statement_timestamp())
+        AND ${effectiveStart} + jsonb_array_length(e.stations) * $1::interval + $2 * interval '1 second' <= statement_timestamp()
+      ORDER BY a.grade_available_at, a.started_at, a.exam_id, a.user_uid
+      LIMIT 1 FOR UPDATE OF a SKIP LOCKED
+    )
+    UPDATE practical_mock.attempts a
+    SET lease=$3, lease_until=clock_timestamp()+$4 * interval '1 second'
+    FROM next_attempt n
+    WHERE a.exam_id=n.exam_id AND a.user_uid=n.user_uid
+    RETURNING a.exam_id, a.user_uid, n.stations, a.answers, a.grade_progress, a.grade_failures
+  `, [stationInterval, saveProcessingGraceSeconds, lease, gradeLeaseSeconds]);
+  if (!job) return 'empty';
+
+  const started = performance.now();
+  const pending = job.stations.map((question, index) => ({
+    question, index, answer: job.answers[index]?.text.trim() ?? '',
+  })).filter(station => station.answer && !job.grade_progress[station.index]);
+  // Reduce the batch on repeated timeouts or invalid model output for this attempt.
+  const batch = pending.slice(0, Math.max(1, gradeBatchSize >> Math.min(job.grade_failures, 3)));
+  const key = [job.exam_id, job.user_uid, lease];
+  if (batch.length) {
+    try {
+      const result = await gradeWithAvailableCredentials(job.user_uid,
+        (apiKey, deadline) => gradePracticalStationsWithGemini(apiKey, batch, deadline));
+      for (const { index, grade } of result.grade) job.grade_progress[index] = grade;
+    } catch (error) {
+      const failure = error instanceof GradingError ? error : new GradingError('UNAVAILABLE', 15);
+      const sizeFailure = ['TIMEOUT', 'INVALID_RESPONSE'].includes(failure.code);
+      const accessFailure = ['POOL_ACCESS', 'POOL_MODEL_UNAVAILABLE'].includes(failure.code);
+      const failures = job.grade_failures + Number(sizeFailure || accessFailure);
+      const paused = [
+        'KEY_MISSING', 'KEY_OR_ACCESS', 'MODEL_UNAVAILABLE', 'GEMINI_BAD_REQUEST',
+        'POOL_CONFIG',
+      ].includes(failure.code) || failures >= 5;
+      const message = failure.code === 'KEY_MISSING' ? 'Add your Gemini API key in Profile & Settings, then retry grading.'
+        : 'Grading needs attention. Your answers and any completed grades are saved.';
+      const poolBusy = failure.code === 'POOL_BUSY';
+      const delay = poolBusy ? failure.delaySeconds + Math.random() * 0.5
+        : Math.max(failure.delaySeconds, sizeFailure ? 2 ** failures * 5 : 10) + Math.floor(Math.random() * 6);
+      await pool.query(`
+        UPDATE practical_mock.attempts
+        SET lease=NULL, lease_until=NULL, grade_error=$4, grade_failures=$5,
+          grade_available_at=CASE WHEN $6 THEN NULL ELSE clock_timestamp()+$7 * interval '1 second' END
+        WHERE exam_id=$1 AND user_uid=$2 AND lease=$3
+      `, [...key, paused ? message : null, failures, paused, delay]);
+      if (!poolBusy) console.warn('[practical-grading] batch deferred', { code: failure.code, paused,
+        batchSize: batch.length, elapsedMs: Math.round(performance.now() - started) });
+      if (poolBusy) return Math.ceil(delay * 1000);
+      return failure.code === 'POOL_STORAGE' ? 'storage' : 'deferred';
+    }
   }
 
-  let grades: ShortAnswerGrade[];
-  try {
-    const answered = claimed.stations.map((question, index) => ({ index, question, answer: claimed.answers[index]?.text.trim() ?? '' }))
-      .filter(station => station.answer);
-    grades = claimed.stations.map(emptyGrade);
-    if (answered.length) {
-      const result = await gradeWithAvailableCredentials(uid, (key, deadline) => gradePracticalStationsWithGemini(key, answered, deadline));
-      for (const { index, grade } of result.grade) grades[index] = grade;
+  const grades = pending.length === batch.length
+    ? job.stations.map((station, index) => job.grade_progress[index] ?? emptyGrade(station))
+    : null;
+  await pool.query(`
+    UPDATE practical_mock.attempts
+    SET grade_progress=CASE WHEN $5::jsonb IS NULL THEN $4::jsonb ELSE '{}'::jsonb END,
+      grades=$5::jsonb, grade_failures=0, grade_error=NULL,
+      grade_available_at=CASE WHEN $5::jsonb IS NULL THEN clock_timestamp() ELSE NULL END,
+      retry_at=NULL, lease=NULL, lease_until=NULL
+    WHERE exam_id=$1 AND user_uid=$2 AND lease=$3
+  `, [...key, JSON.stringify(job.grade_progress), grades && JSON.stringify(grades)]);
+  return grades ? 'completed' : 'checkpointed';
+}
+
+// Leave time for the last provider call and database acknowledgement inside the 90s function limit.
+export async function runPracticalMockGrading() {
+  const started = performance.now();
+  const stopStartingAt = started + gradeSliceStartBudgetMs;
+  const counts = { completed: 0, checkpointed: 0, deferred: 0, storage: 0, capacityWaits: 0 };
+  async function worker() {
+    while (performance.now() < stopStartingAt) {
+      const result = await processPracticalMockBatch();
+      if (result === 'empty') break;
+      if (typeof result === 'number') {
+        counts.capacityWaits++;
+        if (performance.now() + result >= stopStartingAt) break;
+        await sleep(result);
+        continue;
+      }
+      counts[result]++;
+      if (result === 'storage') break;
     }
-  } catch (error) {
-    const failure = error instanceof GradingError ? error : new GradingError('UNAVAILABLE', 15);
-    const message = failure.code === 'KEY_MISSING' ? 'Add your Gemini API key in Profile & Settings, then retry grading.'
-      : 'Grading is temporarily unavailable. Your answers are saved. Try again when grading is available.';
-    await pool.query(`UPDATE practical_mock.attempts SET lease=NULL, lease_until=NULL, grade_error=$4,
-      retry_at=clock_timestamp()+$5::int*interval '1 second' WHERE exam_id=$1 AND user_uid=$2 AND lease=$3`,
-    [examId, uid, lease, message, failure.delaySeconds]);
-    return readPracticalMock(uid, examId);
   }
-  await pool.query(`UPDATE practical_mock.attempts SET grades=$4::jsonb, lease=NULL, lease_until=NULL, retry_at=NULL
-    WHERE exam_id=$1 AND user_uid=$2 AND lease=$3`, [examId, uid, lease, JSON.stringify(grades)]);
-  return readPracticalMock(uid, examId);
+  const results = await Promise.allSettled(Array.from({ length: gradeWorkerConcurrency }, worker));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
+  const processed = counts.completed + counts.checkpointed + counts.deferred + counts.storage;
+  if (processed || counts.capacityWaits) console.info('[practical-grading] worker run', {
+    ...counts, elapsedMs: Math.round(performance.now() - started),
+  });
+  return { processed, ...counts };
 }

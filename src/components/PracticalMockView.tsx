@@ -8,6 +8,9 @@ import { QuestionImages } from './QuestionImages.tsx';
 
 const primary = 'rounded-lg bg-[var(--ma-brand)] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50';
 const secondary = 'rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50';
+const saveIdleMs = 900;
+const maxDraftAgeMs = 3000;
+const saveImmediatelySeconds = 8;
 type ActiveStation = Extract<PracticalMockAttempt, { status: 'active' }>;
 type StationResult = Extract<PracticalMockAttempt, { status: 'graded' }>['stations'][number];
 
@@ -36,8 +39,10 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
   const [error, setError] = useState<{ text: string; conflict: boolean } | null>(null);
   const revision = useRef(attempt.revision);
   const pending = useRef<Promise<boolean> | null>(null);
+  const unacknowledged = useRef<{ text: string; revision: number } | null>(null);
   const latestAnswer = useRef(attempt.answer);
   const latestSaved = useRef(attempt.answer);
+  const draftStartedAt = useRef<number | null>(null);
 
   useEffect(() => {
     const update = () => setSeconds(Math.ceil(Math.max(0, deadline - performance.now()) / 1000));
@@ -48,20 +53,26 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
   }, [deadline, onClosed]);
 
   const save = useCallback(async (): Promise<boolean> => {
-    if (pending.current) {
+    while (pending.current) {
       const ok = await pending.current;
       if (!ok) return false;
     }
-    const text = latestAnswer.current;
-    if (text === latestSaved.current || performance.now() >= deadline) return true;
+    const previous = unacknowledged.current;
+    if (!previous && latestAnswer.current === latestSaved.current) return true;
+    if (performance.now() >= deadline) return false;
+    // A response can be lost after the server commits. Replay that exact write before sending new text.
+    const write = previous ?? { text: latestAnswer.current, revision: revision.current };
+    unacknowledged.current = write;
     const run = (async () => {
       setSaving(true);
       setError(null);
+      if (!previous) draftStartedAt.current = null;
       try {
-        const result = await api.savePracticalMockAnswer(attempt.id, attempt.stationIndex, text, revision.current);
+        const result = await api.savePracticalMockAnswer(attempt.id, attempt.stationIndex, write.text, write.revision);
         revision.current = result.revision;
-        latestSaved.current = text;
-        setSavedAnswer(text);
+        unacknowledged.current = null;
+        latestSaved.current = write.text;
+        setSavedAnswer(write.text);
         return true;
       } catch (error) {
         const failure = error as Error & { status?: number };
@@ -70,7 +81,8 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
       } finally { pending.current = null; setSaving(false); }
     })();
     pending.current = run;
-    return run;
+    const saved = await run;
+    return saved && previous && latestAnswer.current !== latestSaved.current ? save() : saved;
   }, [attempt.id, attempt.stationIndex, deadline]);
 
   const skip = useCallback(async () => {
@@ -96,10 +108,12 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
     } finally { setSkipping(false); }
   }, [attempt.id, attempt.stationIndex, deadline, onRefresh, onSkipped, save, skipping]);
 
-  const closeToDeadline = seconds <= 5;
+  const closeToDeadline = seconds <= saveImmediatelySeconds;
   useEffect(() => {
     if (saving || skipping || error || answer === savedAnswer) return;
-    const timer = window.setTimeout(() => { void save(); }, closeToDeadline ? 0 : 350);
+    const age = performance.now() - (draftStartedAt.current ?? performance.now());
+    const delay = closeToDeadline ? 0 : Math.max(0, Math.min(saveIdleMs, maxDraftAgeMs - age));
+    const timer = window.setTimeout(() => { void save(); }, delay);
     return () => window.clearTimeout(timer);
   }, [answer, savedAnswer, saving, skipping, error, closeToDeadline, save]);
 
@@ -119,7 +133,13 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
       <label className="block text-sm font-semibold" htmlFor="practical-mock-answer">Your answer</label>
       <textarea id="practical-mock-answer" rows={5} maxLength={maxPracticalAnswerLength} value={answer}
         className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm" placeholder="Write your answer…"
-        onChange={event => { latestAnswer.current = event.target.value; setAnswer(event.target.value); }}
+        onChange={event => {
+          const text = event.target.value;
+          latestAnswer.current = text;
+          if (text === latestSaved.current && !pending.current) draftStartedAt.current = null;
+          else draftStartedAt.current ??= performance.now();
+          setAnswer(text);
+        }}
         onBlur={() => { if (!error && !skipping) void save(); }} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-600" role="status">{saving ? 'Saving…' : answer === savedAnswer ? (savedAnswer ? 'Answer saved.' : 'Your answer saves as you type.') : 'Answer awaiting save.'}</p>
@@ -172,8 +192,9 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
       requestedGrade.current = true;
       void request(true);
     }
-    if (attempt.status === 'grading' && !error) {
-      const poll = window.setTimeout(refresh, 2000);
+    if (attempt.status === 'grading') {
+      const delay = Math.min(30_000, Math.max(attempt.retryInMs, error ? 10_000 : 5000));
+      const poll = window.setTimeout(refresh, delay + Math.random() * 2000);
       return () => window.clearTimeout(poll);
     }
   }, [attempt, error, refresh, request]);
@@ -194,7 +215,10 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
       <button type="button" className={secondary} onClick={refresh}>Retry connection</button>
     </div>}
     {attempt.status === 'active' && <Station key={`${attempt.stationIndex}:${attempt.revision}`} attempt={attempt} deadline={deadline} onClosed={refresh} onRefresh={refresh} onSkipped={next => setView(timedView(next))} />}
-    {(grading || attempt.status === 'grading') && <p className="ma-dashboard-panel text-sm" role="status">Grading all stations…</p>}
+    {(grading || attempt.status === 'grading') && <div className="ma-dashboard-panel space-y-2" role="status">
+      <h2 className="text-lg font-semibold">Exam submitted</h2>
+      <p className="text-sm text-slate-600">Grading runs in the background. You can leave and return for your results.</p>
+    </div>}
     {!grading && attempt.status === 'finished' && <div className="ma-dashboard-panel space-y-3">
       <h2 className="text-lg font-semibold">Exam finished</h2>
       <p className="text-sm text-slate-600">{attempt.gradingError || 'Your answers are saved.'}</p>

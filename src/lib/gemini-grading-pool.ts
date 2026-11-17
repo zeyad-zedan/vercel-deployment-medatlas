@@ -40,8 +40,10 @@ export const postgresPoolStore:PoolStore=async(model,change)=>{
   await client.query(`INSERT INTO public.gemini_grading_pool_state(model,state) VALUES($1,'{"keys":{},"projects":{}}'::jsonb) ON CONFLICT(model) DO NOTHING`,[model]);
   const [row]=(await client.query('SELECT state FROM public.gemini_grading_pool_state WHERE model=$1 FOR UPDATE',[model])).rows;
   const [clock]=(await client.query('SELECT extract(epoch FROM clock_timestamp())*1000 AS now')).rows;
+  const before=JSON.stringify(row.state);
   const result=change(row.state,Number(clock.now));
-  await client.query('UPDATE public.gemini_grading_pool_state SET state=$2::jsonb WHERE model=$1',[model,JSON.stringify(row.state)]);
+  const after=JSON.stringify(row.state);
+  if(after!==before)await client.query('UPDATE public.gemini_grading_pool_state SET state=$2::jsonb WHERE model=$1',[model,after]);
   await client.query('COMMIT');
   return result;
  }catch{await client.query('ROLLBACK').catch(()=>{});throw new GradingError('POOL_STORAGE',15);}finally{client.release();}
@@ -55,20 +57,30 @@ function createPoolRequest(store:PoolStore){
    // Keep recent old entries so overlapping deployments share cooldowns; discard expired history.
    for(const [id,key] of Object.entries(state.keys))if(Math.max(key.used,key.until,key.blocked)<now-86400000)delete state.keys[id];
    for(const [id,project] of Object.entries(state.projects))if(Math.max(project.next,project.blocked)<now-86400000)delete state.projects[id];
-   const ready=entries.filter(entry=>{
+   const activeByProject=new Map<string,number>();
+   for(const [id,key] of Object.entries(state.keys)){
+    const project=key.project??entries.find(entry=>entry.id===id)?.project;
+    if(project&&key.until>now)activeByProject.set(project,(activeByProject.get(project)??0)+1);
+   }
+   const eligible=entries.map(entry=>{
     const key=state.keys[entry.id],project=state.projects[entry.project];
-    const active=Object.entries(state.keys).filter(([id,key])=>(key.project??entries.find(other=>other.id===id)?.project)===entry.project&&key.until>now).length;
-    return (!key||Math.max(key.until,key.blocked)<=now)&&(!project||Math.max(project.next,project.blocked)<=now)&&active<entry.concurrency;
-   }).sort((a,b)=>(state.keys[a.id]?.used||0)-(state.keys[b.id]?.used||0)||a.id.localeCompare(b.id));
+    // Leases may be released early. Poll briefly while active, but respect known cooldowns and spacing.
+    const leased=(key?.until??0)>now||(activeByProject.get(entry.project)??0)>=entry.concurrency;
+    const wait=Math.max(leased?1000:0,(key?.blocked??0)-now,(project?.next??0)-now,(project?.blocked??0)-now);
+    return {entry,wait};
+   });
+   const ready=eligible.filter(candidate=>candidate.wait===0).map(candidate=>candidate.entry)
+    .sort((a,b)=>(state.keys[a.id]?.used||0)-(state.keys[b.id]?.used||0)||a.id.localeCompare(b.id));
    const entry=ready[0];
-   if(!entry)return null;
+   if(!entry)return {entry:null,delaySeconds:Math.max(1,Math.ceil(Math.min(...eligible.map(candidate=>candidate.wait))/1000))};
    state.keys[entry.id]={lease,project:entry.project,until:now+30000,used:now,blocked:0};
    state.projects[entry.project]={next:now+Math.ceil(60000/entry.rpm),blocked:state.projects[entry.project]?.blocked||0};
-   return entry;
+   return {entry,delaySeconds:0};
   });
-  if(!claim)throw new GradingError('POOL_BUSY',15);
+  if(!claim.entry)throw new GradingError('POOL_BUSY',claim.delaySeconds);
+  const entry=claim.entry;
   let failure:GradingError|undefined;
-  try{return await request(claim.key,deadline);}
+  try{return await request(entry.key,deadline);}
   catch(error){
    failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
    const code=failure.code==='QUOTA'?'POOL_QUOTA':failure.code==='KEY_OR_ACCESS'?'POOL_ACCESS':failure.code==='MODEL_UNAVAILABLE'?'POOL_MODEL_UNAVAILABLE':failure.code;
@@ -77,32 +89,57 @@ function createPoolRequest(store:PoolStore){
   }finally{
    // Preserve a valid grade even if releasing the lease fails. The 30s lease expires on its own.
    await store(model,(state,now)=>{
-    const key=state.keys[claim.id];
+    const key=state.keys[entry.id];
     if(key?.lease===lease){
      key.until=0;delete key.lease;
-     if(failure)key.blocked=now+(failure.code==='KEY_OR_ACCESS'?600000:Math.max(15,failure.delaySeconds)*1000);
+     if(failure&&failure.code!=='GEMINI_BAD_REQUEST'){
+      key.blocked=now+(['KEY_OR_ACCESS','MODEL_UNAVAILABLE'].includes(failure.code)?600000:Math.max(15,failure.delaySeconds)*1000);
+     }
     }
     if(failure?.code==='QUOTA'){
-     const project=state.projects[claim.project]??{next:0,blocked:0};
+     const project=state.projects[entry.project]??{next:0,blocked:0};
      project.blocked=Math.max(project.blocked,now+Math.max(60,failure.delaySeconds)*1000);
-     state.projects[claim.project]=project;
+     state.projects[entry.project]=project;
     }
    }).catch(()=>{});
   }
  };
 }
 
+async function gradeWithPoolFailover<T>(request: (deadline: number) => Promise<T>) {
+ let attempts = 0;
+ const run = (deadline: number) => { attempts++; return request(deadline); };
+ return gradeWithTemporaryRetry(async deadline => {
+  try {
+   return await run(deadline);
+  } catch (error) {
+   if (!(error instanceof GradingError) ||
+       !['POOL_QUOTA', 'POOL_ACCESS', 'POOL_MODEL_UNAVAILABLE'].includes(error.code) ||
+       attempts > 1 ||
+       deadline - performance.now() < 2000) throw error;
+   try {
+    return await run(deadline);
+   } catch (fallback) {
+    if (fallback instanceof GradingError && fallback.code === 'POOL_BUSY') throw error;
+    // The second provider attempt is final, even if it returns a transient error.
+    if (fallback instanceof GradingError) throw new GradingError(fallback.code, fallback.delaySeconds);
+    throw fallback;
+   }
+  }
+ });
+}
+
 export function createPoolGrader(store:PoolStore=postgresPoolStore,grade=gradeWithGemini){
  const requestInPool=createPoolRequest(store);
  return (question:ShortAnswerDefinition,answer:string,entries=readGradingPool())=>
-  gradeWithTemporaryRetry(deadline=>requestInPool((key,limit)=>grade(key,question,answer,limit),entries,deadline));
+  gradeWithPoolFailover(deadline=>requestInPool((key,limit)=>grade(key,question,answer,limit),entries,deadline));
 }
 export const gradeWithPool=createPoolGrader();
 const requestInPool=createPoolRequest(postgresPoolStore);
 
 export async function gradeWithAvailableCredentials<T>(uid:string,request:(key:string,deadline:number)=>Promise<T>){
  const entries=readGradingPool();
- if(entries.length)return gradeWithTemporaryRetry(deadline=>requestInPool(request,entries,deadline));
+ if(entries.length)return gradeWithPoolFailover(deadline=>requestInPool(request,entries,deadline));
  const {readStudentGeminiKeyForGrading}=await import('./student-gemini-keys.ts');
  const key=await readStudentGeminiKeyForGrading(uid);
  if(!key)throw new GradingError('KEY_MISSING');

@@ -25,7 +25,17 @@ export function practicalMockRouter(requireAdmin: RequestHandler) {
     handle(async (req, res) => res.status(201).json({ id: await publishPracticalMock(req.body) })));
   router.get('/:id', handle(async (req, res) => res.json(await readPracticalMock(req.user!.uid, req.params.id))));
   router.post('/:id/start', handle(async (req, res) => res.json(await startPracticalMock(req.user!.uid, req.params.id))));
-  router.put('/:id/answer', handle(async (req, res) => res.json(await savePracticalMockAnswer(req.user!.uid, req.params.id, req.body))));
+  router.put('/:id/answer', handle(async (req, res) => {
+    const authMs = Math.round(performance.now() - res.locals.practicalMockRequestStarted);
+    const { revision, poolMs, databaseMs } = await savePracticalMockAnswer(
+      req.user!.uid, req.params.id, req.body, res.locals.practicalMockReceivedAt,
+    );
+    if (Number.isFinite(authMs)) {
+      res.set('Server-Timing', `auth;dur=${authMs}, pool;dur=${poolMs}, db;dur=${databaseMs}`);
+      if (authMs + poolMs + databaseMs >= 750) console.info('[practical-save] slow acknowledgement', { authMs, poolMs, databaseMs });
+    }
+    res.json({ revision });
+  }));
   router.post('/:id/skip', handle(async (req, res) => res.json(await skipPracticalMock(req.user!.uid, req.params.id, req.body))));
   router.post('/:id/grade', handle(async (req, res) => res.json(await gradePracticalMock(req.user!.uid, req.params.id))));
   return router;

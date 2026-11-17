@@ -5,7 +5,9 @@ import 'dotenv/config';
 import {impulseRouter} from './src/lib/impulse-routes.ts';
 import {shortAnswerRouter} from './src/lib/short-answer-routes.ts';
 import { practicalMockRouter } from './src/lib/practical-mock-routes.ts';
+import { runPracticalMockGrading } from './src/db/practical-mock.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { protectDocumentFields, documentReferenceForStorage } from './src/lib/protected-document-reference.ts';
@@ -657,7 +659,32 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
 });
 
 app.use('/api/short-answers', requireAuth, shortAnswerRouter);
-app.use('/api/practical-mocks', requireAuth, practicalMockRouter(requireAdmin));
+app.use('/api/practical-mocks', (_req, res, next) => {
+  res.locals.practicalMockReceivedAt = Date.now();
+  res.locals.practicalMockRequestStarted = performance.now();
+  next();
+}, requireAuth, practicalMockRouter(requireAdmin));
+
+app.get('/api/cron/practical-mock-grading', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  const secret = process.env.PRACTICAL_GRADING_CRON_SECRET;
+  const timestamp = req.get('X-MedAtlas-Grading-Timestamp') ?? '';
+  const signature = req.get('X-MedAtlas-Grading-Signature') ?? '';
+  if (!secret || !/^\d{10}$/.test(timestamp) || !/^[a-f0-9]{64}$/.test(signature) ||
+      Math.abs(Date.now() - Number(timestamp) * 1000) > 120_000) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  const expected = createHmac('sha256', secret).update(timestamp).digest();
+  if (!timingSafeEqual(Buffer.from(signature, 'hex'), expected)) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  try {
+    return res.json(await runPracticalMockGrading());
+  } catch (error) {
+    console.error('[practical-grading] worker failed', { code: (error as { code?: string })?.code });
+    return res.status(500).json({ error: 'Grading will resume on the next run.' });
+  }
+});
 
 app.all('/api/auth/gemini-key', requireAuth, async (req: AuthRequest, res) => {
   res.setHeader('Cache-Control','no-store');

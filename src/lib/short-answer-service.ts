@@ -11,6 +11,7 @@ export const gradingMessages:Record<string,string>={KEY_MISSING:'Add your Gemini
 Object.assign(gradingMessages,{POOL_BUSY:'Grading is busy or cooling down. Your answer is saved; retry shortly.',POOL_QUOTA:'The grading service has reached its Google quota. Your answer is saved; retry later.',POOL_ACCESS:'A grading credential needs administrator attention. Your answer is saved; retry shortly.',POOL_CONFIG:'The grading service needs administrator setup. Your answer is saved.',POOL_RETRY:'Shared grading is now available. Retry grading your saved answer.',POOL_MODEL_UNAVAILABLE:'The grading model needs administrator attention. Your answer is saved.'});
 Object.assign(gradingMessages,{
  GEMINI_UNAVAILABLE:'Google grading is temporarily unavailable. Your answer is saved.',
+ GEMINI_BAD_REQUEST:'The grading request needs administrator attention. Your answer is saved.',
  POOL_STORAGE:'Grading is temporarily unavailable. Your answer is saved.',
 });
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');

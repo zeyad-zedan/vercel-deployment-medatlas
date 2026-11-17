@@ -51,12 +51,22 @@ async function requestGeminiGrade<T>(apiKey: string, deadline: number, input: un
     const retry=response.headers.get('retry-after');
     const retryAfterMs=retry&&/^\d+(?:\.\d+)?$/.test(retry)?Number(retry)*1000:retry?Date.parse(retry)-Date.now():0;
     const retrySeconds=Number.isFinite(retryAfterMs)?Math.max(0,Math.min(Math.ceil(retryAfterMs/1000),86400)):0;
+    // Google can report an invalid key as HTTP 400. Other bad requests belong
+    // to the payload and should not quarantine otherwise usable credentials.
+    if (response.status === 400) {
+      const body = await response.json().catch(() => null);
+      const details = body?.error?.details;
+      if (Array.isArray(details) && details.some(detail => detail?.reason === 'API_KEY_INVALID')) {
+        throw new GradingError('KEY_OR_ACCESS', 15);
+      }
+      throw new GradingError('GEMINI_BAD_REQUEST', 60);
+    }
     await response.body?.cancel().catch(()=>{});
     if(response.status===429)throw new GradingError('QUOTA',Math.max(60,retrySeconds));
     if([500,502,503,504].includes(response.status)){
       throw new GradingError('GEMINI_UNAVAILABLE',Math.max(15,retrySeconds),Math.max(0,retryAfterMs||0));
     }
-    throw new GradingError(response.status===400||response.status===401||response.status===403?'KEY_OR_ACCESS':response.status===404?'MODEL_UNAVAILABLE':'GEMINI_UNAVAILABLE',15);
+    throw new GradingError(response.status===401||response.status===403?'KEY_OR_ACCESS':response.status===404?'MODEL_UNAVAILABLE':'GEMINI_UNAVAILABLE',15);
   }
   try{
     const data=await response.json();
