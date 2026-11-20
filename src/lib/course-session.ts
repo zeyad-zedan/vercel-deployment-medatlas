@@ -139,20 +139,6 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     }),
     completeSession:()=>serial(async()=>{
       await courseRequest(slug,'/submit',{});
-      if(data.gradeOnSubmit){
-        // Answers are already finalized on the server. Grade pending written answers in reliable chunks.
-        const hasPending=data.states.some(s=>s.type==='short_answer'&&s.answered&&s.score===null);
-        if(hasPending){
-          try{
-            const first=await courseRequest(slug,'/grade-all',{});
-            if(Number(first?.remaining)>0){
-              await courseRequest(slug,'/grade-all',{});
-            }
-          }catch{
-            /* Saved answers remain available for retry after submission. */
-          }
-        }
-      }
       const wasGradeOnSubmit=Boolean(data.gradeOnSubmit);
       const next:CourseSession=await courseRequest(slug,`/session?offset=${Math.floor(position/6)*6}&states=1`);
       data={...data,...next,states:next.states||data.states};
