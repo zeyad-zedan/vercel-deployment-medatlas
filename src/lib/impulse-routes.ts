@@ -116,7 +116,7 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradePriva
    COALESCE(a.result->>'_modelAnswer',q.definition->>'model_answer') AS model_answer,
    (a.result->>'_modelAnswer' IS NOT NULL AND a.result->>'_modelAnswer' IS DISTINCT FROM q.definition->>'model_answer') AS guide_changed,a.status
    FROM impulse.questions q LEFT JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$2 WHERE q.version_id=$1 AND q.position >=$3 AND q.position <$3+6 ORDER BY q.position`,[a.version_id,a.id,offset])).rows;
-  if(!a.completed){for(const row of rows)if(!row.result)row.model_answer=null;}
+  if(!a.completed){for(const row of rows)if(!row.result&&!(typeof row.answer==='string'&&row.answer.trim()))row.model_answer=null;}
   if(a.grade_on_submit&&!a.completed){for(const state of states)state.score=null;for(const row of rows){row.result=null;row.study_feedback=null;row.model_answer=null;row.guide_changed=false;}}
   res.json({gradeOnSubmit:a.grade_on_submit,attemptId:a.id,versionId:a.version_id,title:a.title,total:count,current:a.current_position,completed:a.completed,studentUid:(req as AuthRequest).user!.uid,...(includeStates?{states}:{}),questions:rows});
  }));
@@ -135,8 +135,9 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradePriva
   const client=await pool.connect();try{await client.query('BEGIN');const locked=(await client.query('SELECT completed FROM impulse.attempts WHERE id=$1 FOR UPDATE',[a.id])).rows[0];required(!locked.completed,'This quiz is submitted. Your answers are preserved.',409);
    await client.query(`INSERT INTO impulse.answers(attempt_id,question_id,answer) VALUES($1,$2,$3) ON CONFLICT(attempt_id,question_id) DO UPDATE SET answer=excluded.answer,result=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.result ELSE NULL END,status=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.status ELSE 'saved' END,lease=CASE WHEN impulse.answers.answer=excluded.answer THEN impulse.answers.lease ELSE NULL END,updated_at=now()`,[a.id,req.params.id,JSON.stringify(answer)]);
    const result=q.type==='mcq'&&!a.grade_on_submit?{score:answer===q.correct?1:0,maxScore:1,feedback:q.explanation,correctAnswer:q.options[q.correct],correctOption:q.correct}:null;
+   const modelAnswer=q.type==='short_answer'&&!a.grade_on_submit&&typeof answer==='string'&&answer.trim()?q.model_answer:undefined;
    if(result)await client.query("UPDATE impulse.answers SET result=$3,status='graded' WHERE attempt_id=$1 AND question_id=$2",[a.id,req.params.id,JSON.stringify(result)]);
-   await client.query('UPDATE impulse.attempts SET current_position=$2,updated_at=now() WHERE id=$1',[a.id,row.position]);await client.query('COMMIT');res.json({ok:true,...(result?{result}:{})});
+   await client.query('UPDATE impulse.attempts SET current_position=$2,updated_at=now() WHERE id=$1',[a.id,row.position]);await client.query('COMMIT');res.json({ok:true,...(result?{result}:{}),...(modelAnswer?{modelAnswer}:{})});
   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
  }));
  r.post('/api/impulse/quiz/:slug/grade/:id',limit('grade',60),wrap(async(req,res)=>{

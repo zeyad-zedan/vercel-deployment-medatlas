@@ -103,9 +103,10 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
       const state=stateFor(id);if(state.type!=='short_answer')throw Error('Question not available.');
       const text=answer.trim().normalize('NFC'),row=rows.get(state.id),same=row?.answer===text;
       if(same&&row)return {session:summary(),attempt:attempt(row)};
-      await courseRequest(slug,`/answer/${state.id}`,{answer:text},true);
-      const saved=update(state,text,same?row?.result:null);
-      return {session:summary(),attempt:saved?attempt(saved):{answer:text,status:'saved',maxScore:Number(state.max_marks)}};
+      const res=await courseRequest(slug,`/answer/${state.id}`,{answer:text},true);
+      const modelAnswer=typeof res?.modelAnswer==='string'?res.modelAnswer:undefined;
+      const saved=update(state,text,same?row?.result:null,modelAnswer);
+      return {session:summary(),attempt:saved?attempt(saved):{answer:text,status:'saved',maxScore:Number(state.max_marks),...(modelAnswer?{modelAnswer}:{})}};
     }),
     gradeQuizShortAnswer:async(_id,id)=>{
       await queue.catch(()=>{});
