@@ -1,5 +1,5 @@
 import {quizScore,QUIZ_TOTALS_SQL,sqlQuizSummary,type QuizShortAnswerState} from '../lib/quiz-scoring.ts';
-import {quizShortAnswerAttempts} from '../lib/mixed-quiz-short-answers.ts';
+import {quizShortAnswerAttempts,quizShortAnswerModelAnswers} from '../lib/mixed-quiz-short-answers.ts';
 import {syncShortAnswerQuizEntries} from '../lib/short-answer-quiz-links.ts';
 import { matchingGrade, type MatchingQuestionDefinition } from '../lib/matching-questions.ts';
 import { parseAndValidateJsonQuestions, type JsonQuestionRow } from '../lib/json-import.ts';
@@ -3441,7 +3441,10 @@ export async function getExamSessionForStudent(
     }
 
     const isExamActive = session.mode === 'exam' && session.status === 'in_progress';
-    const shortAttempts=await quizShortAnswerAttempts(userUid,windowItems,isExamActive);
+    const [shortAttempts,shortModelAnswers]=await Promise.all([
+      quizShortAnswerAttempts(userUid,windowItems,isExamActive),
+      session.status==='completed'?quizShortAnswerModelAnswers(windowItems,isExamActive):Promise.resolve(new Map<number,string>()),
+    ]);
 
     const formattedQuestions = orderItems
       .map((item, idx) => {
@@ -3470,6 +3473,7 @@ export async function getExamSessionForStudent(
           return {id:item.questionId,index,contentLoaded:true,questionType:'short_answer',shortAnswerId:item.shortAnswerId,maxMarks,
             questionText:source.questionText,images:source.images||[],tags:source.tags||'',specialTags:source.specialTags||'',subjectTitle:sMap.get(liveQ?.subjectId)||snapshot?.subjectTitle,lectureTitle:lMap.get(liveQ?.lectureId)||snapshot?.lectureTitle,
             lecturePdfUrl:liveQ?lPdfMap.get(liveQ.lectureId):null,shortAnswerAttempt:attempt,shortAnswerStatus,shortAnswerScore,hasSavedAnswer:!!item.shortAnswerAttemptId,
+            ...(session.status==='completed'&&!isExamActive?{modelAnswer:attempt?.modelAnswer||shortModelAnswers.get(item.shortAnswerId)||'',showModelAnswer:true}:{}),
             selectedDisplayed,correctDisplayedOption:isExamActive?undefined:'A',submitted:item.submitted,isBookmarked:bookmarkedSet.has(item.questionId)};
         }
         const canonicalQ: CanonicalQuestion = {

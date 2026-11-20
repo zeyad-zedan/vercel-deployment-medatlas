@@ -7,9 +7,17 @@ const validId=(value:unknown)=>{const n=Number(value);if(!Number.isSafeInteger(n
 export async function quizShortAnswerAttempts(uid:string,items:any[],examActive:boolean){
  const ids=items.map(item=>item.shortAnswerAttemptId).filter(Boolean);if(!ids.length)return new Map<number,any>();
  const rows=(await pool.query(`SELECT id,question_id,answer,status,result,model,created_at,retry_at,error_code,
- jsonb_build_object('question_text',snapshot->>'question_text','images',COALESCE(snapshot->'images','[]'::jsonb),'model_answer',CASE WHEN status='graded' AND NOT $3 THEN snapshot->>'model_answer' ELSE NULL END) AS snapshot
+ jsonb_build_object('question_text',snapshot->>'question_text','images',COALESCE(snapshot->'images','[]'::jsonb),'model_answer',CASE WHEN NOT $3 THEN snapshot->>'model_answer' ELSE NULL END) AS snapshot
  FROM public.short_answer_attempts WHERE user_uid=$1 AND id=ANY($2::integer[])`,[uid,ids,examActive])).rows;
  return new Map(rows.map(row=>{const value=publicShortAnswerAttempt(row);return [row.id,examActive?{...value,status:'saved',result:null,model:null,error:null,modelAnswer:undefined}:value];}));
+}
+
+export async function quizShortAnswerModelAnswers(items:any[],examActive:boolean){
+ if(examActive)return new Map<number,string>();
+ const ids=[...new Set(items.map(item=>item.shortAnswerId).filter(Boolean))];
+ if(!ids.length)return new Map<number,string>();
+ const rows=(await pool.query(`SELECT id, definition->>'model_answer' AS model_answer FROM public.short_answer_questions WHERE id=ANY($1::integer[])`,[ids])).rows;
+ return new Map<number,string>(rows.filter(r=>r.model_answer).map(r=>[Number(r.id),String(r.model_answer)]));
 }
 
 async function lockQuestion(client:any,uid:string,sessionId:number,questionId:number){
