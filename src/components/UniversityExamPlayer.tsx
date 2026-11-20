@@ -85,7 +85,86 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
   const currentQ = questions[currentIndex] || null;
 
   const localSelectionsRef = useRef(localSelections);
-  const handleShortAnswer=(question:any,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===question.maxMarks?'A':'B'):'C';setLocalSelections(previous=>{const next={...previous,[question.id]:pick};localSelectionsRef.current=next;return next;});const updated={...question,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||question.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick};setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===question.id?updated:q)}));setReviewingQuestion((previous:any)=>previous?.id===question.id?updated:previous);};
+  const applyShortAnswer = (id: number, result: any, fallbackMaxMarks?: number) => {
+    const attempt = result?.attempt;
+    if (!attempt) {
+      setLocalSelections((previous) => {
+        const { [id]: _removed, ...rest } = previous;
+        localSelectionsRef.current = rest;
+        return rest;
+      });
+      setSession((previous: any) => ({
+        ...previous,
+        ...result?.session,
+        questions: previous.questions.map((q: any) =>
+          q.id === id
+            ? {
+                ...q,
+                shortAnswerAttempt: null,
+                shortAnswerStatus: 'cleared',
+                shortAnswerScore: null,
+                hasSavedAnswer: false,
+                selectedDisplayed: null,
+              }
+            : q
+        ),
+      }));
+      setReviewingQuestion((previous: any) =>
+        previous?.id === id
+          ? {
+              ...previous,
+              shortAnswerAttempt: null,
+              shortAnswerStatus: 'cleared',
+              shortAnswerScore: null,
+              hasSavedAnswer: false,
+              selectedDisplayed: null,
+            }
+          : previous
+      );
+      return;
+    }
+    const maxMarks = attempt.maxScore || fallbackMaxMarks || 1;
+    const pick = attempt.status === 'graded' ? (attempt.result?.score === maxMarks ? 'A' : 'B') : 'C';
+    setLocalSelections((previous) => {
+      const next = { ...previous, [id]: pick };
+      localSelectionsRef.current = next;
+      return next;
+    });
+    setSession((previous: any) => ({
+      ...previous,
+      ...result?.session,
+      questions: previous.questions.map((q: any) => {
+        if (q.id !== id) return q;
+        const qMax = attempt.maxScore || q.maxMarks || 1;
+        const qPick = attempt.status === 'graded' ? (attempt.result?.score === qMax ? 'A' : 'B') : 'C';
+        return {
+          ...q,
+          shortAnswerAttempt: attempt,
+          shortAnswerStatus: attempt.status,
+          shortAnswerScore: attempt.result?.score,
+          maxMarks: qMax,
+          hasSavedAnswer: true,
+          selectedDisplayed: qPick,
+        };
+      }),
+    }));
+    setReviewingQuestion((previous: any) => {
+      if (previous?.id !== id) return previous;
+      const qMax = attempt.maxScore || previous.maxMarks || 1;
+      const qPick = attempt.status === 'graded' ? (attempt.result?.score === qMax ? 'A' : 'B') : 'C';
+      return {
+        ...previous,
+        shortAnswerAttempt: attempt,
+        shortAnswerStatus: attempt.status,
+        shortAnswerScore: attempt.result?.score,
+        maxMarks: qMax,
+        hasSavedAnswer: true,
+        selectedDisplayed: qPick,
+      };
+    });
+  };
+  const handleShortAnswer = (question: any, result: any) => applyShortAnswer(question.id, result, question.maxMarks);
+  useEffect(() => textSaves.subscribeSaved?.((id, result) => applyShortAnswer(id, result)), [textSaves]);
   useEffect(() => {
     if (currentQ?.id) rememberSessionQuestion(session.id, currentQ.id, currentIndex);
   }, [session.id, currentQ?.id, currentIndex]);
@@ -199,7 +278,12 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
         session.timeLimitSeconds !== null
           ? Math.max(0, session.timeLimitSeconds - rem)
           : 60;
-      if (rem > 0) {await saves.flush();await textSaves.flush();}
+      if (rem > 0) {
+        await saves.flush();
+        await textSaves.flush();
+      } else {
+        await Promise.allSettled([saves.flush(), textSaves.flush()]);
+      }
       const res = await api.completeSession(session.id, localSelectionsRef.current, elapsed);
       saves.finish();
       setSession(res.session);
@@ -397,12 +481,13 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                   const userPick = q.matchingChoiceId ? q.selectedDisplayed : localSelections[q.id] || q.selectedDisplayed;
                   const isCorrect = userPick && userPick === q.correctDisplayedOption;
                   const isUnanswered = !userPick;
+                  const isPendingShortAnswer = q.questionType === 'short_answer' && q.shortAnswerStatus !== 'graded' && q.hasSavedAnswer;
 
                   return (
                     <tr
                       key={q.id}
                       className={`hover:bg-slate-50 transition-colors ${
-                        isUnanswered
+                        isPendingShortAnswer || isUnanswered
                           ? 'bg-[#fff8e3]/40'
                           : isCorrect
                           ? 'bg-[#f3fbf6]/50'
@@ -414,15 +499,16 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       </td>
                       <td className="py-3 px-4 text-center">
                         <span
+                          title={isPendingShortAnswer ? 'Pending grading' : undefined}
                           className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-white font-bold text-xs ${
-                            isUnanswered
+                            isPendingShortAnswer || isUnanswered
                               ? 'bg-[#b08b1e]'
                               : isCorrect
                               ? 'bg-[#20a95b]'
                               : 'bg-[#d9534f]'
                           }`}
                         >
-                          {q.questionType==='short_answer'&&q.shortAnswerStatus!=='graded'&&q.hasSavedAnswer?'Pending':isUnanswered ? '—' : isCorrect ? '✓' : '✗'}
+                          {isPendingShortAnswer ? '…' : isUnanswered ? '—' : isCorrect ? '✓' : '✗'}
                         </span>
                       </td>
                       <td className="py-3 px-4 max-w-xs font-semibold text-slate-800">
@@ -447,7 +533,7 @@ export const UniversityExamPlayer: React.FC<UniversityExamPlayerProps> = ({
                       </td>
                       <td className="py-3 px-4 font-mono-tabular font-bold text-slate-700">
                         {userPick ? (
-                          <span className={isCorrect ? 'text-[#20a95b]' : 'text-[#d9534f]'}>
+                          <span className={isCorrect ? 'text-[#20a95b]' : isPendingShortAnswer ? 'text-[#b08b1e]' : 'text-[#d9534f]'}>
                             {q.questionType==='short_answer'?(q.shortAnswerStatus==='graded'?`${q.shortAnswerScore??q.shortAnswerAttempt?.result?.score??0}/${q.maxMarks} marks`:'Saved · awaiting grading'):q.questionType==='matching' ? q.matching?.choices.find((choice:any)=>choice.id===q.matchingChoiceId)?.text || 'Answered' : userPick}
                           </span>
                         ) : (

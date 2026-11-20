@@ -10,7 +10,7 @@ import { PracticalMockView } from './components/PracticalMockView.tsx';
 import TournamentsView from './components/TournamentsView.tsx';
 import { WorkspacePageBoundary } from './components/WorkspacePageBoundary.tsx';
 import { InstallMedAtlas } from './components/InstallMedAtlas.tsx';
-import {courseQuizSlug} from './lib/course-quiz-route.ts';
+import {courseQuizSlug,guestCourseSlug} from './lib/course-quiz-route.ts';
 import {setAuthToken} from './lib/api.ts';
 import {catalogByContentType} from './lib/lecture-kinds.ts';
 import {subjectLibraryTab} from './lib/subject-library.ts';
@@ -498,6 +498,10 @@ export default function App() {
     invalidateBookmarks();
     await loadStudentWorkspaceData(true);
   };
+
+  if (!user && activeTab === 'course-quiz' && privateSlug === guestCourseSlug) {
+    return <main className="ma-workspace min-h-screen bg-slate-50 p-4 sm:p-8"><div className="mx-auto max-w-5xl"><p className="mb-6 text-xl font-bold">MedAtlas</p><Suspense fallback={<p role="status">Opening exam…</p>}><CourseQuizView slug={privateSlug} guestAccess onSignIn={()=>{setAuthToken(null);setUser(null);}}/></Suspense></div></main>;
+  }
 
   if (authConnectionError) {
     return <main className="ma-workspace min-h-screen flex items-center justify-center p-6">

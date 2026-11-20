@@ -1,4 +1,5 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+import {test,after} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+after(async()=>{const {pool}=await import('../db/index.ts');await pool.end();});
 test('private quizzes require passwords, preserve versions and resume answers without exposing marking guides',async()=>{
  assert.equal(new URL(process.env.DATABASE_URL!).port,'56350','Use the isolated Impulse test database only.');
  process.env.NODE_ENV='test';process.env.AUTH_SESSION_SECRET='isolated_impulse_test_secret_at_least_32_chars';
@@ -72,6 +73,103 @@ test('private quizzes require passwords, preserve versions and resume answers wi
   const grants=(await pool.query("SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema='impulse' AND grantee IN ('anon','authenticated','PUBLIC')")).rows[0].n;assert.equal(grants,0);
  }finally{
   await new Promise<void>(r=>http.close(()=>r()));
-  for(const id of ids){await pool.query('DELETE FROM impulse.answers WHERE attempt_id IN(SELECT id FROM impulse.attempts WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.attempts WHERE quiz_id=$1',[id]);await pool.query('UPDATE impulse.quizzes SET published_version=NULL WHERE id=$1',[id]);await pool.query('DELETE FROM impulse.questions WHERE version_id IN(SELECT id FROM impulse.versions WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.versions WHERE quiz_id=$1',[id]);await pool.query('DELETE FROM impulse.quizzes WHERE id=$1',[id]);}await pool.end();
+  for(const id of ids){await pool.query('DELETE FROM impulse.answers WHERE attempt_id IN(SELECT id FROM impulse.attempts WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.attempts WHERE quiz_id=$1',[id]);await pool.query('UPDATE impulse.quizzes SET published_version=NULL WHERE id=$1',[id]);await pool.query('DELETE FROM impulse.questions WHERE version_id IN(SELECT id FROM impulse.versions WHERE quiz_id=$1)',[id]);await pool.query('DELETE FROM impulse.versions WHERE quiz_id=$1',[id]);await pool.query('DELETE FROM impulse.quizzes WHERE id=$1',[id]);}
+ }
+});
+
+test('C5 & H3: shared campus NAT guests can all unlock with valid password while brute-force hits 429, guest_name locks on submit, and grade TOCTOU/errorCode stay safe',async()=>{
+ assert.equal(new URL(process.env.DATABASE_URL!).port,'56350','Use the isolated Impulse test database only.');
+ process.env.NODE_ENV='test';process.env.AUTH_SESSION_SECRET='isolated_impulse_test_secret_at_least_32_chars';
+ const {hashPasswordAsync}=await import('../middleware/auth.ts');
+ const {pool}=await import('../db/index.ts'),{impulseRouter}=await import('./impulse-routes.ts'),{default:express}=await import('express');
+ const {guestCourseSlug}=await import('./course-quiz-route.ts');
+ let gradeCalls=0,gradeMode:'ok'|'crash'='ok';
+ let releaseGrade!:()=>void;const gradeGate=new Promise<void>(r=>{releaseGrade=r;});
+ const app=express();
+ app.use(impulseRouter(null,async(question)=>{
+  gradeCalls++;
+  if(gradeMode==='crash')throw Object.assign(new Error('pg crash'),{code:'ECONNREFUSED'});
+  await gradeGate;
+  return {model:'test',grade:{score:1,maxScore:1,feedback:'OK',points:question.rubric.map(p=>({...p,awarded:1,feedback:'OK'}))}};
+ },(_req,res)=>void res.status(401).json({error:'Auth required'})));
+ const http=app.listen(0,'127.0.0.1');await new Promise<void>(r=>http.once('listening',r));
+ const origin='http://127.0.0.1:'+(http.address() as any).port;
+ const req=(p:string,body?:any,cookie='')=>fetch(origin+'/api/impulse'+p,{
+  method:body===undefined?'GET':'POST',
+  headers:{Cookie:cookie,'Content-Type':'application/json','X-Impulse-Request':'1'},
+  body:body===undefined?undefined:JSON.stringify(body),
+ }).then(async r=>({status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]||''}));
+ const prevRow=(await pool.query('SELECT id FROM impulse.quizzes WHERE slug=$1',[guestCourseSlug])).rows[0];
+ let createdQuizId:string|null=null;
+ try{
+  if(!prevRow){
+   const pwHash=await hashPasswordAsync('Campus-Pass-2026');
+   const q=(await pool.query('INSERT INTO impulse.quizzes(title,slug,password_hash,draft) VALUES($1,$2,$3,$4) RETURNING id',['C5 Campus Guest Quiz',guestCourseSlug,pwHash,JSON.stringify([{type:'short_answer',text:'Name femur',rubric:[{description:'Femur',marks:1}]}])])).rows[0];
+   createdQuizId=q.id;
+   const ver=randomUUID();
+   await pool.query('INSERT INTO impulse.versions(id,quiz_id) VALUES($1,$2)',[ver,q.id]);
+   await pool.query('INSERT INTO impulse.questions(id,version_id,position,definition) VALUES($1,$2,0,$3)',[randomUUID(),ver,JSON.stringify({type:'short_answer',text:'Name femur',model_answer:'Femur',rubric:[{description:'Femur',marks:1}]})]);
+   await pool.query('UPDATE impulse.quizzes SET published_version=$2 WHERE id=$1',[q.id,ver]);
+  }
+  const activeQuiz=(await pool.query('SELECT id,published_version FROM impulse.quizzes WHERE slug=$1',[guestCourseSlug])).rows[0];
+  const testPassword='Campus-Pass-2026';
+  const origHash=prevRow?(await pool.query('SELECT password_hash FROM impulse.quizzes WHERE id=$1',[activeQuiz.id])).rows[0].password_hash:null;
+  if(prevRow)await pool.query('UPDATE impulse.quizzes SET password_hash=$2 WHERE id=$1',[activeQuiz.id,await hashPasswordAsync(testPassword)]);
+  try{
+   // C5: 12 distinct guests on the SAME campus NAT IP (127.0.0.1) ALL unlock with valid password!
+   const cookies:string[]=[];
+   for(let i=0;i<12;i++){
+    const u=await req(`/quiz/${guestCourseSlug}/unlock`,{password:testPassword,name:`Campus Student ${i}`});
+    assert.equal(u.status,200,`C5: guest #${i+1} behind shared campus IP must unlock without 429`);
+    cookies.push(u.cookie);
+   }
+   // C5: Wrong-password brute-force from same IP triggers 429 after 10 failures
+   let saw429=false;
+   for(let i=0;i<12;i++){
+    const bad=await req(`/quiz/${guestCourseSlug}/unlock`,{password:'Wrong-Password',name:'Attacker'});
+    if(bad.status===429){saw429=true;break;}
+   }
+   assert.equal(saw429,true,'C5: wrong-password brute-force must still trigger 429');
+
+   // H3: Concurrent /grade/:id cannot double-grade, and non-GradingError code never leaks
+   const sess=(await req(`/quiz/${guestCourseSlug}/session`,undefined,cookies[0])).data;
+   const qid=sess.questions[0].id;
+   await req(`/quiz/${guestCourseSlug}/answer/${qid}`,{answer:'Femur'},cookies[0]);
+   const [g1,g2]=await Promise.all([
+    req(`/quiz/${guestCourseSlug}/grade/${qid}`,{},cookies[0]),
+    (async()=>{await new Promise(r=>setTimeout(r,20));const res=await req(`/quiz/${guestCourseSlug}/grade/${qid}`,{},cookies[0]);releaseGrade();return res;})(),
+   ]);
+   assert.equal(g1.status,200);
+   assert.ok(g2.status===409||g2.status===200);
+   assert.equal(gradeCalls,1,'H3: concurrent grade requests must invoke grader only once');
+
+   // H3: Non-GradingError exception maps to UNAVAILABLE, never leaking internal error code like ECONNREFUSED
+   const sess2=(await req(`/quiz/${guestCourseSlug}/session`,undefined,cookies[1])).data;
+   await req(`/quiz/${guestCourseSlug}/answer/${sess2.questions[0].id}`,{answer:'Femur'},cookies[1]);
+   gradeMode='crash';
+   const crashed=await req(`/quiz/${guestCourseSlug}/grade/${sess2.questions[0].id}`,{},cookies[1]);
+   assert.equal(crashed.status,503);
+   assert.equal(crashed.data.errorCode,'UNAVAILABLE','H3: internal DB/network error codes must not leak as errorCode');
+
+   // C5/H3: Submitted guest_name cannot be overwritten via /unlock
+   await req(`/quiz/${guestCourseSlug}/submit`,{},cookies[0]);
+   await req(`/quiz/${guestCourseSlug}/unlock`,{password:testPassword,name:'Impersonated Name'},cookies[0]);
+   const storedName=(await pool.query('SELECT guest_name FROM impulse.attempts WHERE id=$1',[sess.attemptId])).rows[0].guest_name;
+   assert.equal(storedName,'Campus Student 0','Completed attempt guest_name must not be overwritten');
+  }finally{
+   if(origHash)await pool.query('UPDATE impulse.quizzes SET password_hash=$2 WHERE id=$1',[activeQuiz.id,origHash]);
+   await pool.query("DELETE FROM impulse.answers WHERE attempt_id IN (SELECT id FROM impulse.attempts WHERE quiz_id=$1 AND guest_name LIKE 'Campus Student %')",[activeQuiz.id]);
+   await pool.query("DELETE FROM impulse.attempts WHERE quiz_id=$1 AND guest_name LIKE 'Campus Student %'",[activeQuiz.id]);
+  }
+ }finally{
+  await new Promise<void>(r=>http.close(()=>r()));
+  if(createdQuizId){
+   await pool.query('DELETE FROM impulse.answers WHERE attempt_id IN(SELECT id FROM impulse.attempts WHERE quiz_id=$1)',[createdQuizId]);
+   await pool.query('DELETE FROM impulse.attempts WHERE quiz_id=$1',[createdQuizId]);
+   await pool.query('UPDATE impulse.quizzes SET published_version=NULL WHERE id=$1',[createdQuizId]);
+   await pool.query('DELETE FROM impulse.questions WHERE version_id IN(SELECT id FROM impulse.versions WHERE quiz_id=$1)',[createdQuizId]);
+   await pool.query('DELETE FROM impulse.versions WHERE quiz_id=$1',[createdQuizId]);
+   await pool.query('DELETE FROM impulse.quizzes WHERE id=$1',[createdQuizId]);
+  }
  }
 });

@@ -6,7 +6,7 @@ export function questionBatchOffset(index: number) {
 
 /** Study content already includes explanations; retain it when submission returns a paged review. */
 export function mergeCompletedStudy(previous: any, completed: any) {
-  if (previous.id !== completed.id || previous.mode === 'exam' || !completed.questionBatch) return completed;
+  if (previous.id !== completed.id || previous.mode === 'exam' || (previous.privateQuiz && previous.gradeOnSubmit) || !completed.questionBatch) return completed;
   const loaded = new Map(previous.questions.filter((q: any) => q.contentLoaded !== false&&q.questionType!=='short_answer').map((q: any) => [q.id, q]));
   return { ...completed, questions: completed.questions.map((q: any) => q.contentLoaded === false && loaded.has(q.id)
     ? { ...(loaded.get(q.id) as any), ...q, contentLoaded: true } : q) };
@@ -21,6 +21,7 @@ export function mergeQuestionBatch(previous: any, incoming: any) {
     const loaded: any = byId.get(q.id);
     if (!loaded || q.contentLoaded !== false) return q;
     return { ...loaded, ...(q.selectedDisplayed || q.submitted ? { selectedDisplayed: q.selectedDisplayed, submitted: q.submitted, matchingChoiceId: q.matchingChoiceId ?? loaded.matchingChoiceId } : {}),
+      ...(q.shortAnswerAttempt ? { shortAnswerAttempt: q.shortAnswerAttempt, shortAnswerStatus: q.shortAnswerStatus ?? loaded.shortAnswerStatus, shortAnswerScore: q.shortAnswerScore ?? loaded.shortAnswerScore, hasSavedAnswer: q.hasSavedAnswer ?? true, ...(q.answerCorrect !== undefined ? { answerCorrect: q.answerCorrect } : {}) } : {}),
       ...(q.isBookmarked !== undefined ? { isBookmarked: q.isBookmarked } : {}) };
   }) };
 }

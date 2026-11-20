@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { db, examSessions, users, questionAttempts } from '../src/db/index.ts';
-import { desc, gte, eq, count, and, isNotNull } from 'drizzle-orm';
+import { db, examSessions, users, questionAttempts, shortAnswerAttempts, pool } from '../src/db/index.ts';
+import { desc, gte, eq, count, and, or, isNotNull, sql } from 'drizzle-orm';
 
 const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
 const configuredChannelId = process.env.TELEGRAM_CHANNEL_ID?.trim();
@@ -18,7 +18,7 @@ if (!token) {
 export async function buildActivityReportChunks(hours: number = 6): Promise<string[]> {
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-  const [sessions, newUsers, attemptsAgg] = await Promise.all([
+  const [sessions, newUsers, attemptsAgg, shortAnswers, practicalStations] = await Promise.all([
     db
       .select({
         id: examSessions.id,
@@ -49,11 +49,22 @@ export async function buildActivityReportChunks(hours: number = 6): Promise<stri
     db
       .select({
         isCorrect: questionAttempts.isCorrect,
+        isMatching: sql<boolean>`${questionAttempts.matchingChoiceId} IS NOT NULL`,
         count: count(),
       })
       .from(questionAttempts)
-      .where(and(gte(questionAttempts.answeredAt, since), isNotNull(questionAttempts.selectedOption)))
-      .groupBy(questionAttempts.isCorrect),
+      .where(and(gte(questionAttempts.answeredAt, since), or(isNotNull(questionAttempts.selectedOption), isNotNull(questionAttempts.matchingChoiceId))))
+      .groupBy(questionAttempts.isCorrect, sql`${questionAttempts.matchingChoiceId} IS NOT NULL`),
+    db
+      .select({ count: count() })
+      .from(shortAnswerAttempts)
+      .where(and(gte(shortAnswerAttempts.createdAt, since), sql`btrim(${shortAnswerAttempts.answer}) <> ''`)),
+    pool.query<{ count: string }>(
+      `SELECT count(*) FROM practical_mock.attempts AS attempt
+       CROSS JOIN LATERAL jsonb_each(attempt.answers) AS station
+       WHERE attempt.started_at >= $1 AND btrim(station.value->>'text') <> ''`,
+      [since],
+    ),
   ]);
 
   const completed = sessions.filter((s) => s.status === 'completed');
@@ -62,8 +73,12 @@ export async function buildActivityReportChunks(hours: number = 6): Promise<stri
     new Set(sessions.map((s) => s.userName || s.userEmail).filter(Boolean))
   );
 
-  const totalMcqs = attemptsAgg.reduce((acc, row) => acc + Number(row.count), 0);
-  const correctMcqs = attemptsAgg.find((row) => row.isCorrect)?.count ?? 0;
+  const mcqs = attemptsAgg.filter(row => !row.isMatching);
+  const totalMatching = attemptsAgg.filter(row => row.isMatching).reduce((sum, row) => sum + Number(row.count), 0);
+  const totalShort = Number(shortAnswers[0]?.count ?? 0);
+  const totalPractical = Number(practicalStations.rows[0]?.count ?? 0);
+  const totalMcqs = mcqs.reduce((acc, row) => acc + Number(row.count), 0);
+  const correctMcqs = mcqs.find((row) => row.isCorrect)?.count ?? 0;
   const accuracy = totalMcqs > 0 ? Math.round((Number(correctMcqs) / totalMcqs) * 100) : 0;
 
   const lines: string[] = [];
@@ -74,6 +89,10 @@ export async function buildActivityReportChunks(hours: number = 6): Promise<stri
 
   lines.push(`👥 <b>Active Students:</b> <code>${uniqueStudents.length}</code>`);
   lines.push(`🎯 <b>Total MCQs Solved:</b> <code>${totalMcqs.toLocaleString()}</code> (<b>${accuracy}%</b> correct)`);
+  lines.push(`🧩 <b>Matching answers:</b> <code>${totalMatching.toLocaleString()}</code>`);
+  lines.push(`✍️ <b>Short answers:</b> <code>${totalShort.toLocaleString()}</code>`);
+  lines.push(`🔬 <b>Practical mock station answers:</b> <code>${totalPractical.toLocaleString()}</code> (sessions started in this window)`);
+  lines.push(`<b>Total answers:</b> <code>${(totalMcqs + totalMatching + totalShort + totalPractical).toLocaleString()}</code>`);
   lines.push(`📝 <b>Quizzes Finished:</b> <code>${completed.length}</code>`);
   lines.push(`⏳ <b>Quizzes In-Progress:</b> <code>${inProgress.length}</code>`);
   lines.push(`🆕 <b>New Registrations:</b> <code>${newUsers.length}</code>\n`);

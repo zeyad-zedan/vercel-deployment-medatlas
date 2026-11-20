@@ -14,6 +14,7 @@ export async function quizShortAnswerAttempts(uid:string,items:any[],examActive:
 
 async function lockQuestion(client:any,uid:string,sessionId:number,questionId:number){
  const row=(await client.query(`SELECT id,mode,status,started_at,time_limit_seconds,
+ extract(epoch FROM (now()::timestamp - started_at))::double precision AS elapsed_seconds,
  (SELECT value FROM jsonb_array_elements(question_order_json::jsonb) WHERE (value->>'questionId')::int=$3) AS item
  FROM public.exam_sessions WHERE id=$1 AND user_uid=$2 FOR UPDATE`,[sessionId,uid,questionId])).rows[0];
  if(!row)throw new ShortAnswerError('This quiz does not belong to your account.',403);
@@ -53,7 +54,7 @@ export async function saveQuizShortAnswer(uid:string,sessionValue:unknown,questi
   await client.query('BEGIN');const row=await lockQuestion(client,uid,sessionId,questionId);
   if(forGrading&&row.mode==='exam')throw new ShortAnswerError('Submit the exam before requesting grading.',409);
   if(row.status!=='in_progress')throw new ShortAnswerError('This quiz is already submitted. Your saved answer is preserved.',409);
-  if(row.mode==='exam'&&row.time_limit_seconds!=null&&Date.now()>new Date(row.started_at).getTime()+row.time_limit_seconds*1000)throw new ShortAnswerError('The exam time has ended. Your previously saved answers are safe.',409);
+  if(row.mode==='exam'&&row.time_limit_seconds!=null&&Number(row.elapsed_seconds)>row.time_limit_seconds+15)throw new ShortAnswerError('The exam time has ended. Your previously saved answers are safe.',409);
   if(typeof answer==='string'&&!answer.trim()){
    const item={...row.item,shortAnswerAttemptId:null,shortAnswerStatus:'cleared',shortAnswerScore:null,selectedCanonical:null,selectedDisplayed:null,submitted:false};
    const session=await writeState(client,uid,row,item,'save');await client.query('COMMIT');return {attempt:null,session};
@@ -62,11 +63,11 @@ export async function saveQuizShortAnswer(uid:string,sessionValue:unknown,questi
   const item={...row.item,maxMarks:attempt.maxScore||row.item.maxMarks,shortAnswerAttemptId:attempt.id,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,submitted:row.mode!=='exam',selectedCanonical:attempt.status==='graded'?(attempt.result.score===(attempt.maxScore||row.item.maxMarks)?'A':'B'):'C',selectedDisplayed:null};
   const session=await writeState(client,uid,row,item,'save');await client.query('COMMIT');
   return {attempt:row.mode==='exam'?{...attempt,status:'saved',result:null,model:null,modelAnswer:undefined,error:null}:attempt,session};
- }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
 }
 export async function gradeQuizShortAnswer(uid:string,sessionValue:unknown,questionValue:unknown,expectedAttemptId?:number){
  const sessionId=validId(sessionValue),questionId=validId(questionValue);let attemptId:number;
- const client=await pool.connect();try{await client.query('BEGIN');const row=await lockQuestion(client,uid,sessionId,questionId);if(row.mode==='exam'&&row.status!=='completed')throw new ShortAnswerError('Submit the exam before requesting grading.',409);attemptId=row.item.shortAnswerAttemptId;if(!attemptId)throw new ShortAnswerError('Save your answer first.');if(expectedAttemptId!==undefined&&attemptId!==expectedAttemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ const client=await pool.connect();try{await client.query('BEGIN');const row=await lockQuestion(client,uid,sessionId,questionId);if(row.mode==='exam'&&row.status!=='completed')throw new ShortAnswerError('Submit the exam before requesting grading.',409);attemptId=row.item.shortAnswerAttemptId;if(!attemptId)throw new ShortAnswerError('Save your answer first.');if(expectedAttemptId!==undefined&&attemptId!==expectedAttemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
  const result=await gradeShortAnswer(uid,attemptId);
  const update=await pool.connect();
  try{
@@ -74,14 +75,13 @@ export async function gradeQuizShortAnswer(uid:string,sessionValue:unknown,quest
   const row=await lockQuestion(update,uid,sessionId,questionId);
   if(row.item.shortAnswerAttemptId!==attemptId)throw new ShortAnswerError('A newer answer is saved. Reopen the question to view it.',409);
   // A duplicate request can observe an in-flight grade before the first request commits it to the quiz.
-  const attempt=result.status!=='graded'&&row.item.shortAnswerStatus==='graded'
-   ?await getShortAnswerAttempt(uid,attemptId,update)
-   :result;
-  const item={...row.item,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===row.item.maxMarks?'A':'B'):'C',selectedDisplayed:null};
+  const attempt=result.status!=='graded'?await getShortAnswerAttempt(uid,attemptId,update):result;
+  const maxMarks=attempt.maxScore||row.item.maxMarks;
+  const item={...row.item,maxMarks,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score??null,selectedCanonical:attempt.status==='graded'?(attempt.result.score===maxMarks?'A':'B'):'C',selectedDisplayed:null};
   const session=await writeState(update,uid,row,item,'grade');
   await update.query('COMMIT');
   return {attempt,session};
- }catch(error){await update.query('ROLLBACK');throw error;}finally{update.release();}
+ }catch(error){await update.query('ROLLBACK').catch(()=>{});throw error;}finally{update.release();}
 }
 
 export async function saveAndGradeQuizShortAnswer(uid:string,sessionId:unknown,questionId:unknown,answer:unknown){
@@ -91,7 +91,10 @@ export async function saveAndGradeQuizShortAnswer(uid:string,sessionId:unknown,q
  try{
   return await gradeQuizShortAnswer(uid,sessionId,questionId,saved.attempt.id);
  }catch(error){
-  if(error instanceof ShortAnswerError&&error.status===429)return {...saved,gradingError:error.message};
+  if(error instanceof ShortAnswerError&&error.status===429){
+   const retryAt=new Date(Date.now()+10000).toISOString();
+   return {...saved,attempt:{...saved.attempt,status:'failed',errorCode:'THROTTLED',error:error.message,retryAt},gradingError:error.message};
+  }
   throw error;
  }
 }

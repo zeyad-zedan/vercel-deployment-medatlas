@@ -7,6 +7,20 @@ const realFetch=globalThis.fetch,slug='rGUlS5t9CR4TEoDbGu6mZL2P',host=()=>docume
 const click=async(name:string)=>{const button=[...host().querySelectorAll('button')].find(b=>b.textContent?.trim()===name);assert.ok(button,name);await act(async()=>button.click());};
 after(()=>{globalThis.fetch=realFetch;dom.window.close();for(const [name,descriptor]of previous){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete(globalThis as any)[name];}});
 test('course links are recognized without turning ordinary MedAtlas pages into course pages',()=>{assert.equal(courseQuizSlug('/impulse/quiz/'+slug),slug);assert.equal(courseQuizSlug('/impulse/quiz/'+slug+'/'),slug);for(const path of ['/','/lectures','/impulse/upload','/impulse/quiz/short','//evil.example/impulse/quiz/'+slug])assert.equal(courseQuizSlug(path),null);});
+test('guest exam asks for name and password without opening account sign-in',async()=>{
+ setAuthToken(null);let unlocked=false;
+ globalThis.fetch=(async(url:any,options:any={})=>{
+  if(String(url).endsWith('/unlock')){assert.deepEqual(JSON.parse(options.body),{name:'Guest Student',password:'CoursePassword'});unlocked=true;return Response.json({ok:true});}
+  return unlocked?Response.json({attemptId:'guest-attempt',title:'Pathotherapy Mock Exam BSF112',total:1,current:0,completed:false,gradeOnSubmit:true,studentUid:'guest:unique',states:[{id:'q1',position:0,type:'mcq',answered:false,choice:null,score:null,max_marks:1}],questions:[{id:'q1',position:0,question:{type:'mcq',text:'Choose green.',options:['Green','Red']},answer:null,result:null,max_marks:1}]}):Response.json({error:'Enter the quiz password to continue.'},{status:401});
+ }) as typeof fetch;
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<CourseQuizView slug={slug} guestAccess onSignIn={()=>{throw Error('Guests must not sign in');}}/>));
+  assert.equal(host().querySelector('input[type=email]'),null);
+  for(const [selector,value] of [['input[type=text]','Guest Student'],['input[type=password]','CoursePassword']])await act(async()=>{const input=host().querySelector(selector)!;Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});
+  await act(async()=>{host().querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));});
+  assert.ok(unlocked);assert.ok(host().querySelector('.ma-study-player'));assert.match(host().textContent||'',/Choose green/);
+ }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
+});
 test('existing signed-in students see only the quiz password and resume saved answers after reopening',async()=>{
  setAuthToken('existing-medatlas-session');let unlocked=false,answer:any=null,position=0;const calls:string[]=[];
  const rows=[{id:'question-one',position:0,question:{type:'mcq',text:'Choose green.',options:['Green','Red']},answer:null,result:null,max_marks:1},{id:'question-two',position:1,question:{type:'short_answer',text:'Write green.'},answer:null,result:null,max_marks:1}];
@@ -24,6 +38,20 @@ test('existing signed-in students see only the quiz password and resume saved an
 });
 test('an expired MedAtlas session returns control to the main sign-in flow instead of showing team credentials',async()=>{
  let signIns=0;globalThis.fetch=(async()=>Response.json({error:'Unauthorized: Invalid or expired session token'},{status:401})) as typeof fetch;const root=createRoot(host());try{await act(async()=>root.render(<CourseQuizView slug={slug} onSignIn={()=>signIns++}/>));assert.equal(signIns,1);assert.equal(host().querySelector('input[type=email]'),null);}finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
+});
+test('submitted private reviews show MCQ keys for correct and wrong answers and written model answers even while pending',async()=>{
+ const rows=[{id:'wrong',position:0,question:{type:'mcq',text:'Wrong MCQ',options:['Correct option','Wrong option']},answer:1,result:{score:0,maxScore:1,correctOption:0},study_feedback:{correctOption:0,feedback:'Explanation'},max_marks:1},
+ {id:'right',position:1,question:{type:'mcq',text:'Correct MCQ',options:['Correct option','Wrong option']},answer:0,result:{score:1,maxScore:1,correctOption:0},study_feedback:{correctOption:0,feedback:'Explanation'},max_marks:1},
+ {id:'written',position:2,question:{type:'short_answer',text:'Name the hormone'},answer:'Insulin',result:{score:1,maxScore:1,feedback:'Correct',points:[]},model_answer:'Insulin lowers blood glucose.',max_marks:1},
+ {id:'pending',position:3,question:{type:'short_answer',text:'Pending written answer'},answer:'Glucagon',result:null,model_answer:'Glucagon raises blood glucose.',max_marks:1}];
+ globalThis.fetch=(async()=>Response.json({attemptId:'completed-review',title:'Review',total:4,current:0,completed:true,gradeOnSubmit:true,studentUid:'student',states:rows.map(q=>({id:q.id,position:q.position,type:q.question.type,answered:true,choice:typeof q.answer==='number'?q.answer:null,score:q.result?.score??null,max_marks:1})),questions:rows})) as typeof fetch;
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<CourseQuizView slug={slug} onSignIn={()=>{throw Error('Unexpected sign-in');}}/>));
+  assert.match(host().textContent||'',/Incorrect Answer/);assert.match(host().textContent||'',/The correct answer is Option A/);
+  await click('Next');assert.match(host().textContent||'',/Correct Answer!/);assert.match(host().textContent||'',/The correct answer is Option A/);
+  await click('Next');assert.match(host().textContent||'',/Insulin lowers blood glucose/);assert.ok(host().querySelector('details[open]'));
+  await click('Next');assert.match(host().textContent||'',/Glucagon raises blood glucose/);
+ }finally{await act(async()=>root.unmount());globalThis.fetch=realFetch;}
 });
 test('opening a private link while signed out opens the normal MedAtlas sign-in dialog first',async()=>{
  const root=createRoot(host());try{await act(async()=>root.render(<PublicLanding catalog={{subjects:[],lectures:[],totalPublishedQuestions:0}} loadingCatalog={false} onAuthenticated={()=>{}} requireSignIn/>));assert.ok(host().querySelector('[role=dialog]'));assert.ok(host().querySelector('input[type=email]'));assert.ok(host().querySelector('input[type=password]'));assert.doesNotMatch(host().textContent||'',/Publisher password/);}finally{await act(async()=>root.unmount());}

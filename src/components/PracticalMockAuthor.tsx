@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../lib/api.ts';
-import { maxPracticalMarkingPoints, maxPracticalStations, type PracticalStationUpload } from '../lib/practical-mock.ts';
+import { maxPracticalMarkingPoints, type PracticalStationUpload } from '../lib/practical-mock.ts';
 import type { QuestionImage } from '../lib/question-images.ts';
 
 type DraftStation = Omit<PracticalStationUpload, 'image'> & { key: number; file: File | null };
@@ -86,7 +86,7 @@ export function PracticalMockAuthor({ onCancel, onPublished }: { onCancel: () =>
       </section>)}
       <div className="flex flex-wrap items-center gap-4">
         <button type="submit" className="rounded-lg bg-[var(--ma-brand)] px-4 py-2.5 text-sm font-semibold text-white">Publish exam</button>
-        <button type="button" className="ma-text-button min-h-10" disabled={stations.length >= maxPracticalStations} onClick={() => { const key = nextKey.current++; setStations(list => [...list, newStation(key)]); }}>Add station</button>
+        <button type="button" className="ma-text-button min-h-10" onClick={() => { const key = nextKey.current++; setStations(list => [...list, newStation(key)]); }}>Add station</button>
         <button type="button" className="ma-text-button min-h-10" onClick={onCancel}>Cancel</button>
       </div>
     </fieldset>

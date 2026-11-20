@@ -26,10 +26,15 @@ export const createPool = () => {
     const isCloudDb =
       Boolean(process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('localhost') && !process.env.DATABASE_URL.includes('127.0.0.1'));
 
+    const parsedPoolMax = Number(process.env.PG_POOL_MAX);
+    const maxConnections = Number.isFinite(parsedPoolMax) && parsedPoolMax > 0
+      ? Math.max(3, Math.min(20, Math.floor(parsedPoolMax)))
+      : 6;
+
     const poolConfig = process.env.DATABASE_URL
       ? {
           connectionString: process.env.DATABASE_URL,
-          max: 3,
+          max: maxConnections,
           idleTimeoutMillis: 10000,
           connectionTimeoutMillis: 10000,
           ssl: isCloudDb ? { rejectUnauthorized: false } : undefined,

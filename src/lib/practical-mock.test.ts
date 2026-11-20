@@ -172,9 +172,10 @@ test('retains completed batches and resumes an expired lease without regrading s
     const [first,second]=await Promise.all([runPracticalMockGrading(),runPracticalMockGrading()]);
     assert.equal(first.processed+second.processed,2);
     assert.deepEqual(calls,[[0,1,2,3,4],[5]]);
-    const {rows:[pending]}=await pool.query('SELECT grades,grade_progress FROM practical_mock.attempts WHERE exam_id=$1 AND user_uid=$2',[id,uid]);
+    const {rows:[pending]}=await pool.query("SELECT grades,grade_progress,extract(epoch from(grade_available_at-clock_timestamp())) as retry_seconds FROM practical_mock.attempts WHERE exam_id=$1 AND user_uid=$2",[id,uid]);
     assert.equal(pending.grades,null);
     assert.equal(Object.keys(pending.grade_progress).length,5);
+    assert.ok(Number(pending.retry_seconds)>8&&Number(pending.retry_seconds)<=10,'Failed batches retry after ten seconds without exponential backoff');
     assert.equal((await readPracticalMock(uid,id)).status,'grading');
     await pool.query("UPDATE practical_mock.attempts SET grade_available_at=clock_timestamp() WHERE exam_id=$1",[id]);
     // Advance the fake credential's cooldown in the isolated test schema.
@@ -188,5 +189,70 @@ test('retains completed batches and resumes an expired lease without regrading s
     globalThis.fetch=original;
     await pool.query('DELETE FROM public.users WHERE uid=$1',[uid]);
     await pool.query('DELETE FROM practical_mock.exams WHERE id=$1',[id]);
+  }
+});
+
+test('C3 & H2: student gradePracticalMock never steals another student exam, and stale lease writeback does not overwrite newer worker', { skip: !local }, async () => {
+  const { gradePracticalMock, runPracticalMockGrading } = await import('../db/practical-mock.ts');
+  const { parseShortAnswerBatch, shortAnswerTemplate } = await import('./short-answer-model.ts');
+  const id = randomUUID();
+  const uidA = `c3-student-a-${id}`;
+  const uidB = `c3-student-b-${id}`;
+  const [question] = parseShortAnswerBatch(shortAnswerTemplate);
+  const stations = [question];
+  const answers = { '0': { text: 'Student answer', revision: 1 } };
+  let geminiCalls = 0;
+  let onGeminiStart!: () => void;
+  let releaseGemini!: () => void;
+  const geminiStarted = new Promise<void>(r => { onGeminiStart = r; });
+  const geminiGate = new Promise<void>(r => { releaseGemini = r; });
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith('https://generativelanguage.googleapis.com/')) return original(input, init);
+    geminiCalls++;
+    onGeminiStart();
+    await geminiGate;
+    const req = JSON.parse(String(init?.body));
+    const { stations: batch } = JSON.parse(req.contents[0].parts[0].text);
+    const grades = batch.map(({ index, rubric }: any) => ({
+      index, feedback: 'Stale worker grade', points: rubric.map((p: any) => ({ id: p.id, awarded: 0, feedback: 'Stale' })),
+    }));
+    return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ grades }) }] } }] });
+  };
+  try {
+    await pool.query("INSERT INTO public.users(uid,email,display_name) VALUES($1,$1||'@example.invalid','A'),($2,$2||'@example.invalid','B')", [uidA, uidB]);
+    await pool.query('INSERT INTO practical_mock.exams(id,title,stations) VALUES($1,$2,$3::jsonb)', [id, 'C3 H2 Fixture', JSON.stringify(stations)]);
+    // Student A has a queued exam ready for grading; Student B is already grading (not paused/finished)
+    await pool.query(`INSERT INTO practical_mock.attempts(exam_id,user_uid,started_at,answers,grade_available_at)
+      VALUES($1,$2,clock_timestamp()-interval '5 minutes',$3::jsonb,clock_timestamp()),
+            ($1,$4,clock_timestamp()-interval '5 minutes',$3::jsonb,clock_timestamp()+interval '1 minute')`,
+      [id, uidA, JSON.stringify(answers), uidB]);
+
+    // C3: Student B calling POST /grade must NOT trigger global batch processing or steal Student A's queued exam!
+    const stateB = await gradePracticalMock(uidB, id);
+    assert.equal(stateB.status, 'grading');
+    assert.equal(geminiCalls, 0, 'C3: student gradePracticalMock must never invoke global Gemini grading workers');
+    const aRowAfterC3 = (await pool.query('SELECT grades, lease FROM practical_mock.attempts WHERE exam_id=$1 AND user_uid=$2', [id, uidA])).rows[0];
+    assert.equal(aRowAfterC3.grades, null, 'C3: Student A attempt must remain untouched by Student B request');
+
+    // H2: Worker 1 claims Student A's exam; while Gemini is running, Worker 2 takes over lease and writes authoritative grade.
+    // Worker 1's stale writeback must match 0 rows and discard cleanly without overwriting Worker 2's grade!
+    const worker1Promise = runPracticalMockGrading();
+    await geminiStarted;
+    const authoritativeGrades = { '0': { score: 2, maxScore: 2, feedback: 'Authoritative worker 2 grade', points: [] } };
+    await pool.query(
+      "UPDATE practical_mock.attempts SET lease=$3, lease_until=clock_timestamp()+interval '65 seconds', grades=$4::jsonb WHERE exam_id=$1 AND user_uid=$2",
+      [id, uidA, randomUUID(), JSON.stringify(authoritativeGrades)],
+    );
+    releaseGemini();
+    const summary = await worker1Promise;
+    assert.equal(summary.deferred, 1, 'H2: stale lease worker must record deferred when 0 rows updated');
+    assert.equal(summary.completed, 0, 'H2: stale lease worker must not count as completed');
+    const aRowAfterH2 = (await pool.query('SELECT grades FROM practical_mock.attempts WHERE exam_id=$1 AND user_uid=$2', [id, uidA])).rows[0];
+    assert.equal(aRowAfterH2.grades['0'].feedback, 'Authoritative worker 2 grade', 'H2: stale worker must never overwrite newer grades');
+  } finally {
+    globalThis.fetch = original;
+    await pool.query('DELETE FROM public.users WHERE uid=ANY($1)', [[uidA, uidB]]);
+    await pool.query('DELETE FROM practical_mock.exams WHERE id=$1', [id]);
   }
 });

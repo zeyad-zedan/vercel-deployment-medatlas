@@ -23,6 +23,62 @@ async function click(name:string){await act(async()=>{findButton(name).click();}
 async function change(selector:string,value:string){const input=host().querySelector(selector) as HTMLInputElement;assert.ok(input,`Missing input ${selector}`);await act(async()=>{const proto=input.tagName==='TEXTAREA'?dom.window.HTMLTextAreaElement.prototype:input.tagName==='SELECT'?dom.window.HTMLSelectElement.prototype:dom.window.HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value')!.set!.call(input,value);input.dispatchEvent(new dom.window.Event(input.tagName==='SELECT'?'change':'input',{bubbles:true}));});}
 function reset(){Object.assign(api,realApi);dom.window.localStorage.clear();host().replaceChildren();}
 
+test('a consented short-answer grade automatically recovers from temporary provider failures',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');let calls=0;
+ const answer='Support and protection';const question={id:8761,index:0,questionText:'Name two functions.',maxMarks:2,images:[],shortAnswerAttempt:{id:8762,answer,status:'saved'}};
+ api.gradeQuizShortAnswer=async()=>({attempt:++calls<3?{id:8762,answer,status:'failed',errorCode:'GEMINI_UNAVAILABLE',retryAt:new Date(Date.now()+40).toISOString(),error:'Google is busy.'}:{id:8762,answer,status:'graded',modelAnswer:'Support and protection',result:{score:2,maxScore:2,feedback:'Correct.',points:[]}},session:{}} as any);
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={question} sessionId={8760} onSaved={()=>{}}/>));
+  await new Promise(r=>setTimeout(r,70));assert.equal(calls,0,'Browsing an answer does not send it to Google');
+  await click('Save & grade');assert.match(text(),/retrying automatically/);
+  for(let i=0;i<3&&calls<3;i++)await act(async()=>{await new Promise(r=>setTimeout(r,80));});
+  assert.equal(calls,3);assert.match(text(),/Grade saved/);assert.doesNotMatch(text(),/retrying automatically/);
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('automatic grading retries are capped and stop for a changed draft',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');let calls=0;
+ const answer='Original answer';const question={id:8771,index:0,questionText:'A question.',maxMarks:1,images:[],shortAnswerAttempt:{id:8772,answer,status:'saved'}};
+ api.gradeQuizShortAnswer=async()=>{calls++;return {attempt:{id:8772,answer,status:'failed',errorCode:'TIMEOUT',retryAt:new Date(Date.now()+40).toISOString(),error:'Saved; retry.'},session:{}} as any;};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={question} sessionId={8770} onSaved={()=>{}}/>));
+  await click('Save & grade');
+  await change('textarea','My newer draft');
+  await act(async()=>{await new Promise(r=>setTimeout(r,80));});assert.equal(calls,1);
+  await change('textarea',answer);
+  for(let i=0;i<5;i++)await act(async()=>{await new Promise(r=>setTimeout(r,80));});
+  assert.equal(calls,4,'One manual call plus at most three automatic retries');
+  assert.doesNotMatch(text(),/retrying automatically/);
+ }finally{await act(async()=>root.unmount());}
+});
+
+test('confirmed quota failures never auto-retry and leaving a question cancels a transient retry',async()=>{
+ reset();const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');let calls=0,code='POOL_QUOTA';
+ const answer='An answer';const question={id:8781,index:0,questionText:'A question.',maxMarks:1,images:[],shortAnswerAttempt:{id:8782,answer,status:'saved'}};
+ api.gradeQuizShortAnswer=async()=>{calls++;return {attempt:{id:8782,answer,status:'failed',errorCode:code,retryAt:new Date(Date.now()+40).toISOString(),error:'Saved.'},session:{}} as any;};
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<ShortAnswerQuestion question={question} sessionId={8780} onSaved={()=>{}}/>));
+  await click('Save & grade');await act(async()=>{await new Promise(r=>setTimeout(r,1100));});assert.equal(calls,1);
+  code='GEMINI_UNAVAILABLE';await click('Retry grading');assert.match(text(),/retrying automatically/);
+  await act(async()=>root.unmount());await new Promise(r=>setTimeout(r,80));assert.equal(calls,2);
+ }finally{if(host().childNodes.length)await act(async()=>root.unmount());}
+});
+
+test('standalone short-answer practice recovers a consented failed grade automatically',async()=>{
+ reset();let calls=0;const q={id:8791,question:'Fixture short question',max_score:2,images:[]};let saved:any;
+ api.shortAnswerCatalog=async()=>({lectures:[{id:8790,title:'Fixture',subject:'Anatomy',contentType:'lecture',lectureNumber:1,count:1}]});
+ api.shortAnswerQuestions=async()=>({questions:[q],nextCursor:null});
+ api.saveShortAnswer=async(id,answer)=>{saved={id:8792,questionId:id,answer,status:'saved'};return {attempt:saved};};
+ api.gradeShortAnswer=async()=>({attempt:++calls===1?{...saved,status:'failed',errorCode:'POOL_RATE_LIMIT',error:'Busy.',retryAt:new Date(Date.now()+40).toISOString()}:{...saved,status:'graded',modelAnswer:'Fixture model',result:{score:2,maxScore:2,feedback:'Both correct.',points:[]}}});
+ const root=createRoot(host());try{
+  await act(async()=>root.render(<ShortAnswersView userUid="recovery-fixture" initialLectureId={8790}/>));
+  const question=[...host().querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes(q.question));assert.ok(question);
+  await act(async()=>question.click());await change('#sa-answer','Support and protection');await click('Save & grade');
+  assert.match(text(),/retrying automatically/);await act(async()=>{await new Promise(r=>setTimeout(r,100));});
+  assert.equal(calls,2);assert.match(text(),/Both correct/);
+ }finally{await act(async()=>root.unmount());}
+});
+
 test('short-answer student interaction restores drafts, saves independently, grades directly and reopens saved feedback',async()=>{
  reset();let saveFails=true,gradeCalls=0,saveCalls=0,imageCalls=0;const q={id:11,question:'Name two bone functions.',max_score:2,images:[{id:'figure',alt:'Bone figure',source:'/api/question-images/fixture'}]};let saved:any=null;
  api.shortAnswerCatalog=async()=>({lectures:[{id:82,title:'Bones',subject:'Anatomy',contentType:'practical',lectureNumber:1,count:1}]});
@@ -395,15 +451,273 @@ test('practical mock skip asks for confirmation, warns you cannot go back, and s
   await act(async()=>root.render(<PracticalMockView isAdmin={false}/>));
   await click('Resume exam');
   assert.match(text(),/Station 1 of 2/);
-  await click('Skip image');
+  await click('Skip slide');
   assert.equal(skipCalls,0);
   assert.match(text(),/You cannot go back once you skip/i);
   await click('Cancel');
   assert.doesNotMatch(text(),/You cannot go back once you skip/i);
   assert.equal(skipCalls,0);
-  await click('Skip image');
+  await click('Skip slide');
   await click('Confirm skip');
   assert.equal(skipCalls,1);assert.equal(savedCalls,0);
   assert.match(text(),/Station 2 of 2/);assert.match(text(),/Identify specimen 2/);
  }finally{await act(async()=>root.unmount());}
+});
+
+test('Phase 5 regressions: recovery avoids 0ms burst on thrown retry, flush serializes & continues past single failure, merge preserves short-answer state, GradeFeedback guards NaN, and course session handles 503/batch retention',async()=>{
+ reset();
+ // 1. GradeFeedback guards null/undefined score against NaN%
+ const {GradeFeedback}=await import('../components/GradeFeedback.tsx');
+ const root=createRoot(host());
+ try{
+  await act(async()=>root.render(<GradeFeedback grade={{score:undefined,maxScore:4,feedback:'Pending',points:[]}}/>));
+  assert.doesNotMatch(text(),/NaN/);assert.match(text(),/0\/4 marks/);assert.match(text(),/0%/);
+ }finally{await act(async()=>root.unmount());}
+
+ // 2. mergeQuestionBatch preserves already-saved short-answer state
+ const {mergeQuestionBatch}=await import('./session-batches.ts');
+ const prev={id:5,status:'in_progress',questions:[{id:10,index:0,contentLoaded:false,hasSavedAnswer:true,answerCorrect:true,shortAnswerStatus:'graded',shortAnswerScore:2,shortAnswerAttempt:{id:99,answer:'Saved',status:'graded',result:{score:2,maxScore:2}}}]};
+ const merged=mergeQuestionBatch(prev,{id:5,status:'in_progress',questions:[{id:10,index:0,contentLoaded:true,questionText:'Loaded stem',hasSavedAnswer:false,answerCorrect:null,shortAnswerStatus:'saved',shortAnswerScore:null,shortAnswerAttempt:null}]});
+ assert.equal(merged.questions[0].questionText,'Loaded stem');
+ assert.equal(merged.questions[0].shortAnswerAttempt.id,99);
+ assert.equal(merged.questions[0].shortAnswerStatus,'graded');
+ assert.equal(merged.questions[0].shortAnswerScore,2);
+ assert.equal(merged.questions[0].hasSavedAnswer,true);
+ assert.equal(merged.questions[0].answerCorrect,true);
+
+ // 3. QuizTextSaveProvider.flush serializes concurrent calls and saves Q2 even if Q1 fails
+ const {QuizTextSaveProvider,useQuizTextSaves}=await import('./quiz-text-drafts.tsx');
+ const {SessionPlayerApiContext}=await import('./session-player-api.tsx');
+ const savedIds:number[]=[];
+ let releaseQ1!:()=>void;
+ const q1Gate=new Promise<void>(r=>{releaseQ1=r;});
+ const mockApi:any={
+  ...realApi,
+  saveQuizShortAnswer:async(_sid:number,qid:number,ans:string)=>{
+   savedIds.push(qid);
+   if(qid===1){await q1Gate;throw new Error('Q1 temporary failure');}
+   return {attempt:{id:qid,answer:ans,status:'saved'},session:{}};
+  },
+ };
+ let savesRef:any=null;
+ function Harness(){savesRef=useQuizTextSaves();return null;}
+ const root2=createRoot(host());
+ try{
+  await act(async()=>root2.render(<SessionPlayerApiContext.Provider value={mockApi}><QuizTextSaveProvider session={{id:777,status:'in_progress',questions:[]}}><Harness/></QuizTextSaveProvider></SessionPlayerApiContext.Provider>));
+  savesRef.remember(1,'Answer 1');savesRef.remember(2,'Answer 2');
+  const f1=savesRef.flush(),f2=savesRef.flush();
+  releaseQ1();
+  await assert.rejects(f1,/Q1 temporary failure/);
+  await assert.rejects(f2,/Q1 temporary failure/);
+  assert.equal(savedIds.filter(id=>id===2).length,1,'Q2 must still be saved exactly once when Q1 fails.');
+ }finally{await act(async()=>root2.unmount());}
+
+ // 4. useGradingRecovery backs off instead of 0ms burst when automatic retry throws (stale retryAt)
+ const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');
+ let gradeCalls=0;
+ const answer='Bone marrow';
+ const question={id:8811,index:0,questionText:'Where are RBCs formed?',maxMarks:2,images:[],shortAnswerAttempt:{id:8812,answer,status:'saved'}};
+ api.gradeQuizShortAnswer=async()=>{
+  gradeCalls++;
+  if(gradeCalls===1)return {attempt:{id:8812,answer,status:'failed',errorCode:'GEMINI_UNAVAILABLE',retryAt:new Date(Date.now()+40).toISOString(),error:'Busy.'},session:{}} as any;
+  throw new Error('HTTP 503 Gateway Timeout');
+ };
+ const root3=createRoot(host());
+ try{
+  await act(async()=>root3.render(<ShortAnswerQuestion question={question} sessionId={8810} onSaved={()=>{}}/>));
+  await click('Save & grade');
+  await act(async()=>{await new Promise(r=>setTimeout(r,200));});
+  assert.equal(gradeCalls,2,'Thrown retry must back off exponentially instead of firing retries 2 and 3 at 0ms.');
+  assert.match(text(),/HTTP 503 Gateway Timeout/);
+  assert.doesNotMatch(text(),/Grading your saved answer/);
+ }finally{await act(async()=>root3.unmount());}
+
+ // 5. createCourseSession handles 503 retry metadata, sequential early-break on completeSession, and preserves loaded batches
+ const {createCourseSession}=await import('./course-session.ts');
+ const gradeOrder:string[]=[];
+ globalThis.fetch=(async(url:any)=>{
+  const path=String(url);
+  if(path.endsWith('/submit'))return Response.json({ok:true});
+  if(path.includes('/grade/')){
+   const qid=path.split('/grade/')[1];gradeOrder.push(qid);
+   return Response.json({error:'Grading busy',errorCode:'POOL_RATE_LIMIT',retryAt:new Date(Date.now()+15000).toISOString()},{status:503,headers:{'Retry-After':'15'}});
+  }
+  if(path.includes('/session'))return Response.json({attemptId:'a1',title:'Course',total:2,current:0,completed:true,gradeOnSubmit:false,studentUid:'u1',states:[{id:'q1',position:0,type:'short_answer',answered:true,choice:null,score:null,max_marks:2},{id:'q2',position:1,type:'short_answer',answered:true,choice:null,score:null,max_marks:2}],questions:[{id:'q1',position:0,question:{text:'Q1'},answer:'A1',result:null,status:'grading',has_image:false,max_marks:2}]});
+  throw Error('Unexpected '+path);
+ }) as typeof fetch;
+ try{
+  const cs=createCourseSession('slug-1',{attemptId:'a1',title:'Course',total:2,current:0,completed:false,gradeOnSubmit:true,studentUid:'u1',states:[{id:'q1',position:0,type:'short_answer',answered:true,choice:null,score:null,max_marks:2},{id:'q2',position:1,type:'short_answer',answered:true,choice:null,score:null,max_marks:2}],questions:[{id:'q1',position:0,question:{text:'Q1'},answer:'A1',result:null,status:'grading',has_image:false,max_marks:2},{id:'q2',position:1,question:{text:'Q2'},answer:'A2',result:null,status:'saved',has_image:false,max_marks:2}]},()=>{});
+  assert.equal(cs.initialSession.questions[0].shortAnswerAttempt?.status,'grading');
+  const failedGrade=await cs.service.gradeQuizShortAnswer(1,1);
+  assert.equal(failedGrade.attempt.status,'failed');
+  assert.equal(failedGrade.attempt.errorCode,'POOL_RATE_LIMIT');
+  assert.ok(failedGrade.attempt.retryAt);
+  gradeOrder.length=0;
+  const done=await cs.service.completeSession(1);
+  assert.equal(done.session.questions[0].contentLoaded,true);
+  assert.equal(done.session.questions[1].contentLoaded,false,'gradeOnSubmit completeSession clears cached rows so hidden keys/feedback reload.');
+  const csStudy=createCourseSession('slug-2',{attemptId:'a2',title:'Study Course',total:2,current:0,completed:false,gradeOnSubmit:false,studentUid:'u1',states:[{id:'q1',position:0,type:'short_answer',answered:true,choice:null,score:null,max_marks:2},{id:'q2',position:1,type:'short_answer',answered:true,choice:null,score:null,max_marks:2}],questions:[{id:'q1',position:0,question:{text:'Q1'},answer:'A1',result:null,status:'saved',has_image:false,max_marks:2},{id:'q2',position:1,question:{text:'Q2'},answer:'A2',result:null,status:'saved',has_image:false,max_marks:2}]},()=>{});
+  const doneStudy=await csStudy.service.completeSession(1);
+  assert.equal(doneStudy.session.questions[1].contentLoaded,true,'Non-gradeOnSubmit completeSession must retain previously loaded batches.');
+ }finally{globalThis.fetch=realFetch;}
+
+ // 6. Clearing a short-answer draft (attempt: null) in UniversityExamPlayer flushes cleanly without TypeError
+ let clearedSaves=0,completedExam:any=null;
+ const examShort={id:401,index:0,questionType:'short_answer',maxMarks:2,questionText:'Explain homeostasis.',contentLoaded:true,submitted:false,images:[],selectedDisplayed:null};
+ const examSession={id:99401,title:'Cleared draft exam',mode:'exam',status:'in_progress',questions:[examShort],totalQuestions:1,timeLimitSeconds:600,remainingSeconds:600,elapsedSeconds:0};
+ const examService:any={
+  ...realApi,
+  saveQuizShortAnswer:async(_sid:number,_qid:number,ans:string)=>{clearedSaves++;assert.equal(ans,'');return {attempt:null,session:{id:examSession.id}};},
+  completeSession:async()=>({session:{...examSession,status:'completed',correctCount:0,incorrectCount:0,unansweredCount:1,scorePercentage:0,questions:[{...examShort,hasSavedAnswer:false,shortAnswerStatus:'cleared',shortAnswerAttempt:null,selectedDisplayed:null}]}}),
+ };
+ const root4=createRoot(host());
+ try{
+  await act(async()=>root4.render(<McqSessionPlayer initialSession={examSession} service={examService} onExit={()=>{}} onSessionCompleted={s=>{completedExam=s;}}/>));
+  await change('textarea','Temporary text');
+  await change('textarea','');
+  await click('Review & submit');
+  await act(async()=>{const confirm=[...host().querySelectorAll<HTMLButtonElement>('button')].filter(b=>b.textContent?.trim()==='End Test').at(-1);assert.ok(confirm);confirm.click();});
+  assert.equal(clearedSaves,1,'Cleared short-answer draft must flush without throwing.');
+  assert.equal(completedExam?.status,'completed');
+ }finally{await act(async()=>root4.unmount());}
+});
+
+test('Hotfix regressions: C1 pre-fetch draft preservation & in-flight tracking, C2 mid-flush edit & new draft chaining, H4 clock skew & read-only grading poll, H5 PracticalMockView persistent polling on repeated errors',async()=>{
+ reset();
+ const {QuizTextSaveProvider,useQuizTextSaves,quizTextDraftKey}=await import('./quiz-text-drafts.tsx');
+ const {SessionPlayerApiContext}=await import('./session-player-api.tsx');
+ const {ShortAnswerQuestion}=await import('../components/ShortAnswerQuestion.tsx');
+ const {useGradingRecovery}=await import('./use-grading-recovery.ts');
+
+ // C1: ShortAnswerQuestion must NOT clear localStorage draft before saveAndGradeQuizShortAnswer resolves, and flush() awaits in-flight saves.
+ let rejectGrade!:(err:Error)=>void;
+ const gradePending=new Promise<any>((_res,rej)=>{rejectGrade=rej;});
+ const c1Api:any={
+  ...realApi,
+  saveQuizShortAnswer:async(_sid:number,qid:number,ans:string)=>({attempt:{id:qid,answer:ans,status:'saved'},session:{}}),
+  saveAndGradeQuizShortAnswer:()=>gradePending,
+ };
+ let c1Saves:any=null;
+ function C1Probe(){c1Saves=useQuizTextSaves();return null;}
+ const c1Question={id:9101,index:0,questionText:'Explain action potential.',maxMarks:2,images:[]};
+ const rootC1=createRoot(host());
+ try{
+  await act(async()=>rootC1.render(
+   <SessionPlayerApiContext.Provider value={c1Api}>
+    <QuizTextSaveProvider session={{id:9100,status:'in_progress',questions:[c1Question]}}>
+     <C1Probe/>
+     <ShortAnswerQuestion question={c1Question} sessionId={9100} onSaved={()=>{}}/>
+    </QuizTextSaveProvider>
+   </SessionPlayerApiContext.Provider>
+  ));
+  await change('textarea','Depolarization via Na+ channels');
+  const draftKey=quizTextDraftKey(9100,9101);
+  assert.equal(localStorage.getItem(draftKey),'Depolarization via Na+ channels','Draft must be stored in localStorage while typing');
+  // Click Save & grade (request stays pending)
+  const gradeBtn=[...host().querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes('Save & grade'));
+  assert.ok(gradeBtn);
+  await act(async()=>{gradeBtn.click();});
+  // Before server confirms, localStorage draft MUST still be intact!
+  assert.equal(localStorage.getItem(draftKey),'Depolarization via Na+ channels','C1: localStorage draft must NOT be deleted before server confirmation');
+  // If request fails mid-flight, draft survives!
+  await act(async()=>{rejectGrade(new Error('Network dropped'));await Promise.resolve();});
+  assert.equal(localStorage.getItem(draftKey),'Depolarization via Na+ channels','C1: localStorage draft must survive a failed saveAndGrade request');
+ }finally{await act(async()=>rootC1.unmount());}
+
+ // C2: Mid-flush edit of Q2 AND new draft Q3 + concurrent second flush() must ALL be saved before flush resolves.
+ const savedPayloads:Array<{qid:number;answer:string}>=[];
+ let releaseQ1!:()=>void;
+ const q1Gate=new Promise<void>(r=>{releaseQ1=r;});
+ const c2Api:any={
+  ...realApi,
+  saveQuizShortAnswer:async(_sid:number,qid:number,ans:string)=>{
+   if(qid===1&&savedPayloads.length===0)await q1Gate;
+   savedPayloads.push({qid,answer:ans});
+   return {attempt:{id:qid,answer:ans,status:'saved'},session:{}};
+  },
+ };
+ let c2Saves:any=null;
+ function C2Harness(){c2Saves=useQuizTextSaves();return null;}
+ const rootC2=createRoot(host());
+ try{
+  await act(async()=>rootC2.render(
+   <SessionPlayerApiContext.Provider value={c2Api}>
+    <QuizTextSaveProvider session={{id:9200,status:'in_progress',questions:[]}}>
+     <C2Harness/>
+    </QuizTextSaveProvider>
+   </SessionPlayerApiContext.Provider>
+  ));
+  c2Saves.remember(1,'Q1 original');
+  c2Saves.remember(2,'Q2 stale');
+  const flush1=c2Saves.flush();
+  // While Q1 is in flight, student edits Q2 and types Q3, then submits (triggering flush2)
+  c2Saves.remember(2,'Q2 FINAL EDITED');
+  c2Saves.remember(3,'Q3 NEW ANSWER');
+  const flush2=c2Saves.flush();
+  releaseQ1();
+  await Promise.all([flush1,flush2]);
+  const latestByQ=new Map(savedPayloads.map(p=>[p.qid,p.answer]));
+  assert.equal(latestByQ.get(1),'Q1 original');
+  assert.equal(latestByQ.get(2),'Q2 FINAL EDITED','C2: mid-flush edit to Q2 must be saved before flush resolves');
+  assert.equal(latestByQ.get(3),'Q3 NEW ANSWER','C2: mid-flush new draft Q3 must be saved before flush resolves');
+ }finally{await act(async()=>rootC2.unmount());}
+
+ // H4: Negative clock skew (retryAt 130s in future) must NOT lock student out for 130s; reloading on status='grading' polls read-only without POST /grade.
+ let retryInvoked=0,pollInvoked=0;
+ let hookState:any=null;
+ const scheduledDelays:number[]=[];
+ const origWinSetTimeout=window.setTimeout;
+ window.setTimeout=((fn:any,ms?:number,...args:any[])=>{scheduledDelays.push(Number(ms)||0);return origWinSetTimeout(fn,ms,...args);}) as typeof window.setTimeout;
+ function H4Harness({attempt}:{attempt:any}){
+  hookState=useGradingRecovery({
+   contextKey:'h4-test',
+   attempt,
+   enabled:true,
+   retry:()=>{retryInvoked++;},
+   poll:()=>{pollInvoked++;},
+  });
+  return null;
+ }
+ const rootH4=createRoot(host());
+ try{
+  // Reload onto an in-flight 'grading' attempt without manual start()
+  await act(async()=>rootH4.render(<H4Harness attempt={{id:1,status:'grading'}}/>));
+  assert.equal(hookState.waiting,true,'H4: status=grading must enter waiting state on reload');
+  assert.ok(scheduledDelays.some(d=>d>=5000&&d<=7000),'H4: status=grading must schedule a 5s read-only poll');
+  scheduledDelays.length=0;
+  // Negative clock skew (+130s) must clamp backoff to local 10s+jitter (<=12s), NOT 130s!
+  await act(async()=>rootH4.render(<H4Harness attempt={{id:1,status:'failed',errorCode:'POOL_BUSY',retryAt:new Date(Date.now()+130_000).toISOString()}}/>));
+  await act(async()=>{hookState.start();});
+  assert.equal(hookState.waiting,true);
+  assert.ok(scheduledDelays.some(d=>d>=10000&&d<=12000),`H4: negative clock skew must back off locally (~10s), not 130s (got ${scheduledDelays.join(',')})`);
+  assert.equal(retryInvoked,0);
+  assert.equal(pollInvoked,0);
+ }finally{
+  window.setTimeout=origWinSetTimeout;
+  await act(async()=>rootH4.unmount());
+ }
+
+ // H5: PracticalMockView continues polling past 2+ consecutive identical network failures and recovers when graded.
+ const {PracticalMockView}=await import('../components/PracticalMockView.tsx');
+ let pollCalls=0;
+ const origWinSetTimeoutH5=window.setTimeout;
+ window.setTimeout=((fn:any,ms?:number,...args:any[])=>origWinSetTimeoutH5(fn,ms&&ms>=1000?15:ms,...args)) as typeof window.setTimeout;
+ api.getPracticalMocks=async()=>[{id:'h5-exam',title:'H5 Mock',stationCount:1,stationSeconds:60,status:'finished'}] as any;
+ api.getPracticalMock=async()=>{
+  pollCalls++;
+  if(pollCalls===1)return {examId:'h5-exam',title:'H5 Mock',status:'grading',stationCount:1,gradedStations:0,stationSeconds:60,startedAt:Date.now()-10000} as any;
+  if(pollCalls<=3)throw new Error('Network down');
+  return {examId:'h5-exam',title:'H5 Mock',status:'graded',stationCount:1,stationSeconds:60,startedAt:Date.now()-10000,stations:[{question_text:'Identify structure',maxMarks:2,images:[],answer:'Femur',model_answer:'Femur',grade:{score:2,maxScore:2,feedback:'Good',points:[]}}]} as any;
+ };
+ const rootH5=createRoot(host());
+ try{
+  await act(async()=>rootH5.render(<PracticalMockView isAdmin={false}/>));
+  await click('View grading');
+  for(let i=0;i<20&&pollCalls<4;i++){await act(async()=>{await new Promise(r=>origWinSetTimeoutH5(r,25));});}
+  assert.ok(pollCalls>=4,`H5: polling must continue past 2+ identical network errors (got ${pollCalls} polls)`);
+  assert.match(text(),/Exam results.*2\/2 marks/,'H5: PracticalMockView must render graded result once network recovers');
+ }finally{
+  window.setTimeout=origWinSetTimeoutH5;
+  await act(async()=>rootH5.unmount());
+ }
 });

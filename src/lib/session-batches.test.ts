@@ -32,6 +32,8 @@ test('batch content merges never undo newer local answers/bookmarks or discard o
   assert.equal(completed.questions[0].questionText,'cached');
   assert.equal(completed.questions[0].contentLoaded,true);
   assert.equal(completed.questions[0].isBookmarked,true);
+  const privateReview={id:1,mode:'study',status:'completed',questionBatch:{size:6},questions:[{id:10,contentLoaded:false,submitted:true}]};
+  assert.equal(mergeCompletedStudy({...previous,mode:'study',privateQuiz:true,gradeOnSubmit:true},privateReview),privateReview,'Exam review must reload formerly hidden keys instead of reusing masked study content');
   const original = globalThis.localStorage;
   globalThis.localStorage = { getItem: key => key.includes('draft_answers') ? JSON.stringify({version:1, answers:{20:'C'}}) : null } as Storage;
   try {

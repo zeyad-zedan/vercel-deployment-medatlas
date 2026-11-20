@@ -2,14 +2,14 @@ import type { QuestionImage } from './question-images.ts';
 import type { ShortAnswerGrade } from './short-answer-model.ts';
 
 export const practicalStationSeconds = 120;
-export const maxPracticalStations = 25;
 export const maxPracticalAnswerLength = 2000;
-export const maxPracticalMarkingPoints = 6;
+export const maxPracticalMarkingPoints = 15;
 
 export type PracticalMockCard = {
   id: string;
   title: string;
   stationCount: number;
+  stationSeconds?: number;
   status: 'ready' | 'active' | 'finished' | 'graded';
 };
 

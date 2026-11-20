@@ -44,22 +44,14 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
   const latestSaved = useRef(attempt.answer);
   const draftStartedAt = useRef<number | null>(null);
 
-  useEffect(() => {
-    const update = () => setSeconds(Math.ceil(Math.max(0, deadline - performance.now()) / 1000));
-    update();
-    const ticker = window.setInterval(update, 200);
-    const expiry = window.setTimeout(() => { setSeconds(0); onClosed(); }, Math.max(0, deadline - performance.now()));
-    return () => { window.clearInterval(ticker); window.clearTimeout(expiry); };
-  }, [deadline, onClosed]);
-
-  const save = useCallback(async (): Promise<boolean> => {
+  const save = useCallback(async (allowGrace = false): Promise<boolean> => {
     while (pending.current) {
       const ok = await pending.current;
       if (!ok) return false;
     }
     const previous = unacknowledged.current;
     if (!previous && latestAnswer.current === latestSaved.current) return true;
-    if (performance.now() >= deadline) return false;
+    if (performance.now() >= deadline + (allowGrace ? 3000 : 0)) return false;
     // A response can be lost after the server commits. Replay that exact write before sending new text.
     const write = previous ?? { text: latestAnswer.current, revision: revision.current };
     unacknowledged.current = write;
@@ -82,8 +74,24 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
     })();
     pending.current = run;
     const saved = await run;
-    return saved && previous && latestAnswer.current !== latestSaved.current ? save() : saved;
+    return saved && previous && latestAnswer.current !== latestSaved.current ? save(allowGrace) : saved;
   }, [attempt.id, attempt.stationIndex, deadline]);
+
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  useEffect(() => {
+    let active = true;
+    const update = () => setSeconds(Math.ceil(Math.max(0, deadline - performance.now()) / 1000));
+    update();
+    const ticker = window.setInterval(update, 200);
+    const expiry = window.setTimeout(() => {
+      if (!active) return;
+      setSeconds(0);
+      void saveRef.current(true).finally(() => { if (active) onClosed(); });
+    }, Math.max(0, deadline - performance.now()));
+    return () => { active = false; window.clearInterval(ticker); window.clearTimeout(expiry); };
+  }, [deadline, onClosed]);
 
   const skip = useCallback(async () => {
     if (skipping || performance.now() >= deadline) return;
@@ -144,10 +152,10 @@ function Station({ attempt, deadline, onClosed, onRefresh, onSkipped }: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-600" role="status">{saving ? 'Saving…' : answer === savedAnswer ? (savedAnswer ? 'Answer saved.' : 'Your answer saves as you type.') : 'Answer awaiting save.'}</p>
         {!confirmSkip && <button type="button" className={secondary} disabled={skipping || seconds === 0}
-          onClick={() => setConfirmSkip(true)}>Skip image</button>}
+          onClick={() => setConfirmSkip(true)}>Skip slide</button>}
       </div>
       {confirmSkip && <div role="region" aria-label="Confirm skip station" className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900">
-        <p className="font-medium">Are you sure you want to skip this image? You cannot go back once you skip.</p>
+        <p className="font-medium">Are you sure you want to skip this slide? You cannot go back once you skip.</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={primary} disabled={skipping} onClick={() => { void skip(); }}>{skipping ? 'Skipping…' : 'Confirm skip'}</button>
           <button type="button" className={secondary} disabled={skipping} onClick={() => setConfirmSkip(false)}>Cancel</button>
@@ -170,34 +178,76 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
   const [grading, setGrading] = useState(false);
   const [error, setError] = useState('');
   const [retryReady, setRetryReady] = useState(false);
+  const [pollFinished, setPollFinished] = useState(false);
+  const [pollTick, setPollTick] = useState(0);
+  const [visible, setVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
   const requestedGrade = useRef(false);
   const inFlight = useRef(false);
+  const alive = useRef(true);
+  const activeController = useRef<AbortController | null>(null);
+  const attemptRef = useRef(attempt);
+  attemptRef.current = attempt;
   const id = attempt.id;
 
-  const request = useCallback(async (grade = false) => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      activeController.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVisibility = () => setVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  const request = useCallback(async (grade = false, manual = false) => {
     if (inFlight.current) return;
     inFlight.current = true;
-    setError('');
+    if (manual) setError('');
     if (grade) setGrading(true);
     const controller = new AbortController();
-    const timer = grade ? window.setTimeout(() => controller.abort(), 30_000) : undefined;
-    try { setView(timedView(await (grade ? api.gradePracticalMock(id, controller.signal) : api.getPracticalMock(id)))); }
-    catch (error) { setError(controller.signal.aborted ? 'Your answers are saved. Check for results again shortly.' : (error as Error).message); }
-    finally { window.clearTimeout(timer); inFlight.current = false; if (grade) setGrading(false); }
+    activeController.current = controller;
+    const timer = window.setTimeout(() => controller.abort(), grade ? 30_000 : 20_000);
+    try {
+      const next = await (grade ? api.gradePracticalMock(id, controller.signal) : api.getPracticalMock(id, controller.signal));
+      if (!alive.current) return;
+      setError('');
+      setPollFinished(false);
+      setView(timedView(next));
+    } catch (error) {
+      if (!alive.current) return;
+      setError(controller.signal.aborted ? 'Your answers are saved. Check for results again shortly.' : (error as Error).message);
+      setPollTick(tick => tick + 1);
+      if (grade && attemptRef.current.status === 'finished') setPollFinished(true);
+    } finally {
+      window.clearTimeout(timer);
+      if (activeController.current === controller) activeController.current = null;
+      inFlight.current = false;
+      if (alive.current && grade) setGrading(false);
+    }
   }, [id]);
-  const refresh = useCallback(() => { void request(); }, [request]);
+  const refresh = useCallback(() => { void request(false, false); }, [request]);
+  const manualRefresh = useCallback(() => { void request(false, true); }, [request]);
 
   useEffect(() => {
     if (attempt.status === 'finished' && !attempt.gradingError && !requestedGrade.current) {
       requestedGrade.current = true;
-      void request(true);
+      void request(true, false);
+      return;
     }
-    if (attempt.status === 'grading') {
-      const delay = Math.min(30_000, Math.max(attempt.retryInMs, error ? 10_000 : 5000));
+    if (!visible) return;
+    if (attempt.status === 'grading' || (attempt.status === 'finished' && pollFinished)) {
+      const delay = attempt.status === 'grading'
+        ? Math.min(30_000, Math.max(attempt.retryInMs, error ? 10_000 : 5000))
+        : 5000;
       const poll = window.setTimeout(refresh, delay + Math.random() * 2000);
       return () => window.clearTimeout(poll);
     }
-  }, [attempt, error, refresh, request]);
+  }, [attempt, error, pollFinished, pollTick, visible, refresh, request]);
 
   useEffect(() => {
     if (attempt.status !== 'finished') return;
@@ -212,7 +262,7 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
       {attempt.status !== 'active' && <button type="button" className={secondary} onClick={onExit}>Back to exams</button>}
     </header>
     {error && <div className="ma-dashboard-panel space-y-2 text-sm text-red-700" role="alert"><p>{error}</p>
-      <button type="button" className={secondary} onClick={refresh}>Retry connection</button>
+      <button type="button" className={secondary} onClick={manualRefresh}>Retry connection</button>
     </div>}
     {attempt.status === 'active' && <Station key={`${attempt.stationIndex}:${attempt.revision}`} attempt={attempt} deadline={deadline} onClosed={refresh} onRefresh={refresh} onSkipped={next => setView(timedView(next))} />}
     {(grading || attempt.status === 'grading') && <div className="ma-dashboard-panel space-y-2" role="status">
@@ -222,7 +272,7 @@ function PracticalMockRunner({ initial, onExit }: { initial: PracticalMockAttemp
     {!grading && attempt.status === 'finished' && <div className="ma-dashboard-panel space-y-3">
       <h2 className="text-lg font-semibold">Exam finished</h2>
       <p className="text-sm text-slate-600">{attempt.gradingError || 'Your answers are saved.'}</p>
-      <button type="button" className={primary} disabled={!retryReady} onClick={() => { void request(true); }}>Grade answers</button>
+      <button type="button" className={primary} disabled={!retryReady} onClick={() => { void request(true, true); }}>Grade answers</button>
     </div>}
     {attempt.status === 'graded' && <>
       <div className="ma-dashboard-panel" role="status">
@@ -263,7 +313,7 @@ export function PracticalMockView({ isAdmin }: { isAdmin: boolean }) {
   return <div className="max-w-4xl space-y-6">
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><h1 className="text-2xl font-bold">Practical Mock Exams</h1>
-        <p className="mt-2 text-sm text-slate-600">Identify what you see in each photo and write your answer before the two-minute timer ends.</p></div>
+        <p className="mt-2 text-sm text-slate-600">Answer each slide before its timer ends. Slides advance automatically.</p></div>
       {isAdmin && <button type="button" className={primary} onClick={() => setAuthoring(true)}>Create exam</button>}
     </header>
     {error && <div className="ma-dashboard-panel space-y-2" role="alert"><p className="text-sm text-red-700">{error}</p>
@@ -274,7 +324,7 @@ export function PracticalMockView({ isAdmin }: { isAdmin: boolean }) {
       {cards?.map(card => <article key={card.id} className="ma-session-card gap-3">
         <ClipboardCheck size={22} className="text-[var(--ma-brand)]" aria-hidden="true" />
         <h2 className="text-lg font-bold">{card.title}</h2>
-        <p className="text-sm text-slate-600">{card.stationCount} {card.stationCount === 1 ? 'station' : 'stations'} · {card.stationCount * practicalStationSeconds / 60} minutes</p>
+        <p className="text-sm text-slate-600">{card.stationCount} {card.stationCount === 1 ? 'station' : 'stations'} · {card.stationSeconds ?? practicalStationSeconds} seconds per slide · {card.stationCount * (card.stationSeconds ?? practicalStationSeconds) / 60} minutes</p>
         {confirm === card.id ? <div className="mt-auto space-y-3 pt-2">
           <p className="text-sm">The timer keeps running if you leave. Stations advance automatically, and answers are sent to Gemini for grading after the last station.</p>
           <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={Boolean(opening)} onClick={() => { void open(card); }}>Begin timed exam</button>

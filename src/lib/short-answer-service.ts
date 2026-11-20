@@ -1,18 +1,20 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {pool} from '../db/index.ts';
 import {gradeWithConfiguredCredentials} from './gemini-grading-pool.ts';
-import {GradingError} from './gemini-short-answer.ts';
+import {GradingError,gradingRetrySeconds} from './gemini-short-answer.ts';
 import {parseShortAnswerBatch,type ShortAnswerDefinition} from './short-answer-model.ts';
 import {validImageFileName,type ImportImageFile,type QuestionImage} from './question-images.ts';
 import {imageForStorage} from './telegram-question-images.ts';
 import {syncShortAnswerQuizEntries} from './short-answer-quiz-links.ts';
 export class ShortAnswerError extends Error {constructor(message:string,public status=400){super(message);}}
-export const gradingMessages:Record<string,string>={KEY_MISSING:'Add your Gemini API key in Profile & Settings, then retry.',KEY_OR_ACCESS:'Google rejected the key or model access. Check your key and Google project settings.',QUOTA:'Your Google quota is currently exhausted. Your answer is saved. Wait for your quota to reset, then retry.',TIMEOUT:'Google took too long to respond. Your answer is saved; you can retry.',MODEL_UNAVAILABLE:'This grading model is unavailable to your Google project. Contact the site administrator.',UNAVAILABLE:'Grading is temporarily unavailable. Your answer is saved.',INVALID_RESPONSE:'Google returned an incomplete or invalid grade. Your answer is saved; retry shortly.'};
-Object.assign(gradingMessages,{POOL_BUSY:'Grading is busy or cooling down. Your answer is saved; retry shortly.',POOL_QUOTA:'The grading service has reached its Google quota. Your answer is saved; retry later.',POOL_ACCESS:'A grading credential needs administrator attention. Your answer is saved; retry shortly.',POOL_CONFIG:'The grading service needs administrator setup. Your answer is saved.',POOL_RETRY:'Shared grading is now available. Retry grading your saved answer.',POOL_MODEL_UNAVAILABLE:'The grading model needs administrator attention. Your answer is saved.'});
+export const gradingMessages:Record<string,string>={KEY_MISSING:'Add your Gemini API key in Profile & Settings, then retry.',KEY_OR_ACCESS:'Google rejected the key or model access. Check your key and Google project settings.',QUOTA:'Google reported a project quota limit. Your answer is saved; retry later.',TIMEOUT:'Google took too long to respond. Your answer is saved; you can retry.',MODEL_UNAVAILABLE:'This grading model is unavailable to your Google project. Contact the site administrator.',UNAVAILABLE:'Grading is temporarily unavailable. Your answer is saved.',INVALID_RESPONSE:'Google returned an incomplete or invalid grade. Your answer is saved; retry shortly.'};
+Object.assign(gradingMessages,{POOL_BUSY:'Grading is busy or cooling down. Your answer is saved; retry shortly.',POOL_QUOTA:'Google reported a project quota limit for grading. Your answer is saved; retry later.',POOL_ACCESS:'A grading credential needs administrator attention. Your answer is saved; retry shortly.',POOL_CONFIG:'The grading service needs administrator setup. Your answer is saved.',POOL_RETRY:'Shared grading is now available. Retry grading your saved answer.',POOL_MODEL_UNAVAILABLE:'The grading model needs administrator attention. Your answer is saved.'});
 Object.assign(gradingMessages,{
  GEMINI_UNAVAILABLE:'Google grading is temporarily unavailable. Your answer is saved.',
  GEMINI_BAD_REQUEST:'The grading request needs administrator attention. Your answer is saved.',
  POOL_STORAGE:'Grading is temporarily unavailable. Your answer is saved.',
+ THROTTLED:'Google temporarily limited grading requests. Your answer is saved; retry shortly.',
+ POOL_RATE_LIMIT:'Google temporarily limited grading requests. Your answer is saved; retry shortly.',
 });
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const numericId=(value:unknown)=>{const id=Number(value);if(!Number.isSafeInteger(id)||id<1)throw new ShortAnswerError('Invalid question or attempt.');return id;};
@@ -45,21 +47,25 @@ export async function gradeShortAnswer(uid:string,id:unknown){
  const attemptId=numericId(id),client=await pool.connect(),lease=randomUUID();let row:any;
  try{
   await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,1))',[uid]);
-  [row]=(await client.query('SELECT * FROM public.short_answer_attempts WHERE id=$1 AND user_uid=$2 FOR UPDATE',[attemptId,uid])).rows;
+  [row]=(await client.query('SELECT *, extract(epoch FROM now())*1000 AS db_now_ms FROM public.short_answer_attempts WHERE id=$1 AND user_uid=$2 FOR UPDATE',[attemptId,uid])).rows;
   if(!row)throw new ShortAnswerError('Answer not found.',404);
   const activeExam=await client.query("SELECT 1 FROM public.exam_sessions WHERE user_uid=$1 AND mode='exam' AND status='in_progress' AND question_order_json::jsonb @> $2::jsonb LIMIT 1",[uid,JSON.stringify([{shortAnswerAttemptId:attemptId}])]);
   if(activeExam.rowCount)throw new ShortAnswerError('Submit the exam before requesting grading.',409);
-  if(row.status==='graded'||(row.status==='grading'&&Date.now()-new Date(row.grade_started_at).getTime()<45000)||new Date(row.retry_at||0).getTime()>Date.now()){await client.query('COMMIT');return clientAttempt(row);}
-  const [usage]=(await client.query(`SELECT count(*)::int AS recent,count(*) FILTER(WHERE status='grading' AND grade_started_at>now()-interval '45 seconds')::int AS active FROM public.short_answer_attempts WHERE user_uid=$1 AND grade_started_at>now()-interval '1 minute'`,[uid])).rows;
-  if(usage.recent>=6||usage.active>=2)throw new ShortAnswerError('Your answer is saved. Please wait a minute before requesting another grade.',429);
+  const nowMs=Number(row.db_now_ms)||Date.now();
+  if(row.status==='graded'||(row.status==='grading'&&nowMs-new Date(row.grade_started_at||0).getTime()<30000)||new Date(row.retry_at||0).getTime()>nowMs){await client.query('COMMIT');return clientAttempt(row);}
+  const [usage]=(await client.query(`SELECT count(*)::int AS recent,count(*) FILTER(WHERE status='grading' AND grade_started_at>now()-interval '30 seconds')::int AS active FROM public.short_answer_attempts WHERE user_uid=$1 AND grade_started_at>now()-interval '1 minute'`,[uid])).rows;
+  if(usage.recent>=12||usage.active>=3)throw new ShortAnswerError('Your answer is saved. Please wait a minute before requesting another grade.',429);
   await client.query(`UPDATE public.short_answer_attempts SET status='grading',lease_id=$1,grade_started_at=now(),retry_at=null,error_code=null,updated_at=now() WHERE id=$2`,[lease,attemptId]);
   await client.query('COMMIT');
- }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
  try{
   const {grade,model}=await gradeWithConfiguredCredentials(uid,row.snapshot as ShortAnswerDefinition,row.answer);
   await pool.query(`UPDATE public.short_answer_attempts SET status='graded',result=$1::jsonb,model=$2,lease_id=null,error_code=null,retry_at=null,updated_at=now() WHERE id=$3 AND user_uid=$4 AND lease_id=$5`,[JSON.stringify(grade),model,attemptId,uid,lease]);
- }catch(error){const failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',15);
-  await pool.query(`UPDATE public.short_answer_attempts SET status='failed',error_code=$1,retry_at=now()+($2*interval '1 second'),lease_id=null,updated_at=now() WHERE id=$3 AND user_uid=$4 AND lease_id=$5`,[failure.code,failure.delaySeconds,attemptId,uid,lease]);
+ }catch(error){const failure=error instanceof GradingError?error:new GradingError('UNAVAILABLE',gradingRetrySeconds);
+  // Shared credentials retain provider cooldowns in the pool; students can try another eligible key after 10s.
+  const retrySeconds=process.env.GEMINI_GRADING_POOL?.trim()?gradingRetrySeconds:Math.max(gradingRetrySeconds,failure.delaySeconds);
+  console.warn('[short-answer-grading] deferred',{code:failure.code,retrySeconds});
+  await pool.query(`UPDATE public.short_answer_attempts SET status='failed',error_code=$1,retry_at=now()+($2*interval '1 second'),lease_id=null,updated_at=now() WHERE id=$3 AND user_uid=$4 AND lease_id=$5`,[failure.code,retrySeconds,attemptId,uid,lease]);
  }
  return getShortAnswerAttempt(uid,attemptId);
 }

@@ -3462,10 +3462,15 @@ export async function getExamSessionForStudent(
 
         if(item.shortAnswerId){
           const attempt=shortAttempts.get(item.shortAnswerAttemptId!);
-          return {id:item.questionId,index,contentLoaded:true,questionType:'short_answer',shortAnswerId:item.shortAnswerId,maxMarks:item.maxMarks,
+          const maxMarks=(!isExamActive&&attempt?.maxScore)||item.maxMarks;
+          const liveGraded=!isExamActive&&attempt?.status==='graded';
+          const shortAnswerStatus=isExamActive?'saved':(liveGraded?'graded':item.shortAnswerStatus);
+          const shortAnswerScore=isExamActive?undefined:(liveGraded?(attempt.result?.score??item.shortAnswerScore):item.shortAnswerScore);
+          const selectedDisplayed=item.shortAnswerAttemptId?(isExamActive?'C':(liveGraded?(attempt.result?.score===maxMarks?'A':'B'):item.selectedCanonical)):null;
+          return {id:item.questionId,index,contentLoaded:true,questionType:'short_answer',shortAnswerId:item.shortAnswerId,maxMarks,
             questionText:source.questionText,images:source.images||[],tags:source.tags||'',specialTags:source.specialTags||'',subjectTitle:sMap.get(liveQ?.subjectId)||snapshot?.subjectTitle,lectureTitle:lMap.get(liveQ?.lectureId)||snapshot?.lectureTitle,
-            lecturePdfUrl:liveQ?lPdfMap.get(liveQ.lectureId):null,shortAnswerAttempt:attempt,shortAnswerStatus:isExamActive?'saved':item.shortAnswerStatus,shortAnswerScore:isExamActive?undefined:item.shortAnswerScore,hasSavedAnswer:!!item.shortAnswerAttemptId,
-            selectedDisplayed:item.shortAnswerAttemptId?(isExamActive?'C':item.selectedCanonical):null,correctDisplayedOption:isExamActive?undefined:'A',submitted:item.submitted,isBookmarked:bookmarkedSet.has(item.questionId)};
+            lecturePdfUrl:liveQ?lPdfMap.get(liveQ.lectureId):null,shortAnswerAttempt:attempt,shortAnswerStatus,shortAnswerScore,hasSavedAnswer:!!item.shortAnswerAttemptId,
+            selectedDisplayed,correctDisplayedOption:isExamActive?undefined:'A',submitted:item.submitted,isBookmarked:bookmarkedSet.has(item.questionId)};
         }
         const canonicalQ: CanonicalQuestion = {
           id: item.questionId,
@@ -3589,6 +3594,7 @@ export async function saveSessionQuestionAnswer(
     // Lock without transferring the full answer document out of PostgreSQL.
     const locked: any = await tx.execute(sql`
       SELECT id, mode, status, started_at, time_limit_seconds, elapsed_seconds,
+             extract(epoch FROM (now()::timestamp - started_at))::double precision * 1000 AS db_elapsed_ms,
              correct_count, incorrect_count, unanswered_count, score_percentage,
              (SELECT e.value FROM jsonb_array_elements(question_order_json::jsonb) e(value)
               WHERE (e.value->>'questionId')::int = ${questionId}) AS item
@@ -3596,7 +3602,11 @@ export async function saveSessionQuestionAnswer(
     const row = locked.rows[0];
     if (!row) throw new ClientSafeError('Forbidden: Session not found for this user.', 403);
     if (row.status !== 'in_progress') throw new ClientSafeError('Cannot modify a completed session.', 409);
-    const deadline = evaluateServerExamDeadline({ mode: row.mode, startedAt: row.started_at, timeLimitSeconds: row.time_limit_seconds });
+    const dbElapsedMs = Number(row.db_elapsed_ms);
+    const effectiveStartedAt = Number.isFinite(dbElapsedMs)
+      ? new Date(Date.now() - Math.max(0, dbElapsedMs))
+      : row.started_at;
+    const deadline = evaluateServerExamDeadline({ mode: row.mode, startedAt: effectiveStartedAt, timeLimitSeconds: row.time_limit_seconds });
     if (deadline.isExpired) throw new ClientSafeError('Exam time limit has expired.', 409);
     const item: SessionOrderItem = row.item;
     if (!item) throw new ClientSafeError('Question does not belong to this session.', 400);

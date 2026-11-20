@@ -5,6 +5,7 @@ import { db, isDatabaseConfigured } from '../db/index.ts';
 export interface RateLimitEntry {
   count: number;
   resetAt: number;
+  maxRequests?: number;
 }
 
 export interface RateLimitConsumeResult {
@@ -135,57 +136,83 @@ export function createPostgresRateLimitStore(): SharedRateLimitStore {
   return {
     async consume({ key, scope, windowMs, maxRequests, maxKeys, nowMs }) {
       const now = nowMs ?? Date.now();
-      const nowDate = new Date(now);
-      const nextResetDate = new Date(now + windowMs);
+      const nowSec = now / 1000;
+      const nextResetSec = (now + windowMs) / 1000;
 
-      // Periodically prune expired rows in the database
+      // Periodically prune expired rows in the database (using explicit UTC timestamps)
       if (now - lastPruneMs >= 15_000) {
         lastPruneMs = now;
         await db.execute(
-          sql`DELETE FROM rate_limit_buckets WHERE reset_at <= ${nowDate}`
+          sql`DELETE FROM rate_limit_buckets WHERE reset_at <= (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')`
         ).catch(() => {});
       }
 
       // Check if key already exists and is active
       const existingRes = await db.execute(
-        sql`SELECT count, reset_at FROM rate_limit_buckets WHERE key = ${key} LIMIT 1`
+        sql`SELECT count, extract(epoch FROM (reset_at AT TIME ZONE 'UTC'))::double precision * 1000 AS reset_at_ms
+            FROM rate_limit_buckets WHERE key = ${key} LIMIT 1`
       );
       const existingRow = (existingRes as any).rows?.[0];
 
-      if (!existingRow || new Date(existingRow.reset_at).getTime() <= now) {
+      if (!existingRow || Number(existingRow.reset_at_ms) <= now) {
         // Key is new or expired; check capacity in scope before inserting
         const countRes = await db.execute(
-          sql`SELECT COUNT(*)::int AS cnt FROM rate_limit_buckets WHERE scope = ${scope} AND reset_at > ${nowDate}`
+          sql`SELECT COUNT(*)::int AS cnt FROM rate_limit_buckets
+              WHERE scope = ${scope}
+                AND reset_at > (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')`
         );
         const activeInScope = Number((countRes as any).rows?.[0]?.cnt ?? 0);
 
         if (activeInScope >= maxKeys) {
           // Prune expired first
           await db.execute(
-            sql`DELETE FROM rate_limit_buckets WHERE scope = ${scope} AND reset_at <= ${nowDate}`
+            sql`DELETE FROM rate_limit_buckets
+                WHERE scope = ${scope}
+                  AND reset_at <= (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')`
           );
 
-          // Evict only oldest single-hit probe keys (count = 1); NEVER evict active security counters (count > 1)
+          const needed = Math.max(1, activeInScope - maxKeys + 1);
+          // Pass 1: Evict oldest single-hit probe keys (count <= 1) first.
           const evictRes = await db.execute(
             sql`DELETE FROM rate_limit_buckets
                 WHERE key IN (
                   SELECT key FROM rate_limit_buckets
                   WHERE scope = ${scope} AND count <= 1
                   ORDER BY updated_at ASC
-                  LIMIT ${Math.max(1, activeInScope - maxKeys + 1)}
+                  LIMIT ${needed}
                 )
                 RETURNING key`
           );
-          const evictedCount = Array.isArray((evictRes as any).rows)
+          let evictedCount = Array.isArray((evictRes as any).rows)
             ? (evictRes as any).rows.length
             : 0;
 
+          // Pass 2: Under legitimate multi-request saturation, evict oldest lowest-count non-blocked keys (count < maxRequests),
+          // while NEVER evicting actively blocked counters (count >= maxRequests).
+          if (evictedCount < needed && maxRequests > 2) {
+            const evictLowRes = await db.execute(
+              sql`DELETE FROM rate_limit_buckets
+                  WHERE key IN (
+                    SELECT key FROM rate_limit_buckets
+                    WHERE scope = ${scope} AND count < ${maxRequests}
+                    ORDER BY count ASC, updated_at ASC
+                    LIMIT ${needed - evictedCount}
+                  )
+                  RETURNING key`
+            );
+            evictedCount += Array.isArray((evictLowRes as any).rows)
+              ? (evictLowRes as any).rows.length
+              : 0;
+          }
+
           if (evictedCount === 0) {
             const recheckRes = await db.execute(
-              sql`SELECT COUNT(*)::int AS cnt FROM rate_limit_buckets WHERE scope = ${scope} AND reset_at > ${nowDate}`
+              sql`SELECT COUNT(*)::int AS cnt FROM rate_limit_buckets
+                  WHERE scope = ${scope}
+                    AND reset_at > (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')`
             );
             if (Number((recheckRes as any).rows?.[0]?.cnt ?? 0) >= maxKeys) {
-              // Fail closed under saturation so active multi-hit blocks cannot be evicted
+              // Fail closed only when every slot is occupied by an actively blocked counter (count >= maxRequests)
               return {
                 allowed: false,
                 count: maxRequests + 1,
@@ -197,26 +224,34 @@ export function createPostgresRateLimitStore(): SharedRateLimitStore {
         }
       }
 
-      // Atomic upsert in PostgreSQL across all instances
+      // Atomic upsert in PostgreSQL across all instances using explicit UTC timestamps
       const upsertRes = await db.execute(
         sql`INSERT INTO rate_limit_buckets (key, scope, count, reset_at, updated_at)
-            VALUES (${key}, ${scope}, 1, ${nextResetDate}, ${nowDate})
+            VALUES (
+              ${key},
+              ${scope},
+              1,
+              (to_timestamp(CAST(${nextResetSec} AS double precision)) AT TIME ZONE 'UTC'),
+              (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')
+            )
             ON CONFLICT (key) DO UPDATE
             SET count = CASE
-                  WHEN rate_limit_buckets.reset_at <= ${nowDate} THEN 1
+                  WHEN rate_limit_buckets.reset_at <= (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC') THEN 1
                   ELSE rate_limit_buckets.count + 1
                 END,
                 reset_at = CASE
-                  WHEN rate_limit_buckets.reset_at <= ${nowDate} THEN ${nextResetDate}
+                  WHEN rate_limit_buckets.reset_at <= (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')
+                    THEN (to_timestamp(CAST(${nextResetSec} AS double precision)) AT TIME ZONE 'UTC')
                   ELSE rate_limit_buckets.reset_at
                 END,
-                updated_at = ${nowDate}
-            RETURNING count, reset_at`
+                updated_at = (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')
+            RETURNING count, extract(epoch FROM (reset_at AT TIME ZONE 'UTC'))::double precision * 1000 AS reset_at_ms`
       );
 
       const row = (upsertRes as any).rows?.[0];
       const count = Number(row?.count ?? 1);
-      const resetAt = row?.reset_at ? new Date(row.reset_at).getTime() : now + windowMs;
+      const resetAtMs = Number(row?.reset_at_ms);
+      const resetAt = Number.isFinite(resetAtMs) ? resetAtMs : now + windowMs;
 
       return {
         allowed: count <= maxRequests,
@@ -227,9 +262,11 @@ export function createPostgresRateLimitStore(): SharedRateLimitStore {
     },
 
     async pruneExpired(nowMs = Date.now()) {
-      const nowDate = new Date(nowMs);
+      const nowSec = nowMs / 1000;
       const res = await db.execute(
-        sql`DELETE FROM rate_limit_buckets WHERE reset_at <= ${nowDate} RETURNING key`
+        sql`DELETE FROM rate_limit_buckets
+            WHERE reset_at <= (to_timestamp(CAST(${nowSec} AS double precision)) AT TIME ZONE 'UTC')
+            RETURNING key`
       );
       return Array.isArray((res as any).rows) ? (res as any).rows.length : 0;
     },
@@ -350,13 +387,29 @@ export function createBoundedRateLimiter(
     const toEvict = store.size - maxKeys + 1;
     let evicted = 0;
 
-    // Pass 1: Evict only single-hit probe entries (count <= 1) in FIFO order.
-    // Active security counters (count > 1) are strictly protected from key-churn eviction!
+    // Pass 1: Evict single-hit probe entries (count <= 1) in FIFO order.
     for (const [candidateKey, entry] of store.entries()) {
       if (entry.count <= 1) {
         store.delete(candidateKey);
         evicted++;
         if (evicted >= toEvict) break;
+      }
+    }
+
+    // Pass 2: Under legitimate multi-request saturation, evict lowest-count non-blocked entries
+    // (entry.count < entryMax), while NEVER evicting active blocked counters (entry.count >= entryMax).
+    if (store.size >= maxKeys) {
+      const evictable: Array<[string, number]> = [];
+      for (const [candidateKey, entry] of store.entries()) {
+        const entryMax = entry.maxRequests ?? maxRequests;
+        if (entry.count < entryMax) {
+          evictable.push([candidateKey, entry.count]);
+        }
+      }
+      evictable.sort((a, b) => a[1] - b[1]);
+      for (const [candidateKey] of evictable) {
+        store.delete(candidateKey);
+        if (store.size < maxKeys) break;
       }
     }
 
@@ -376,7 +429,7 @@ export function createBoundedRateLimiter(
       }
       const hasRoom = ensureBoundedCapacity(now);
       if (!hasRoom) {
-        // All maxKeys slots are occupied by active multi-hit security counters; fail closed for new keys
+        // All maxKeys slots are occupied by active blocked security counters; fail closed for new keys
         return {
           allowed: false,
           count: ruleMaxRequests + 1,
@@ -385,7 +438,7 @@ export function createBoundedRateLimiter(
         };
       }
       const resetAt = now + ruleWindowMs;
-      store.set(key, { count: 1, resetAt });
+      store.set(key, { count: 1, resetAt, maxRequests: ruleMaxRequests });
       return {
         allowed: true,
         count: 1,

@@ -2,20 +2,36 @@ import {getAuthToken} from './api.ts';
 import type {SessionPlayerApi} from './session-player-api.tsx';
 
 type State = {id:string;position:number;type:string;answered:boolean;choice:number|null;score:number|null;max_marks:number};
-type Row = {id:string;position:number;question:any;answer:any;result:any;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;guide_changed?:boolean;has_image:boolean;max_marks:number};
-export type CourseSession = {attemptId:string;versionId?:string;title:string;total:number;current:number;completed:boolean;studentUid:string;states:State[];questions:Row[]};
+type Row = {id:string;position:number;question:any;answer:any;result:any;status?:string;error?:string;errorCode?:string;retryAt?:string|null;study_feedback?:{correctOption:number;feedback:string};model_answer?:string;guide_changed?:boolean;has_image:boolean;max_marks:number};
+export type CourseSession = {attemptId:string;versionId?:string;title:string;total:number;current:number;completed:boolean;gradeOnSubmit?:boolean;studentUid:string;states:State[];questions:Row[]};
 const option = (index:number) => String.fromCharCode(65+index);
 
 export async function courseRequest(slug:string,path:string,body?:unknown,keepalive=false) {
+  const timeoutMs=path.startsWith('/grade')?45000:30000;
   const response=await fetch(`/api/impulse/quiz/${slug}${path}`,{
     method:body===undefined?'GET':'POST',credentials:'same-origin',keepalive,
-    signal:!keepalive&&typeof AbortSignal.timeout==='function'?AbortSignal.timeout(30000):undefined,
+    signal:typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function'?AbortSignal.timeout(timeoutMs):undefined,
     headers:{Authorization:`Bearer ${getAuthToken()||''}`,...(body===undefined?{}:{'Content-Type':'application/json','X-Impulse-Request':'1'})},
     body:body===undefined?undefined:JSON.stringify(body),
   });
-  const data=await response.json();
-  if(!response.ok)throw Object.assign(Error(data.error||'Please try again.'),{status:response.status});
-  return data;
+  let data:any=null;
+  try{data=await response.json();}catch{}
+  if(!response.ok){
+    const err:any=Object.assign(Error(data?.error||'Please try again.'),{status:response.status});
+    if(typeof data?.errorCode==='string')err.errorCode=data.errorCode;
+    if(typeof data?.retryAt==='string'){
+      err.retryAt=data.retryAt;
+    }else{
+      const retryAfter=response.headers?.get?.('retry-after');
+      if(retryAfter){
+        const secs=Number(retryAfter);
+        if(Number.isFinite(secs)&&secs>0)err.retryAt=new Date(Date.now()+secs*1000).toISOString();
+        else{const parsed=Date.parse(retryAfter);if(Number.isFinite(parsed))err.retryAt=new Date(parsed).toISOString();}
+      }
+    }
+    throw err;
+  }
+  return data??{};
 }
 
 /** Translate private, versioned attempts into the existing lecture player's contract. */
@@ -28,13 +44,14 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     const pending=queue.catch(()=>{}).then(operation);queue=pending;
     return pending.catch(error=>{if(error.status===401)onFailure(error);throw error;});
   };
-  const attempt=(row:Row)=>({answer:row.answer??'',status:row.result?'graded':'saved',result:row.result,
-    maxScore:Number(row.max_marks),modelAnswer:row.model_answer||'',guideChanged:Boolean(row.guide_changed)});
+  const attempt=(row:Row)=>({id:row.position+1,answer:row.answer??'',status:row.result?'graded':(row.status||'saved'),result:row.result,
+    maxScore:Number(row.max_marks),modelAnswer:row.model_answer||'',guideChanged:Boolean(row.guide_changed),
+    ...(row.error?{error:row.error}:{}),...(row.errorCode?{errorCode:row.errorCode}:{}),...(row.retryAt?{retryAt:row.retryAt}:{})});
   const summary=()=>{
     const answered=data.states.filter(s=>s.answered),graded=data.states.filter(s=>s.score!==null);
     const earned=graded.reduce((sum,s)=>sum+Number(s.score),0),maximum=data.states.reduce((sum,s)=>sum+Number(s.max_marks),0);
     const short=data.states.filter(s=>s.type==='short_answer');
-    return {id:sessionId,title:data.title,privateQuiz:true,mode:'study',status:data.completed?'completed':'in_progress',
+    return {id:sessionId,title:data.title,privateQuiz:true,gradeOnSubmit:Boolean(data.gradeOnSubmit),mode:'study',status:data.completed?'completed':'in_progress',
       totalQuestions:data.total,resumeIndex:position,elapsedSeconds:0,
       correctCount:graded.filter(s=>Number(s.score)===Number(s.max_marks)).length,
       incorrectCount:graded.filter(s=>Number(s.score)<Number(s.max_marks)).length,unansweredCount:data.total-answered.length,
@@ -50,7 +67,7 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
     hasSavedAnswer:state.answered,submitted:state.type==='mcq'?state.score!==null:state.answered,selectedDisplayed:state.type==='mcq'?(row?.result&&'_modelAnswer' in row.result?'__saved':state.choice!==null?option(state.choice):null):state.answered?(state.score===null?'C':Number(state.score)===Number(state.max_marks)?'A':'B'):null,
     ...(row?{previousVersionGrade:state.type==='mcq'&&row.result&&'_modelAnswer' in row.result?row.result:null,questionText:row.question.text,options:Object.fromEntries((row.question.options||[]).map((text:string,index:number)=>[option(index),text])),
       correctDisplayedOption:Number.isInteger(row.study_feedback?.correctOption??row.result?.correctOption)?option(row.study_feedback?.correctOption??row.result.correctOption):undefined,
-      explanation:row.study_feedback?.feedback||row.result?.feedback||'',shortAnswerAttempt:state.type==='short_answer'&&state.answered?attempt(row):null,
+      explanation:row.study_feedback?.feedback||row.result?.feedback||'',modelAnswer:row.model_answer||'',showModelAnswer:data.completed,shortAnswerAttempt:state.type==='short_answer'&&state.answered?attempt(row):null,
       images:row.has_image?[{id:`course-${slug}-${row.id}`,alt:'Question image',source:`/api/impulse/quiz/${slug}/image/${row.id}`}]:[],
     }:{}),
   });
@@ -58,7 +75,12 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
   const update=(state:State,answer:any,result:any,modelAnswer?:string)=>{
     state.answered=true;state.choice=state.type==='mcq'?answer:null;state.score=result?.score??null;
     const row=rows.get(state.id);
-    if(row){row.answer=answer;row.result=result;if(modelAnswer!==undefined)row.model_answer=modelAnswer;}
+    if(row){
+      row.answer=answer;row.result=result;
+      if(result){row.status='graded';row.error=undefined;row.errorCode=undefined;row.retryAt=undefined;}
+      else if(state.type==='short_answer'){row.status='saved';row.error=undefined;row.errorCode=undefined;row.retryAt=undefined;}
+      if(modelAnswer!==undefined)row.model_answer=modelAnswer;
+    }
     return row;
   };
   const persistPosition=()=>{const savedPosition=position;return serial(async()=>{if(!data.completed)await courseRequest(slug,'/progress',{position:savedPosition},true);return {success:true};});};
@@ -85,19 +107,47 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
       const saved=update(state,text,same?row?.result:null);
       return {session:summary(),attempt:saved?attempt(saved):{answer:text,status:'saved',maxScore:Number(state.max_marks)}};
     }),
-    gradeQuizShortAnswer:(_id,id)=>serial(async()=>{
+    gradeQuizShortAnswer:async(_id,id)=>{
+      await queue.catch(()=>{});
       const state=stateFor(id),row=rows.get(state.id);if(!row)throw Error('Load this question before grading.');
       if(row.result)return {session:summary(),attempt:attempt(row)};
-      const graded=await courseRequest(slug,`/grade/${state.id}`,{});
-      update(state,row.answer,graded.result,graded.modelAnswer);
-      return {session:summary(),attempt:attempt(row)};
-    }),
+      try{
+        const graded=await courseRequest(slug,`/grade/${state.id}`,{});
+        const currentRow=update(state,row.answer,graded.result,graded.modelAnswer)||row;
+        return {session:summary(),attempt:attempt(currentRow)};
+      }catch(error:any){
+        if(error?.status===401){onFailure(error);throw error;}
+        if(error?.status===429||error?.status===503||error?.name==='TimeoutError'||error?.name==='AbortError'){
+          const targetRow=rows.get(state.id)||row;
+          targetRow.status='failed';
+          targetRow.error=error?.message||'Grading is temporarily unavailable. Your answer is saved.';
+          targetRow.errorCode=typeof error?.errorCode==='string'?error.errorCode:(error?.status===429?'THROTTLED':(error?.name==='TimeoutError'||error?.name==='AbortError'?'TIMEOUT':'GEMINI_UNAVAILABLE'));
+          targetRow.retryAt=typeof error?.retryAt==='string'?error.retryAt:new Date(Date.now()+10000).toISOString();
+          return {session:summary(),attempt:attempt(targetRow)};
+        }
+        throw error;
+      }
+    },
     syncSessionProgress:persistPosition,
     completeSession:()=>serial(async()=>{
       await courseRequest(slug,'/submit',{});
+      if(data.gradeOnSubmit){
+        // Answers are already finalized on the server. Grade all pending written answers in one prompt/request.
+        const hasPending=data.states.some(s=>s.type==='short_answer'&&s.answered&&s.score===null);
+        if(hasPending){
+          try{
+            await courseRequest(slug,'/grade-all',{});
+          }catch{
+            /* Saved answers remain available for retry after submission. */
+          }
+        }
+      }
+      const wasGradeOnSubmit=Boolean(data.gradeOnSubmit);
       const next:CourseSession=await courseRequest(slug,`/session?offset=${Math.floor(position/6)*6}&states=1`);
-      data=next;next.questions.forEach(row=>rows.set(row.id,row));
-      return {session:snapshot(next.questions)};
+      data={...data,...next,states:next.states||data.states};
+      if(wasGradeOnSubmit||data.gradeOnSubmit)rows.clear();
+      next.questions.forEach(row=>rows.set(row.id,row));
+      return {session:snapshot([...rows.values()])};
     }),
   };
 

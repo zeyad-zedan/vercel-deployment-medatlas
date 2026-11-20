@@ -161,7 +161,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const rateLimitResolution = resolveRateLimitStoreConfig(process.env);
 const sharedRateLimitStore = rateLimitResolution.store;
 const rateLimitDegradedPolicy = rateLimitResolution.degradedModePolicy;
-app.use(impulseRouter(sharedRateLimitStore));
+app.use(impulseRouter(sharedRateLimitStore, undefined, undefined, rateLimitDegradedPolicy));
 
 app.use('/api/documents', createProtectedDocumentRouter({
   authenticate: requireAuth,
@@ -658,12 +658,33 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-app.use('/api/short-answers', requireAuth, shortAnswerRouter);
+const shortAnswerLimiter = createBoundedRateLimiter({
+  scope: 'short-answers', maxRequests: 60, windowMs: 60_000, maxKeys: 5_000,
+  store: sharedRateLimitStore, degradedModePolicy: rateLimitDegradedPolicy,
+  keyGenerator: (req) => (req as AuthRequest).user!.uid,
+});
+const practicalMockLimiter = createBoundedRateLimiter({
+  scope: 'practical-mocks', maxRequests: 90, windowMs: 60_000, maxKeys: 5_000,
+  store: sharedRateLimitStore, degradedModePolicy: rateLimitDegradedPolicy,
+  keyGenerator: (req) => (req as AuthRequest).user!.uid,
+});
+const practicalMockGradeLimiter = createBoundedRateLimiter({
+  scope: 'practical-mocks-grade', maxRequests: 10, windowMs: 60_000, maxKeys: 5_000,
+  store: sharedRateLimitStore, degradedModePolicy: rateLimitDegradedPolicy,
+  keyGenerator: (req) => (req as AuthRequest).user!.uid,
+});
+
+app.use('/api/short-answers', requireAuth, shortAnswerLimiter, shortAnswerRouter);
 app.use('/api/practical-mocks', (_req, res, next) => {
   res.locals.practicalMockReceivedAt = Date.now();
   res.locals.practicalMockRequestStarted = performance.now();
   next();
-}, requireAuth, practicalMockRouter(requireAdmin));
+}, requireAuth, practicalMockLimiter, (req, res, next) => {
+  if (req.method === 'POST' && /^\/[^/]+\/grade\/?$/.test(req.path)) {
+    return practicalMockGradeLimiter(req, res, next);
+  }
+  next();
+}, practicalMockRouter(requireAdmin));
 
 app.get('/api/cron/practical-mock-grading', async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
@@ -797,7 +818,13 @@ app.get('/api/sessions/:id', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-app.post(['/api/sessions/:id/short-answer','/api/sessions/:id/short-answer/grade'],requireAuth,async(req:AuthRequest,res)=>{
+const sessionShortAnswerLimiter = createBoundedRateLimiter({
+  scope: 'session-short-answers', maxRequests: 60, windowMs: 60_000, maxKeys: 5_000,
+  store: sharedRateLimitStore, degradedModePolicy: rateLimitDegradedPolicy,
+  keyGenerator: (req) => (req as AuthRequest).user!.uid,
+});
+
+app.post(['/api/sessions/:id/short-answer','/api/sessions/:id/short-answer/grade'],requireAuth,sessionShortAnswerLimiter,async(req:AuthRequest,res)=>{
  try{const {saveQuizShortAnswer,gradeQuizShortAnswer,saveAndGradeQuizShortAnswer}=await import('./src/lib/mixed-quiz-short-answers.ts');
  if(req.path.endsWith('/grade')){
   if(req.body?.consent!==true)return res.status(400).json({error:'Confirm sending your answer to Google for grading.'});

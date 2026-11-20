@@ -60,7 +60,7 @@ export const McqSessionPlayer: React.FC<McqSessionPlayerProps> = (props) => {
 const SessionPlayerContent: React.FC<McqSessionPlayerProps> = (props) => {
   if (props.initialSession?.mode === 'exam') {
     return <QuizTextSaveProvider key={props.initialSession.id} session={props.initialSession}><QuestionImageProvider questions={props.initialSession.questions}><UniversityExamPlayer session={props.initialSession}
-      onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={api}/></QuestionImageProvider></QuizTextSaveProvider>;
+      onExit={props.onExit} onSessionCompleted={props.onSessionCompleted} onQuestionAnswered={props.onQuestionAnswered} api={props.service || api}/></QuestionImageProvider></QuizTextSaveProvider>;
   }
   return <QuizTextSaveProvider key={props.initialSession.id} session={props.initialSession}><QuestionImageProvider questions={props.initialSession.questions}><StudySessionPlayer {...props}/></QuestionImageProvider></QuizTextSaveProvider>;
 };
@@ -125,7 +125,20 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
     }
   );
   const [matchingChoices,setMatchingChoices]=useState<Record<number,string>>(()=>({...Object.fromEntries((initialSession.questions||[]).filter((q:any)=>q.matchingChoiceId).map((q:any)=>[q.id,q.matchingChoiceId])),...saves.matchingDrafts}));
-  const applyShortAnswer=(id:number,result:any)=>{const pick=result.attempt.status==='graded'?(result.attempt.result.score===result.attempt.maxScore?'A':'B'):'C';setLocalSelections(previous=>({...previous,[id]:pick}));setSession((previous:any)=>({...previous,...result.session,questions:previous.questions.map((q:any)=>q.id===id?{...q,shortAnswerAttempt:result.attempt,shortAnswerStatus:result.attempt.status,shortAnswerScore:result.attempt.result?.score,maxMarks:result.attempt.maxScore||q.maxMarks,hasSavedAnswer:true,selectedDisplayed:pick,submitted:true,...(previous.privateQuiz?{answerCorrect:result.attempt.status==='graded'?pick==='A':null}:{})}:q)}));onQuestionAnswered?.(result.session);};
+  const applyShortAnswer=(id:number,result:any)=>{
+    const attempt=result?.attempt;
+    if(!attempt){
+      setLocalSelections(previous=>{const {[id]:_removed,...rest}=previous;return rest;});
+      setSession((previous:any)=>({...previous,...result?.session,questions:previous.questions.map((q:any)=>q.id===id?{...q,shortAnswerAttempt:null,shortAnswerStatus:'cleared',shortAnswerScore:null,hasSavedAnswer:false,selectedDisplayed:null,submitted:false,...(previous.privateQuiz?{answerCorrect:null}:{})}:q)}));
+      onQuestionAnswered?.(result?.session);
+      return;
+    }
+    const maxMarks=attempt.maxScore||1;
+    const pick=attempt.status==='graded'?(attempt.result?.score===maxMarks?'A':'B'):'C';
+    setLocalSelections(previous=>({...previous,[id]:pick}));
+    setSession((previous:any)=>({...previous,...result?.session,questions:previous.questions.map((q:any)=>{if(q.id!==id)return q;const qMax=attempt.maxScore||q.maxMarks||1;const qPick=attempt.status==='graded'?(attempt.result?.score===qMax?'A':'B'):'C';return {...q,shortAnswerAttempt:attempt,shortAnswerStatus:attempt.status,shortAnswerScore:attempt.result?.score,maxMarks:qMax,hasSavedAnswer:true,selectedDisplayed:qPick,submitted:true,...(previous.privateQuiz?{answerCorrect:attempt.status==='graded'?qPick==='A':null}:{})};})}));
+    onQuestionAnswered?.(result?.session);
+  };
   const handleShortAnswer=(question:any,result:any)=>applyShortAnswer(question.id,result);
   useEffect(()=>textSaves.subscribeSaved?.(applyShortAnswer),[textSaves,onQuestionAnswered]);
   const handleMatchingChoice=(question:any,choice:string)=>{
@@ -287,7 +300,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const autoSubmittedRef = useRef(false);
 
   const isCompleted = session.status === 'completed'||Boolean(session.reviewOnly);
-  const isExamMode = session.mode === 'exam';
+  const isExamMode = session.mode === 'exam' || Boolean(session.privateQuiz && session.gradeOnSubmit);
   const questions = session.questions || [];
   const currentQ = questions[currentIndex] || null;
 
@@ -1030,6 +1043,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 </div>
               </div>
 
+              {completingSession&&session.gradeOnSubmit&&<p role="status" className="text-sm text-slate-600">Submitting and grading your saved answers. Results appear after submission.</p>}
               {currentQ.questionType==='short_answer'?<ShortAnswerQuestion key={currentQ.id} question={currentQ} sessionId={session.id} exam={isExamMode} completed={isCompleted} disabled={completingSession} onSaved={result=>handleShortAnswer(currentQ,result)}/>:currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} completed={isCompleted} exam={isExamMode} onSelect={handleMatchingChoice}
                 onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <>
               {/* Question Text Vignette */}

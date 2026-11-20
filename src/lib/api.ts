@@ -421,6 +421,11 @@ export function subscribeToAuthChanges(
   };
 }
 
+const timeoutSignal = (ms: number): AbortSignal | undefined =>
+  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(ms)
+    : undefined;
+
 async function apiRequest<T>(
   path: string,
   options: RequestInit = {}
@@ -449,14 +454,30 @@ async function apiRequest<T>(
     }
 
     let errMsg = `Request failed (${res.status})`;
+    let errBody: any = null;
     try {
-      const errBody = await res.json();
+      errBody = await res.json();
       if (errBody?.error) errMsg = errBody.error;
     } catch {
       // ignore json parse error
     }
     const err: any = new Error(errMsg);
     err.status = res.status;
+    if (typeof errBody?.errorCode === 'string') err.errorCode = errBody.errorCode;
+    if (typeof errBody?.retryAt === 'string') {
+      err.retryAt = errBody.retryAt;
+    } else {
+      const retryAfter = res.headers?.get?.('retry-after');
+      if (retryAfter) {
+        const secs = Number(retryAfter);
+        if (Number.isFinite(secs) && secs > 0) {
+          err.retryAt = new Date(Date.now() + secs * 1000).toISOString();
+        } else {
+          const parsed = Date.parse(retryAfter);
+          if (Number.isFinite(parsed)) err.retryAt = new Date(parsed).toISOString();
+        }
+      }
+    }
     throw err;
   }
 
@@ -508,7 +529,7 @@ export const api = {
   publishPracticalMock: (id: string, title: string, stations: PracticalStationUpload[]) =>
     apiRequest<{ id: string }>('/api/practical-mocks', { method: 'POST', body: JSON.stringify({ id, title, stations }) }),
   startPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/start`, { method: 'POST' }),
-  getPracticalMock: (id: string) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}`),
+  getPracticalMock: (id: string, signal?: AbortSignal) => apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}`, { signal: signal ?? timeoutSignal(20000) }),
   savePracticalMockAnswer: (id: string, stationIndex: number, answer: string, revision: number) =>
     apiRequest<{ revision: number }>(`/api/practical-mocks/${id}/answer`, { method: 'PUT', body: JSON.stringify({ stationIndex, answer, revision }) }),
   skipPracticalMock: (id: string, stationIndex: number) =>
@@ -711,15 +732,15 @@ export const api = {
   },
 
   getGeminiKeyStatus: () => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key'),
-  saveQuizShortAnswer:(sessionId:number,questionId:number,answer:string)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer`,{method:'POST',body:JSON.stringify({questionId,answer})}),
-  gradeQuizShortAnswer:(sessionId:number,questionId:number)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer/grade`,{method:'POST',body:JSON.stringify({questionId,consent:true})}),
-  saveAndGradeQuizShortAnswer:(sessionId:number,questionId:number,answer:string)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer/grade`,{method:'POST',body:JSON.stringify({questionId,answer,consent:true})}),
+  saveQuizShortAnswer:(sessionId:number,questionId:number,answer:string)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer`,{method:'POST',signal:timeoutSignal(20000),body:JSON.stringify({questionId,answer})}),
+  gradeQuizShortAnswer:(sessionId:number,questionId:number)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer/grade`,{method:'POST',signal:timeoutSignal(35000),body:JSON.stringify({questionId,consent:true})}),
+  saveAndGradeQuizShortAnswer:(sessionId:number,questionId:number,answer:string)=>apiRequest<any>(`/api/sessions/${sessionId}/short-answer/grade`,{method:'POST',signal:timeoutSignal(35000),body:JSON.stringify({questionId,answer,consent:true})}),
   shortAnswerCatalog: () => apiRequest<any>('/api/short-answers/catalog'),
   shortAnswerQuestions: (lectureId:number,after?:number) => apiRequest<any>(`/api/short-answers/questions?lectureId=${lectureId}${after?'&after='+after:''}`),
   shortAnswerHistory: (before?:number) => apiRequest<any>('/api/short-answers/history'+(before?'?before='+before:'')),
-  saveShortAnswer: (questionId:number,answer:string) => apiRequest<any>('/api/short-answers/answers',{method:'POST',body:JSON.stringify({questionId,answer})}),
-  getShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}`),
-  gradeShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}/grade`,{method:'POST',body:JSON.stringify({consent:true})}),
+  saveShortAnswer: (questionId:number,answer:string) => apiRequest<any>('/api/short-answers/answers',{method:'POST',signal:timeoutSignal(20000),body:JSON.stringify({questionId,answer})}),
+  getShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}`,{signal:timeoutSignal(20000)}),
+  gradeShortAnswer: (id:number) => apiRequest<any>(`/api/short-answers/answers/${id}/grade`,{method:'POST',signal:timeoutSignal(35000),body:JSON.stringify({consent:true})}),
   saveGeminiKey: (apiKey:string) => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key',{method:'PUT',body:JSON.stringify({apiKey})}),
   removeGeminiKey: () => apiRequest<{configured:boolean;maskedKey:string|null;updatedAt:string|null;available:boolean}>('/api/auth/gemini-key',{method:'DELETE'}),
 

@@ -760,7 +760,8 @@ export async function testRestoreBackup(
 
         CREATE TABLE "${isolatedSchema}".practical_mock_exams (
           id UUID PRIMARY KEY, title TEXT NOT NULL, stations JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL,
-          unlisted BOOLEAN NOT NULL DEFAULT false, opens_at TIMESTAMPTZ
+          unlisted BOOLEAN NOT NULL DEFAULT false, opens_at TIMESTAMPTZ,
+          station_seconds INTEGER NOT NULL DEFAULT 120, mark_unit NUMERIC NOT NULL DEFAULT 1
         );
         CREATE TABLE "${isolatedSchema}".practical_mock_attempts (
           exam_id UUID REFERENCES "${isolatedSchema}".practical_mock_exams(id),

@@ -45,7 +45,7 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
    const body=JSON.parse(options.body),content=JSON.parse(body.contents[0].parts[0].text);assert.equal(content.student_answer,'Support and protection');assert.ok(!JSON.stringify(body).includes('@example.invalid'));
    assert.equal(body.contents[0].parts.length,1);assert.deepEqual(Object.keys(content).sort(),['model_answer','question','rubric','student_answer']);assert.ok(!JSON.stringify(body).includes('image-only-for-student'));
    assert.equal(body.generationConfig.thinkingConfig.thinkingLevel,'minimal');
-   if(mode==='quota')return Response.json({error:{message:fakeKey+' must never leak'}},{status:429});
+   if(mode==='quota')return Response.json({error:{message:fakeKey+' must never leak',details:[{'@type':'type.googleapis.com/google.rpc.QuotaFailure',violations:[{quotaMetric:'generativelanguage.googleapis.com/requests',quotaId:'RequestsPerDay',quotaValue:'20'}]}]}},{status:429});
    if(mode==='invalid')return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"points":[],"feedback":"bad"}'}]}}]});
    if(mode==='timeout')throw new DOMException(fakeKey+' timed out','TimeoutError');
    if(mode==='network')throw new Error(fakeKey+' network issue');
@@ -81,9 +81,24 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
   for(const [failure,expected] of [['quota','QUOTA'],['invalid','INVALID_RESPONSE'],['timeout','TIMEOUT'],['network','GEMINI_UNAVAILABLE']]){
    mode=failure;await pool.query("UPDATE public.short_answer_attempts SET status='saved',result=null,retry_at=null,grade_started_at=null WHERE id=$1",[id]);
    const failed=await api(`/answers/${id}/grade`,{consent:true});assert.equal(failed.data.attempt.status,'failed');assert.equal(failed.data.attempt.answer,'Support and protection');assert.ok(!JSON.stringify(failed.data).includes(fakeKey));
-   const [row]=(await pool.query('SELECT error_code FROM public.short_answer_attempts WHERE id=$1',[id])).rows;assert.equal(row.error_code,expected);
+   const [row]=(await pool.query("SELECT error_code,extract(epoch from(retry_at-updated_at))::int as retry_seconds FROM public.short_answer_attempts WHERE id=$1",[id])).rows;assert.equal(row.error_code,expected);
+   assert.equal(row.retry_seconds,failure==='quota'?60:10,'Transient retries wait exactly ten seconds; personal-key quota cooldowns are honored');
    const before:number=providerCalls;await api(`/answers/${id}/grade`,{consent:true});assert.equal(providerCalls,before,'cooldown must avoid another provider request');
   }
+  const previousPool=process.env.GEMINI_GRADING_POOL;
+  try{
+   process.env.GEMINI_GRADING_POOL=JSON.stringify([{key:fakeKey,project:'ten-second-retry-test',rpm:10000}]);
+   mode='quota';await pool.query("UPDATE public.short_answer_attempts SET status='saved',retry_at=null,grade_started_at=null WHERE id=$1",[id]);
+   const failed=await api(`/answers/${id}/grade`,{consent:true});
+   assert.equal(failed.data.attempt.errorCode,'POOL_QUOTA');
+   const {rows:[row]}=await pool.query("SELECT extract(epoch from(retry_at-updated_at))::int as retry_seconds FROM public.short_answer_attempts WHERE id=$1",[id]);
+   assert.equal(row.retry_seconds,10,'Shared-pool students can retry after exactly ten seconds');
+   // Opening the student retry button must not bypass the provider's project cooldown.
+   await pool.query("UPDATE public.short_answer_attempts SET retry_at=now()-interval '1 second' WHERE id=$1",[id]);
+   const before=providerCalls;
+   assert.equal((await api(`/answers/${id}/grade`,{consent:true})).data.attempt.errorCode,'POOL_BUSY');
+   assert.equal(providerCalls,before);
+  }finally{if(previousPool===undefined)delete process.env.GEMINI_GRADING_POOL;else process.env.GEMINI_GRADING_POOL=previousPool;}
   const imageHash='d'.repeat(64),imageSource=JSON.stringify({questions:[{...JSON.parse(source).questions[0],images:[{file:'diagram.png',alt:'Figure for students'}]}]});
   await assert.rejects(()=>service.importShortAnswers(lecture.id,imageSource,true,false),/missing image/);
   const manifest={imageFiles:[{name:'diagram.png',id:imageHash}]};
@@ -98,6 +113,15 @@ test('short-answer HTTP flow saves before grading, isolates users, deduplicates 
   assert.ok(imageAttempt.images[0].source.startsWith('/api/question-images/'));assert.ok(!JSON.stringify(imageAttempt).includes('image-only-for-student'));
   mode='success';const imageGraded=await api(`/answers/${imageAttempt.id}/grade`,{consent:true});assert.equal(imageGraded.data.attempt.status,'graded');assert.equal(imageGraded.data.attempt.result.score,2);assert.equal(telegramRequests,0,'Gemini grading sends no image links and fetches no image bytes');
   assert.equal((await api('/answers/'+imageAttempt.id)).data.attempt.images[0].id,imageHash);
+  // C6: Failed grading attempts retain grade_started_at and count toward per-user 1-minute cap (12/min), returning 429.
+  mode='network';
+  let saw429=false;
+  for(let i=0;i<14;i++){
+   const savedCap=(await api('/answers',{questionId:storedImageQuestion.id,answer:`Failed spam attempt ${i} ${randomUUID()}`})).data.attempt;
+   const res=await api(`/answers/${savedCap.id}/grade`,{consent:true});
+   if(res.status===429){saw429=true;break;}
+  }
+  assert.equal(saw429,true,'C6: repeated failing grade attempts must count toward per-user cap and return HTTP 429');
   const {createEncryptedBackup,testRestoreBackup}=await import('./backup-service.ts');const {envelope}=await createEncryptedBackup();assert.equal((await testRestoreBackup(envelope)).status,'verified');
  }finally{release?.();globalThis.fetch=actualFetch;await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));await db.delete(users).where(inArray(users.uid,[uid,other]));if(subjectId)await db.delete(subjects).where(eq(subjects.id,subjectId));}
 });

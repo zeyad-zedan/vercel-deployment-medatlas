@@ -21,7 +21,7 @@ export function practicalMockRouter(requireAdmin: RequestHandler) {
     if (id !== undefined && typeof id !== 'string') throw new PracticalMockError('Exam not found.', 404);
     res.json(await listPracticalMocks(req.user!.uid, id));
   }));
-  router.post('/', requireAdmin, json({ limit: '192kb' }),
+  router.post('/', requireAdmin, json({ limit: '4mb' }),
     handle(async (req, res) => res.status(201).json({ id: await publishPracticalMock(req.body) })));
   router.get('/:id', handle(async (req, res) => res.json(await readPracticalMock(req.user!.uid, req.params.id))));
   router.post('/:id/start', handle(async (req, res) => res.json(await startPracticalMock(req.user!.uid, req.params.id))));
