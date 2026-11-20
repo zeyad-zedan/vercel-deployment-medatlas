@@ -6,6 +6,8 @@ import {api} from './api.ts';
 export type SessionPlayerApi = Pick<typeof api,
   'submitQuestionAnswer' | 'getSessionQuestionBatch' | 'syncSessionProgress' |
   'completeSession' | 'saveQuizShortAnswer' | 'gradeQuizShortAnswer'> &
-  Partial<Pick<typeof api,'saveAndGradeQuizShortAnswer'>>;
+  Partial<Pick<typeof api,'saveAndGradeQuizShortAnswer'>> & {
+    gradeAllPendingShortAnswers?: () => Promise<{ session: any; graded?: number; remaining?: number }>;
+  };
 export const SessionPlayerApiContext = createContext<SessionPlayerApi>(api);
 export const useSessionPlayerApi = () => useContext(SessionPlayerApiContext);

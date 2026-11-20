@@ -152,6 +152,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
   const [flaggedIds, setFlaggedIds] = useState<Set<number>>(new Set());
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [completingSession, setCompletingSession] = useState(false);
+  const [gradingPendingAll, setGradingPendingAll] = useState(false);
   const [confirmSubmitModal, setConfirmSubmitModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(
@@ -940,7 +941,28 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 {session.quizScore?.pendingGradingCount?'Provisional score':'Score'}: {session.scorePercentage}%
               </h2>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {Boolean(session.quizScore?.pendingGradingCount) && service.gradeAllPendingShortAnswers && (
+                <button
+                  type="button"
+                  disabled={gradingPendingAll}
+                  onClick={async () => {
+                    setGradingPendingAll(true);
+                    setErrorMsg(null);
+                    try {
+                      const res = await service.gradeAllPendingShortAnswers!();
+                      if (res?.session) setSession(res.session);
+                    } catch (error: any) {
+                      setErrorMsg(error?.message || 'Grading is temporarily busy. Your saved answers are safe; try again shortly.');
+                    } finally {
+                      setGradingPendingAll(false);
+                    }
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 rounded-xl transition-colors cursor-pointer"
+                >
+                  {gradingPendingAll ? 'Grading answers…' : `Grade remaining (${session.quizScore.pendingGradingCount})`}
+                </button>
+              )}
               {session.lectureId && !isExamMode && onResetLectureProgress && (
                 <button
                   type="button"

@@ -7,7 +7,7 @@ export type CourseSession = {attemptId:string;versionId?:string;title:string;tot
 const option = (index:number) => String.fromCharCode(65+index);
 
 export async function courseRequest(slug:string,path:string,body?:unknown,keepalive=false) {
-  const timeoutMs=path.startsWith('/grade')?45000:30000;
+  const timeoutMs=path==='/grade-all'?85000:path.startsWith('/grade')?45000:30000;
   const response=await fetch(`/api/impulse/quiz/${slug}${path}`,{
     method:body===undefined?'GET':'POST',credentials:'same-origin',keepalive,
     signal:typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function'?AbortSignal.timeout(timeoutMs):undefined,
@@ -129,14 +129,25 @@ export function createCourseSession(slug:string,initial:CourseSession,onFailure:
       }
     },
     syncSessionProgress:persistPosition,
+    gradeAllPendingShortAnswers:()=>serial(async()=>{
+      const batch=await courseRequest(slug,'/grade-all',{});
+      const next:CourseSession=await courseRequest(slug,`/session?offset=${Math.floor(position/6)*6}&states=1`);
+      data={...data,...next,states:next.states||data.states};
+      rows.clear();
+      next.questions.forEach(row=>rows.set(row.id,row));
+      return {session:snapshot([...rows.values()]),graded:Number(batch?.graded)||0,remaining:Number(batch?.remaining)||0};
+    }),
     completeSession:()=>serial(async()=>{
       await courseRequest(slug,'/submit',{});
       if(data.gradeOnSubmit){
-        // Answers are already finalized on the server. Grade all pending written answers in one prompt/request.
+        // Answers are already finalized on the server. Grade pending written answers in reliable chunks.
         const hasPending=data.states.some(s=>s.type==='short_answer'&&s.answered&&s.score===null);
         if(hasPending){
           try{
-            await courseRequest(slug,'/grade-all',{});
+            const first=await courseRequest(slug,'/grade-all',{});
+            if(Number(first?.remaining)>0){
+              await courseRequest(slug,'/grade-all',{});
+            }
           }catch{
             /* Saved answers remain available for retry after submission. */
           }

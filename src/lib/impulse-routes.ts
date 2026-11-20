@@ -167,39 +167,54 @@ export function impulseRouter(store?:SharedRateLimitStore|null,grader=gradePriva
   const a=await access(req);required(!a.grade_on_submit||a.completed,'Submit the exam before grading.',409);
   const rows=(await pool.query(`SELECT q.id,q.position,q.definition,a.answer FROM impulse.questions q JOIN impulse.answers a ON a.question_id=q.id AND a.attempt_id=$1 WHERE q.version_id=$2 AND q.definition->>'type'='short_answer' AND a.result IS NULL ORDER BY q.position`,[a.id,a.version_id])).rows
    .filter((row:any)=>typeof row.answer==='string'&&row.answer.trim());
-  if(!rows.length)return res.json({graded:0});
-  const lease=randomUUID();
-  const claimedIds=new Set((await pool.query("UPDATE impulse.answers SET lease=$3,lease_until=now()+interval '50 seconds',status='grading' WHERE attempt_id=$1 AND question_id=ANY($2::uuid[]) AND result IS NULL AND (lease IS NULL OR lease_until<now()) RETURNING question_id",[a.id,rows.map((r:any)=>r.id),lease])).rows.map((r:any)=>r.question_id));
-  const claimed=rows.filter((r:any)=>claimedIds.has(r.id));
-  if(!claimed.length)return res.json({graded:0});
-  const items=claimed.map((row:any,index:number)=>({
-   index,
-   question:{question_text:row.definition.text,model_answer:row.definition.model_answer,rubric:row.definition.rubric,tags:[],status:'published' as const},
-   answer:row.answer as string,
-  }));
-  let grades:{index:number;grade:any}[];
-  try{
-   grades=grader===gradePrivateCourse
-    ?(await gradePrivateCourseBatch(items,a.quiz_id)).grade
-    :await Promise.all(items.map(async({index,question,answer})=>({index,grade:(await grader(question,answer,a.quiz_id)).grade})));
-  }catch(e:any){
-   await pool.query("UPDATE impulse.answers SET lease=NULL,lease_until=NULL,status='saved' WHERE attempt_id=$1 AND lease=$2",[a.id,lease]).catch(()=>{});
-   const retrySeconds=Math.max(1,Math.min(60,Number(e?.delaySeconds)||gradingRetrySeconds));
-   const errorCode=e instanceof GradingError?e.code:'UNAVAILABLE';
-   res.setHeader('Retry-After',String(retrySeconds));
-   return res.status(503).json({error:gradingMessages[errorCode]||'Grading is temporarily unavailable. Your answers are saved.',errorCode,retryAfterSeconds:retrySeconds,retryAt:new Date(Date.now()+retrySeconds*1000).toISOString()});
-  }
-  const client=await pool.connect();
-  try{
-   await client.query('BEGIN');
-   for(const {index,grade} of grades){
-    const row=claimed[index];
-    if(!row)continue;
-    await client.query("UPDATE impulse.answers SET result=$4,status='graded',lease=NULL,lease_until=NULL WHERE attempt_id=$1 AND question_id=$2 AND lease=$3 AND answer=$5",[a.id,row.id,lease,JSON.stringify(grade),JSON.stringify(row.answer)]);
+  if(!rows.length)return res.json({graded:0,remaining:0});
+  const batchSize=6;
+  const startedAt=performance.now();
+  const timeBudgetMs=65000;
+  let totalGraded=0;
+  let lastError:any=null;
+  for(let start=0;start<rows.length;start+=batchSize){
+   if(totalGraded>0&&performance.now()-startedAt>=timeBudgetMs)break;
+   const chunk=rows.slice(start,start+batchSize);
+   const lease=randomUUID();
+   const claimedIds=new Set((await pool.query("UPDATE impulse.answers SET lease=$3,lease_until=now()+interval '50 seconds',status='grading' WHERE attempt_id=$1 AND question_id=ANY($2::uuid[]) AND result IS NULL AND (lease IS NULL OR lease_until<now()) RETURNING question_id",[a.id,chunk.map((r:any)=>r.id),lease])).rows.map((r:any)=>r.question_id));
+   const claimed=chunk.filter((r:any)=>claimedIds.has(r.id));
+   if(!claimed.length)continue;
+   const items=claimed.map((row:any,index:number)=>({
+    index,
+    question:{question_text:row.definition.text,model_answer:row.definition.model_answer,rubric:row.definition.rubric,tags:[],status:'published' as const},
+    answer:row.answer as string,
+   }));
+   let grades:{index:number;grade:any}[];
+   try{
+    grades=grader===gradePrivateCourse
+     ?(await gradePrivateCourseBatch(items,a.quiz_id)).grade
+     :await Promise.all(items.map(async({index,question,answer})=>({index,grade:(await grader(question,answer,a.quiz_id)).grade})));
+   }catch(e:any){
+    await pool.query("UPDATE impulse.answers SET lease=NULL,lease_until=NULL,status='saved' WHERE attempt_id=$1 AND lease=$2",[a.id,lease]).catch(()=>{});
+    lastError=e;
+    break;
    }
-   await client.query('COMMIT');
-  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
-  res.json({graded:grades.length});
+   const client=await pool.connect();
+   try{
+    await client.query('BEGIN');
+    for(const {index,grade} of grades){
+     const row=claimed[index];
+     if(!row)continue;
+     await client.query("UPDATE impulse.answers SET result=$4,status='graded',lease=NULL,lease_until=NULL WHERE attempt_id=$1 AND question_id=$2 AND lease=$3 AND answer=$5",[a.id,row.id,lease,JSON.stringify(grade),JSON.stringify(row.answer)]);
+    }
+    await client.query('COMMIT');
+    totalGraded+=grades.length;
+   }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
+  }
+  const remaining=Math.max(0,rows.length-totalGraded);
+  if(totalGraded===0&&lastError){
+   const retrySeconds=Math.max(1,Math.min(60,Number(lastError?.delaySeconds)||gradingRetrySeconds));
+   const errorCode=lastError instanceof GradingError?lastError.code:'UNAVAILABLE';
+   res.setHeader('Retry-After',String(retrySeconds));
+   return res.status(503).json({error:gradingMessages[errorCode]||'Grading is temporarily unavailable. Your answers are saved.',errorCode,retryAfterSeconds:retrySeconds,retryAt:new Date(Date.now()+retrySeconds*1000).toISOString(),graded:0,remaining});
+  }
+  res.json({graded:totalGraded,remaining});
  }));
  r.post('/api/impulse/quiz/:slug/submit',wrap(async(req,res)=>{const a=await access(req),client=await pool.connect();try{await client.query('BEGIN');await client.query('SELECT id FROM impulse.attempts WHERE id=$1 FOR UPDATE',[a.id]);if(a.grade_on_submit){await client.query(`UPDATE impulse.answers ans SET result=jsonb_build_object('score',CASE WHEN ans.answer=q.definition->'correct' THEN 1 ELSE 0 END,'maxScore',1,'feedback',q.definition->>'explanation','correctAnswer',q.definition->'options'->((q.definition->>'correct')::int),'correctOption',q.definition->'correct'),status='graded' FROM impulse.questions q WHERE ans.attempt_id=$1 AND ans.question_id=q.id AND q.version_id=$2 AND q.definition->>'type'='mcq' AND ans.result IS NULL`,[a.id,a.version_id]);}await client.query('UPDATE impulse.attempts SET completed=true,updated_at=now() WHERE id=$1',[a.id]);await client.query('COMMIT');res.json({ok:true});}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}));
  return r;
