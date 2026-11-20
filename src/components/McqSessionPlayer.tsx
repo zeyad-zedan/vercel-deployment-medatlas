@@ -1065,7 +1065,7 @@ const StudySessionPlayer: React.FC<McqSessionPlayerProps> = ({
                 </div>
               </div>
 
-              {completingSession&&session.gradeOnSubmit&&<p role="status" className="text-sm text-slate-600">Submitting and grading your saved answers. Results appear after submission.</p>}
+              {completingSession&&session.gradeOnSubmit&&<p role="status" className="text-sm text-slate-600">Submitting your saved answers…</p>}
               {currentQ.questionType==='short_answer'?<ShortAnswerQuestion key={currentQ.id} question={currentQ} sessionId={session.id} exam={isExamMode} completed={isCompleted} disabled={completingSession} onSaved={result=>handleShortAnswer(currentQ,result)}/>:currentQ.matching ? <MatchingQuestion question={currentQ} questions={questions} choices={matchingChoices} completed={isCompleted} exam={isExamMode} onSelect={handleMatchingChoice}
                 onBookmark={(id,saved)=>setSession((previous:any)=>({...previous,questions:previous.questions.map((q:any)=>q.id===id?{...q,isBookmarked:saved}:q)}))}/> : <>
               {/* Question Text Vignette */}
