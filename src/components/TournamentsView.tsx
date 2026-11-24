@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, CalendarDays, ChevronDown, Medal, RefreshCw, Shuffle, Trophy, Users, X } from 'lucide-react';
+import { ArrowRight, Ban, CalendarDays, ChevronDown, Medal, Pencil, RefreshCw, Shuffle, Trophy, Users, X } from 'lucide-react';
 import { api } from '../lib/api.ts';
 import type { TournamentBoard, Tournament } from '../lib/study-rewards.ts';
 
 const cairoDate = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Cairo',
 });
+const cairoInputParts = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Africa/Cairo',
+});
 const pointFormat = new Intl.NumberFormat('en');
-const statusLabel = { active: 'Live', upcoming: 'Upcoming', completed: 'Finished' };
+const statusLabel: Record<Tournament['status'], string> = {
+  active: 'Live',
+  upcoming: 'Upcoming',
+  completed: 'Finished',
+  cancelled: 'Cancelled',
+};
 const medals = ['Gold', 'Silver', 'Bronze'] as const;
 const nicknamePrefixes = ['Atlas', 'Pulse', 'Synapse', 'Cortex', 'Neuron', 'Aorta', 'Suture', 'Vessel', 'Axon', 'Cardio', 'Med', 'Vita'];
 const nicknameSuffixes = ['Falcon', 'Fox', 'Lynx', 'Owl', 'Heron', 'Otter', 'Wolf', 'Ibis', 'Raven', 'Kite', 'Finch', 'Swift'];
@@ -16,6 +24,13 @@ function formatEventDates({ startsAt, endsAt }: Tournament) {
   const start = new Date(startsAt);
   const end = new Date(endsAt);
   return cairoDate.formatRange?.(start, end) ?? `${cairoDate.format(start)} – ${cairoDate.format(end)}`;
+}
+
+function toCairoDateTimeInput(iso: string): string {
+  const parts = Object.fromEntries(
+    cairoInputParts.formatToParts(new Date(iso)).map(part => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
 export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean; onStudy: () => void }) {
@@ -33,19 +48,34 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
   const nicknameInput = useRef<HTMLInputElement>(null);
   const joinButton = useRef<HTMLButtonElement>(null);
   const event = board?.tournament;
-  const joinableEventId = event?.status !== 'completed' && !board?.ownRank ? event?.id : undefined;
+  const canJoin = Boolean(event && (event.status === 'upcoming' || event.status === 'active') && !board?.ownRank);
+  const canViewBoard = Boolean(event && board && (board.ownRank || isAdmin));
 
   function openNicknameDialog() {
     const dialog = nicknameDialog.current;
-    if (dialog && !dialog.open) {
-      dialog.showModal();
+    if (!dialog) return;
+    if (!dialog.open) {
+      if (typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute('open', '');
+      }
       nicknameInput.current?.focus();
     }
   }
 
-  useEffect(() => {
-    if (joinableEventId !== undefined) openNicknameDialog();
-  }, [joinableEventId]);
+  function closeNicknameDialog() {
+    const dialog = nicknameDialog.current;
+    if (!dialog) return;
+    if (dialog.open) {
+      if (typeof dialog.close === 'function') {
+        dialog.close();
+      } else {
+        dialog.removeAttribute('open');
+        joinButton.current?.focus();
+      }
+    }
+  }
 
   useEffect(() => {
     const request = new AbortController();
@@ -76,6 +106,7 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
   }, [board]);
 
   function selectBoard(id?: number) {
+    closeNicknameDialog();
     setSelection(id);
     setError('');
     setJoinError('');
@@ -103,6 +134,7 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
     try {
       const joined = await api.joinTournament(event.id, nickname);
       focusAfterJoin.current = true;
+      closeNicknameDialog();
       setBoard(joined);
       setNickname('');
     } catch (err) {
@@ -127,6 +159,35 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
     </div>
   );
 
+  const joinDialog = canJoin && (
+    <dialog ref={nicknameDialog} aria-labelledby="nickname-dialog-title" aria-describedby="nickname-dialog-description"
+      onClose={() => joinButton.current?.focus()} onCancel={e => { if (joining) e.preventDefault(); }}
+      className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-lg backdrop:bg-slate-900/50 backdrop:backdrop-blur-xs">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 id="nickname-dialog-title" className="text-lg font-bold">Join tournament</h2>
+        <button type="button" aria-label="Close nickname dialog" disabled={joining}
+          onClick={closeNicknameDialog}
+          className="cursor-pointer rounded-lg p-1.5 text-slate-500 hover:text-slate-700">
+          <X size={20} aria-hidden="true" />
+        </button>
+      </div>
+      <form onSubmit={join}>
+        <p id="nickname-dialog-description">Choose the nickname other students will see on the leaderboard.</p>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <label htmlFor="tournament-nickname">Nickname</label>
+          <button type="button" className="ma-text-button min-h-9" disabled={joining || loading}
+            onClick={generateNickname}><Shuffle size={15} aria-hidden="true" /> Generate nickname</button>
+        </div>
+        <input id="tournament-nickname" ref={nicknameInput} value={nickname} onChange={e => setNickname(e.target.value)} dir="auto"
+          minLength={3} maxLength={24} required autoComplete="off" placeholder="e.g. AtlasMedic" disabled={joining || loading} />
+        {joinError && <p role="alert" className="ma-reward-error">{joinError}</p>}
+        <button type="submit" className="ma-reward-button ma-reward-primary" disabled={joining || loading}>
+          {joining ? 'Joining…' : 'Join tournament'} <ArrowRight size={16} aria-hidden="true" />
+        </button>
+      </form>
+    </dialog>
+  );
+
   return (
     <div className="ma-tournament-page">
       {error && <div className="ma-tournament-message" role="alert">
@@ -137,50 +198,26 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
         <span className="ma-reward-icon"><Trophy size={20} aria-hidden="true" /></span>
         <div><h1>No tournaments yet</h1><p>Come back here when the next tournament is announced.</p></div>
       </div>}
-      {event && board && !board.ownRank && (
+      {event && board && !canViewBoard && (
         <>
           {eventHeader}
           <section className="ma-tournament-panel ma-tournament-gate" aria-labelledby="tournament-entry-heading">
-            {event.status === 'completed' ? (
+            {event.status === 'cancelled' ? (
+              <><h2 id="tournament-entry-heading">Tournament cancelled</h2><p>This tournament was cancelled. Check back for the next scheduled event.</p></>
+            ) : event.status === 'completed' ? (
               <><h2 id="tournament-entry-heading">Entries are closed</h2><p>Participants can view the final standings. Check back for the next tournament.</p></>
             ) : (
               <>
                 <h2 id="tournament-entry-heading">Tournament entry</h2>
-                <p>Join with a nickname to see the leaderboard.</p>
+                <p>Join with a nickname to enter the competition and view the leaderboard.</p>
                 <button type="button" className="ma-reward-button ma-reward-primary mt-3" ref={joinButton}
                   disabled={loading} onClick={openNicknameDialog}>Choose nickname</button>
-                <dialog ref={nicknameDialog} aria-labelledby="nickname-dialog-title" aria-describedby="nickname-dialog-description"
-                  onClose={() => joinButton.current?.focus()} onCancel={e => { if (joining) e.preventDefault(); }}
-                  className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-lg backdrop:bg-slate-900/50 backdrop:backdrop-blur-xs">
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <h2 id="nickname-dialog-title" className="text-lg font-bold">Join tournament</h2>
-                    <button type="button" aria-label="Close nickname dialog" disabled={joining}
-                      onClick={() => nicknameDialog.current?.close()}
-                      className="cursor-pointer rounded-lg p-1.5 text-slate-500 hover:text-slate-700">
-                      <X size={20} aria-hidden="true" />
-                    </button>
-                  </div>
-                  <form onSubmit={join}>
-                    <p id="nickname-dialog-description">Choose the nickname other students will see on the leaderboard.</p>
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <label htmlFor="tournament-nickname">Nickname</label>
-                      <button type="button" className="ma-text-button min-h-9" disabled={joining || loading}
-                        onClick={generateNickname}><Shuffle size={15} aria-hidden="true" /> Generate nickname</button>
-                    </div>
-                    <input id="tournament-nickname" ref={nicknameInput} value={nickname} onChange={e => setNickname(e.target.value)} dir="auto"
-                      minLength={3} maxLength={24} required autoComplete="off" placeholder="e.g. AtlasMedic" disabled={joining || loading} />
-                    {joinError && <p role="alert" className="ma-reward-error">{joinError}</p>}
-                    <button type="submit" className="ma-reward-button ma-reward-primary" disabled={joining || loading}>
-                      {joining ? 'Joining…' : 'Join tournament'} <ArrowRight size={16} aria-hidden="true" />
-                    </button>
-                  </form>
-                </dialog>
               </>
             )}
           </section>
         </>
       )}
-      {event && board?.ownRank && (
+      {event && board && canViewBoard && (
         <div className="ma-tournament-grid">
           <section className="ma-leaderboard" aria-labelledby="tournament-rank-heading" aria-busy={loading || joining}>
             {eventHeader}
@@ -212,19 +249,42 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
                   })}
                 </tbody>
               </table>
-            ) : <p className="ma-leaderboard-empty">{event.status === 'completed' ? 'This tournament had no participants.' : 'The first nickname to join will appear here.'}</p>}
+            ) : (
+              <p className="ma-leaderboard-empty">
+                {event.status === 'cancelled'
+                  ? 'This tournament was cancelled before any participants joined.'
+                  : event.status === 'completed'
+                    ? 'This tournament had no participants.'
+                    : 'The first nickname to join will appear here.'}
+              </p>
+            )}
             {board.participantCount > board.leaders.length && <p className="ma-leaderboard-empty">Showing the top {board.leaders.length} participants.</p>}
           </section>
           <section className="ma-tournament-panel ma-tournament-entry" aria-label="Tournament entry">
-            <h2>Your standing</h2>
-            <p className="ma-tournament-nickname"><bdi>{board.ownRank.nickname}</bdi></p>
-            <dl className="ma-personal-rank">
-              <div><dt>Rank</dt><dd>#{board.ownRank.rank}</dd></div>
-              <div><dt>Points</dt><dd>{pointFormat.format(board.ownRank.points)}</dd></div>
-            </dl>
-            {event.status === 'active' && <button type="button" className="ma-reward-button ma-reward-primary" onClick={onStudy}>
-              Start studying <ArrowRight size={16} aria-hidden="true" />
-            </button>}
+            {board.ownRank ? (
+              <>
+                <h2>Your standing</h2>
+                <p className="ma-tournament-nickname"><bdi>{board.ownRank.nickname}</bdi></p>
+                <dl className="ma-personal-rank">
+                  <div><dt>Rank</dt><dd>#{board.ownRank.rank}</dd></div>
+                  <div><dt>Points</dt><dd>{pointFormat.format(board.ownRank.points)}</dd></div>
+                </dl>
+                {event.status === 'cancelled' && <p>This tournament was cancelled. Recorded points remain frozen.</p>}
+                {event.status === 'active' && <button type="button" className="ma-reward-button ma-reward-primary" onClick={onStudy}>
+                  Start studying <ArrowRight size={16} aria-hidden="true" />
+                </button>}
+              </>
+            ) : (
+              <>
+                <h2>Admin overview</h2>
+                <p>You are viewing standings without participating.</p>
+                {canJoin && (
+                  <button type="button" className="ma-reward-button mt-3" ref={joinButton} disabled={loading} onClick={openNicknameDialog}>
+                    Join as participant
+                  </button>
+                )}
+              </>
+            )}
           </section>
           <section className="ma-tournament-panel ma-tournament-rules">
             <h2>How scoring works</h2>
@@ -235,15 +295,30 @@ export default function TournamentsView({ isAdmin, onStudy }: { isAdmin: boolean
           </section>
         </div>
       )}
-      {isAdmin && <ScheduleTournament onCreated={selectBoard} />}
+      {joinDialog}
+      {isAdmin && (
+        <AdminTournamentControls
+          event={event ?? null}
+          onChanged={selectBoard}
+        />
+      )}
     </div>
   );
 }
 
-function ScheduleTournament({ onCreated }: { onCreated: (id: Tournament['id']) => void }) {
-  const [open, setOpen] = useState(false);
+function AdminTournamentControls({ event, onChanged }: { event: Tournament | null; onChanged: (id?: Tournament['id']) => void }) {
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    setEditOpen(false);
+    setConfirmCancel(false);
+    setError('');
+  }, [event?.id, event?.status]);
+
   async function schedule(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -253,22 +328,99 @@ function ScheduleTournament({ onCreated }: { onCreated: (id: Tournament['id']) =
       const { id } = await api.createTournament({
         title: String(form.get('title')), startsAt: String(form.get('startsAt')), endsAt: String(form.get('endsAt')),
       });
-      setOpen(false);
-      onCreated(id);
+      setScheduleOpen(false);
+      onChanged(id);
     } catch (err) { setError((err as Error).message); }
     finally { setSaving(false); }
   }
+
+  async function saveEdit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!event) return;
+    const form = new FormData(e.currentTarget);
+    setSaving(true);
+    setError('');
+    try {
+      const updated = await api.updateTournament(event.id, {
+        title: String(form.get('title')), startsAt: String(form.get('startsAt')), endsAt: String(form.get('endsAt')),
+      });
+      setEditOpen(false);
+      onChanged(updated.id);
+    } catch (err) { setError((err as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleCancel() {
+    if (!event) return;
+    setSaving(true);
+    setError('');
+    try {
+      const cancelled = await api.cancelTournament(event.id);
+      setConfirmCancel(false);
+      onChanged(cancelled.id);
+    } catch (err) { setError((err as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  const canEdit = event?.status === 'upcoming';
+  const canCancel = event?.status === 'upcoming' || event?.status === 'active';
+
   return (
-    <section className="ma-tournament-admin">
-      <button type="button" className="ma-reward-button" aria-expanded={open} aria-controls="tournament-schedule"
-        onClick={() => setOpen(!open)}>Schedule a tournament <ChevronDown size={16} aria-hidden="true" /></button>
-      {open && <form id="tournament-schedule" onSubmit={schedule}>
-        <label>Name<input name="title" required minLength={3} maxLength={80} /></label>
-        <label>Starts · Cairo time<input name="startsAt" type="datetime-local" required /></label>
-        <label>Ends · Cairo time<input name="endsAt" type="datetime-local" required /></label>
-        <button className="ma-reward-button ma-reward-primary" type="submit" disabled={saving}>{saving ? 'Scheduling…' : 'Schedule'}</button>
-        {error && <p className="ma-reward-error" role="alert">{error}</p>}
-      </form>}
+    <section className="ma-tournament-admin" aria-label="Tournament administration">
+      <div className="ma-tournament-admin-actions">
+        <button type="button" className="ma-reward-button" aria-expanded={scheduleOpen} aria-controls="tournament-schedule"
+          onClick={() => { setScheduleOpen(!scheduleOpen); setEditOpen(false); setConfirmCancel(false); setError(''); }}>
+          Schedule a tournament <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        {canEdit && (
+          <button type="button" className="ma-reward-button" aria-expanded={editOpen} aria-controls="tournament-edit"
+            onClick={() => { setEditOpen(!editOpen); setScheduleOpen(false); setConfirmCancel(false); setError(''); }}>
+            <Pencil size={15} aria-hidden="true" /> Edit upcoming tournament
+          </button>
+        )}
+        {canCancel && (
+          <button type="button" className="ma-reward-button" aria-expanded={confirmCancel}
+            onClick={() => { setConfirmCancel(!confirmCancel); setScheduleOpen(false); setEditOpen(false); setError(''); }}>
+            <Ban size={15} aria-hidden="true" /> Cancel tournament
+          </button>
+        )}
+      </div>
+
+      {scheduleOpen && (
+        <form id="tournament-schedule" onSubmit={schedule}>
+          <label>Name<input name="title" required minLength={3} maxLength={80} /></label>
+          <label>Starts · Cairo time<input name="startsAt" type="datetime-local" required /></label>
+          <label>Ends · Cairo time<input name="endsAt" type="datetime-local" required /></label>
+          <button className="ma-reward-button ma-reward-primary" type="submit" disabled={saving}>{saving ? 'Scheduling…' : 'Schedule'}</button>
+          {error && <p className="ma-reward-error" role="alert">{error}</p>}
+        </form>
+      )}
+
+      {editOpen && event && (
+        <form id="tournament-edit" key={event.id} onSubmit={saveEdit}>
+          <label>Name<input name="title" defaultValue={event.title} required minLength={3} maxLength={80} /></label>
+          <label>Starts · Cairo time<input name="startsAt" type="datetime-local" defaultValue={toCairoDateTimeInput(event.startsAt)} required /></label>
+          <label>Ends · Cairo time<input name="endsAt" type="datetime-local" defaultValue={toCairoDateTimeInput(event.endsAt)} required /></label>
+          <button className="ma-reward-button ma-reward-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button>
+          {error && <p className="ma-reward-error" role="alert">{error}</p>}
+        </form>
+      )}
+
+      {confirmCancel && event && (
+        <div className="ma-tournament-panel mt-2" role="alertdialog" aria-labelledby="cancel-tournament-heading">
+          <h2 id="cancel-tournament-heading">Cancel “{event.title}”?</h2>
+          <p>Cancelling stops new entries and freezes scoring immediately. Historical participant records are preserved.</p>
+          <div className="ma-tournament-admin-actions mt-3">
+            <button type="button" className="ma-reward-button ma-reward-primary" disabled={saving} onClick={handleCancel}>
+              {saving ? 'Cancelling…' : 'Confirm cancellation'}
+            </button>
+            <button type="button" className="ma-reward-button" disabled={saving} onClick={() => setConfirmCancel(false)}>
+              Keep tournament
+            </button>
+          </div>
+          {error && <p className="ma-reward-error mt-2" role="alert">{error}</p>}
+        </div>
+      )}
     </section>
   );
 }

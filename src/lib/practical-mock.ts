@@ -13,10 +13,21 @@ export type PracticalMockCard = {
   status: 'ready' | 'active' | 'finished' | 'graded';
 };
 
+export type PracticalMcqOptions = Record<string, string>;
+
 export type PracticalStation = {
+  questionType?: 'short_answer' | 'mcq';
   question: string;
   images: QuestionImage[];
   maxMarks: number;
+  options?: PracticalMcqOptions;
+};
+
+export type PracticalStationPreviewResult = PracticalStation & {
+  answer: string;
+  modelAnswer: string;
+  correctOption?: string;
+  grade?: ShortAnswerGrade;
 };
 
 export type PracticalMockAttempt = {
@@ -25,13 +36,26 @@ export type PracticalMockAttempt = {
   stationCount: number;
 } & (
   | { status: 'active'; stationIndex: number; station: PracticalStation; answer: string; revision: number; remainingMs: number }
-  | { status: 'finished' | 'grading'; retryInMs: number; gradingError: string | null }
-  | { status: 'graded'; stations: (PracticalStation & { answer: string; modelAnswer: string; grade: ShortAnswerGrade })[] }
+  | { status: 'finished' | 'grading'; retryInMs: number; gradingError: string | null; stations?: PracticalStationPreviewResult[] }
+  | { status: 'graded'; stations: (PracticalStation & { answer: string; modelAnswer: string; correctOption?: string; grade: ShortAnswerGrade })[] }
 );
 
-export type PracticalStationUpload = {
-  image: QuestionImage;
-  question: string;
-  modelAnswer: string;
-  rubric: { description: string; marks: number }[];
-};
+export type PracticalStationUpload =
+  | {
+      questionType?: 'short_answer';
+      image?: QuestionImage;
+      images?: QuestionImage[];
+      question: string;
+      modelAnswer: string;
+      rubric: { description: string; marks: number }[];
+    }
+  | {
+      questionType: 'mcq';
+      image?: QuestionImage;
+      images?: QuestionImage[];
+      question: string;
+      options: PracticalMcqOptions;
+      correctAnswer: string;
+      marks?: number;
+      explanation?: string;
+    };

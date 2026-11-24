@@ -16,7 +16,14 @@ export interface Tournament {
   title: string;
   startsAt: string;
   endsAt: string;
-  status: 'upcoming' | 'active' | 'completed';
+  cancelledAt: string | null;
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
+}
+
+export interface TournamentInput {
+  title: string;
+  startsAt: string;
+  endsAt: string;
 }
 
 export interface TournamentRank {

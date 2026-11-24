@@ -120,6 +120,7 @@
 }
 .ma-event-status-active { background: #c5f0d8; color: #164e35; }
 .ma-event-status-active::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #24804d; }
+.ma-event-status-cancelled { background: #fde2e1; color: #7f1d1d; }
 .ma-tournament-select { display: grid; gap: 4px; min-width: 0; width: min(100%, 285px); color: #e3f1eb; font-size: 13px; font-weight: 650; }
 .ma-tournament-grid {
   display: grid;
@@ -186,6 +187,7 @@
 .ma-point-scale { grid-template-columns: repeat(3, minmax(0, 1fr)); text-align: center; }
 .ma-personal-rank dt, .ma-point-scale dt { font-size: 12px; color: var(--ma-muted); font-weight: 650; }
 .ma-point-scale dd { margin-top: 3px; color: var(--ma-brand-hover); font-size: 22px; }
+.ma-tournament-admin-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .ma-tournament-admin form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; margin-top: 8px; }
 .ma-tournament-admin label { flex: 1 1 170px; display: grid; gap: 4px; font-size: 13px; font-weight: 650; }
 .ma-tournament-admin form > p { flex-basis: 100%; }

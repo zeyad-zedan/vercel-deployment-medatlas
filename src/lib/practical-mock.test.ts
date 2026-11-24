@@ -256,3 +256,33 @@ test('C3 & H2: student gradePracticalMock never steals another student exam, and
     await pool.query('DELETE FROM practical_mock.exams WHERE id=$1', [id]);
   }
 });
+
+test('parsePracticalMockStations accepts >26 mixed MCQ and written stations', async () => {
+  const { parsePracticalMockStations } = await import('../db/practical-mock.ts');
+  const stations = Array.from({ length: 40 }, (_, i) =>
+    i % 2 === 0
+      ? {
+          questionType: 'mcq',
+          question: `MCQ ${i + 1}`,
+          options: { A: 'First', B: 'Second', C: 'Third', D: 'Fourth' },
+          correctAnswer: 'b',
+          marks: 2,
+          explanation: 'Second is right.',
+          images: [],
+        }
+      : {
+          questionType: 'short_answer',
+          question: `Written ${i + 1}`,
+          modelAnswer: `Model ${i + 1}`,
+          rubric: [{ description: 'Core fact', marks: 2 }],
+          images: [],
+        },
+  );
+  const parsed = parsePracticalMockStations(stations);
+  assert.equal(parsed.length, 40);
+  const firstMcq = parsed[0] as any;
+  assert.equal(firstMcq.question_type, 'mcq');
+  assert.equal(firstMcq.correct_answer, 'B');
+  assert.deepEqual(firstMcq.options, { A: 'First', B: 'Second', C: 'Third', D: 'Fourth' });
+  assert.equal(firstMcq.rubric[0].marks, 2);
+});

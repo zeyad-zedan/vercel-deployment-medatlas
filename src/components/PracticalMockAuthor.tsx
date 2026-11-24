@@ -3,7 +3,8 @@ import { api } from '../lib/api.ts';
 import { maxPracticalMarkingPoints, type PracticalStationUpload } from '../lib/practical-mock.ts';
 import type { QuestionImage } from '../lib/question-images.ts';
 
-type DraftStation = Omit<PracticalStationUpload, 'image'> & { key: number; file: File | null };
+type WrittenStationUpload = Extract<PracticalStationUpload, { rubric: unknown }>;
+type DraftStation = Omit<WrittenStationUpload, 'image' | 'images'> & { key: number; file: File | null };
 const newStation = (key: number): DraftStation => ({ key, file: null, question: '', modelAnswer: '', rubric: [{ description: '', marks: 1 }] });
 const field = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm';
 const label = 'block space-y-1 text-sm font-medium';

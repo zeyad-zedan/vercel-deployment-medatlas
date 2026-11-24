@@ -730,6 +730,7 @@ export async function testRestoreBackup(
 
         CREATE TABLE "${isolatedSchema}".tournaments (
           id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ NOT NULL,
+          cancelled_at TIMESTAMPTZ,
           CHECK (starts_at < ends_at)
         );
         CREATE TABLE "${isolatedSchema}".tournament_entries (

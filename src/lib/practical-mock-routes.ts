@@ -1,6 +1,7 @@
 import { json, Router, type RequestHandler, type Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.ts';
-import { gradePracticalMock, listPracticalMocks, PracticalMockError, publishPracticalMock,
+import { adminGetPracticalMockAttempt, adminListPracticalMockAttempts, adminSavePracticalMockGrades,
+  gradePracticalMock, listPracticalMocks, PracticalMockError, publishPracticalMock,
   readPracticalMock, savePracticalMockAnswer, skipPracticalMock, startPracticalMock } from '../db/practical-mock.ts';
 
 export function practicalMockRouter(requireAdmin: RequestHandler) {
@@ -38,5 +39,9 @@ export function practicalMockRouter(requireAdmin: RequestHandler) {
   }));
   router.post('/:id/skip', handle(async (req, res) => res.json(await skipPracticalMock(req.user!.uid, req.params.id, req.body))));
   router.post('/:id/grade', handle(async (req, res) => res.json(await gradePracticalMock(req.user!.uid, req.params.id))));
+  router.get('/:id/admin/attempts', requireAdmin, handle(async (req, res) => res.json(await adminListPracticalMockAttempts(req.params.id))));
+  router.get('/:id/admin/attempts/:uid', requireAdmin, handle(async (req, res) => res.json(await adminGetPracticalMockAttempt(req.params.id, req.params.uid))));
+  router.put('/:id/admin/attempts/:uid/grades', requireAdmin, json({ limit: '512kb' }),
+    handle(async (req, res) => res.json(await adminSavePracticalMockGrades(req.params.id, req.params.uid, req.body))));
   return router;
 }

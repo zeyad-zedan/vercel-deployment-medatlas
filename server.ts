@@ -77,9 +77,20 @@ import {
   getDocumentSecuritySettings,
   setDocumentWatermarksEnabled,
   attachPdfToLectureAdmin,
+  logAdminAction,
 } from './src/db/repository.ts';
 import { pool, isDatabaseConfigured } from './src/db/index.ts';
-import { createTournament, getDailyGoal, getTournamentBoard, joinTournament, setDailyGoal, StudyRewardsError } from './src/db/study-rewards.ts';
+import {
+  cancelTournament,
+  createTournament,
+  getDailyGoal,
+  getTournamentBoard,
+  joinTournament,
+  listAllTournamentsAdmin,
+  setDailyGoal,
+  StudyRewardsError,
+  updateTournament,
+} from './src/db/study-rewards.ts';
 import { tournamentsEnabled } from './src/lib/study-rewards.ts';
 import { getSampleCsvTemplate } from './src/lib/mcq-engine.ts';
 import { executeScheduledBackup } from './src/lib/backup-service.ts';
@@ -933,33 +944,165 @@ app.put('/api/study-goal', requireAuth, async (req: AuthRequest, res) => {
   catch (error) { return sendStudyRewardsError(res, error); }
 });
 
+function parseTournamentId(raw: unknown): number | null {
+  if (typeof raw !== 'string' || !/^[1-9]\d{0,9}$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id >= 1 && id <= 2147483647 ? id : null;
+}
+
+async function isActiveAdmin(user: NonNullable<AuthRequest['user']>): Promise<boolean> {
+  const dbUser = user.authType === 'firebase'
+    ? await getOrCreateUser(user.uid, user.email, user.name, {
+        authType: 'firebase',
+        emailVerified: user.emailVerified,
+        allowCreate: true,
+      })
+    : await getAuthenticatedUserByUid(user.uid);
+  return Boolean(
+    dbUser &&
+    dbUser.deletedAt === null &&
+    dbUser.accountStatus === 'active' &&
+    dbUser.role === 'admin'
+  );
+}
+
+export function createTournamentsRouter(options?: {
+  readMaxRequests?: number;
+  joinMaxRequests?: number;
+  adminMaxRequests?: number;
+}) {
+  const router = express.Router();
+  const tournamentReadLimiter = createBoundedRateLimiter({
+    scope: 'tournament-read',
+    maxRequests: options?.readMaxRequests ?? 60,
+    windowMs: 60_000,
+    maxKeys: 5_000,
+    store: sharedRateLimitStore,
+    degradedModePolicy: rateLimitDegradedPolicy,
+    keyGenerator: (req) => (req as AuthRequest).user!.uid,
+    message: 'Too many tournament requests. Please wait a moment and try again.',
+  });
+  const tournamentJoinLimiter = createBoundedRateLimiter({
+    scope: 'tournament-join',
+    maxRequests: options?.joinMaxRequests ?? 15,
+    windowMs: 15 * 60_000,
+    maxKeys: 5_000,
+    store: sharedRateLimitStore,
+    degradedModePolicy: rateLimitDegradedPolicy,
+    keyGenerator: (req) => (req as AuthRequest).user!.uid,
+    message: 'Too many join attempts. Please wait before trying another nickname.',
+  });
+  const tournamentAdminLimiter = createBoundedRateLimiter({
+    scope: 'tournament-admin',
+    maxRequests: options?.adminMaxRequests ?? 30,
+    windowMs: 15 * 60_000,
+    maxKeys: 1_000,
+    store: sharedRateLimitStore,
+    degradedModePolicy: rateLimitDegradedPolicy,
+    keyGenerator: (req) => (req as AuthRequest).user!.uid,
+    message: 'Too many tournament administration requests. Please wait a moment.',
+  });
+
+  router.get('/api/tournaments', requireAuth, tournamentReadLimiter, async (req: AuthRequest, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const rawId = req.query.id;
+    const id = rawId === undefined ? undefined : parseTournamentId(rawId);
+    if (rawId !== undefined && id === null) {
+      return res.status(400).json({ error: 'Choose a valid tournament.' });
+    }
+    try {
+      const admin = await isActiveAdmin(req.user!);
+      return res.json(await getTournamentBoard(req.user!.uid, id ?? undefined, { isAdmin: admin }));
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  router.post('/api/tournaments/:id/join', requireAuth, tournamentJoinLimiter, async (req: AuthRequest, res) => {
+    const id = parseTournamentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Choose a valid tournament.' });
+    try {
+      const admin = await isActiveAdmin(req.user!);
+      return res.json(await joinTournament(req.user!.uid, id, req.body?.nickname, { isAdmin: admin }));
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  router.get('/api/admin/tournaments', requireAuth, requireAdmin, tournamentAdminLimiter, async (_req: AuthRequest, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    try {
+      return res.json({ tournaments: await listAllTournamentsAdmin() });
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  router.post('/api/admin/tournaments', requireAuth, requireAdmin, tournamentAdminLimiter, async (req: AuthRequest, res) => {
+    try {
+      const created = await createTournament(req.body);
+      await logAdminAction(
+        req.user!.uid,
+        req.user!.email,
+        'tournament_create',
+        'tournament',
+        created.id,
+        `Scheduled tournament "${String(req.body?.title ?? '').trim()}"`
+      );
+      return res.status(201).json(created);
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  router.patch('/api/admin/tournaments/:id', requireAuth, requireAdmin, tournamentAdminLimiter, async (req: AuthRequest, res) => {
+    const id = parseTournamentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Choose a valid tournament.' });
+    try {
+      const updated = await updateTournament(id, req.body);
+      await logAdminAction(
+        req.user!.uid,
+        req.user!.email,
+        'tournament_update',
+        'tournament',
+        updated.id,
+        `Updated upcoming tournament "${updated.title}"`
+      );
+      return res.json(updated);
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  router.post('/api/admin/tournaments/:id/cancel', requireAuth, requireAdmin, tournamentAdminLimiter, async (req: AuthRequest, res) => {
+    const id = parseTournamentId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Choose a valid tournament.' });
+    try {
+      const cancelled = await cancelTournament(id);
+      await logAdminAction(
+        req.user!.uid,
+        req.user!.email,
+        'tournament_cancel',
+        'tournament',
+        cancelled.id,
+        `Cancelled tournament "${cancelled.title}"`
+      );
+      return res.json(cancelled);
+    } catch (error) {
+      return sendStudyRewardsError(res, error);
+    }
+  });
+
+  return router;
+}
+
 if (!tournamentsEnabled) {
   app.use(['/api/tournaments', '/api/admin/tournaments'], (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
   });
+} else {
+  app.use(createTournamentsRouter());
 }
-
-app.get('/api/tournaments', requireAuth, async (req: AuthRequest, res) => {
-  res.set('Cache-Control', 'private, no-store');
-  const rawId = req.query.id;
-  if (rawId !== undefined && (typeof rawId !== 'string' || !/^[1-9]\d{0,9}$/.test(rawId) || Number(rawId) > 2147483647)) {
-    return res.status(400).json({ error: 'Choose a valid tournament.' });
-  }
-  try { return res.json(await getTournamentBoard(req.user!.uid, rawId === undefined ? undefined : Number(rawId))); }
-  catch (error) { return sendStudyRewardsError(res, error); }
-});
-
-app.post('/api/tournaments/:id/join', requireAuth, async (req: AuthRequest, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1 || id > 2147483647) return res.status(400).json({ error: 'Choose a valid tournament.' });
-  try { return res.json(await joinTournament(req.user!.uid, id, req.body?.nickname)); }
-  catch (error) { return sendStudyRewardsError(res, error); }
-});
-
-app.post('/api/admin/tournaments', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
-  try { return res.status(201).json(await createTournament(req.body)); }
-  catch (error) { return sendStudyRewardsError(res, error); }
-});
 
 app.get('/api/bookmarks', requireAuth, async (req: AuthRequest, res) => {
   try {

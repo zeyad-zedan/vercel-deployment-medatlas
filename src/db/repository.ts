@@ -2593,6 +2593,8 @@ const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
 export function invalidateCatalogCache(): void {
   questionMetadataCache = null;
   questionMetadataRequest = null;
+  publishedQuestionCountsCache = null;
+  publishedQuestionCountsRequest = null;
   cachedPublishedCatalog = null;
   cachedCatalogExpiresAt = 0;
   cachedSubjects = null;
@@ -2645,10 +2647,6 @@ export async function getPublishedCatalog(userUid?: string) {
       .where(eq(lectures.status, 'published'))
       .orderBy(asc(lectures.lectureNumber), asc(lectures.id));
 
-    // Only the lightweight columns needed for counts/tags are fetched (never full text/explanations),
-    // which keeps every catalog load at a few KB of database egress instead of hundreds of KB.
-    const pubQuestions = await getQuestionMetadata();
-
     const pubBanks = await db
       .select()
       .from(questionBanks)
@@ -2657,13 +2655,6 @@ export async function getPublishedCatalog(userUid?: string) {
     const subjSet = new Set(pubSubjects.map((s: any) => s.id));
     const visibleLectures = pubLectures.filter((l: any) => subjSet.has(l.subjectId));
     const lectSet = new Set(visibleLectures.map((l: any) => l.id));
-    const visibleQuestions = pubQuestions.filter(
-      (q) => subjSet.has(q.subjectId) && lectSet.has(q.lectureId)
-    );
-
-    // Fetch user attempts if authenticated to compute live progress & accuracy without double-counting
-    const userAttempts = userUid ? await getLatestAnsweredQuestions(userUid) : [];
-    const latestAttemptByQ = new Map(userAttempts.map(a => [a.questionId, a.isCorrect]));
 
     const questionCountByLecture = new Map<number, number>();
     const questionCountBySubject = new Map<number, number>();
@@ -2680,71 +2671,127 @@ export async function getPublishedCatalog(userUid?: string) {
     >();
     const specialTagCountByLecture = new Map<number, Record<string, number>>();
     const specialTagGlobalCounts = new Map<string, { label: string; count: number }>();
+    let totalVisibleQuestions = 0;
 
-    for (const q of visibleQuestions) {
-      questionCountByLecture.set(
-        q.lectureId,
-        (questionCountByLecture.get(q.lectureId) || 0) + 1
-      );
-      questionCountBySubject.set(
-        q.subjectId,
-        (questionCountBySubject.get(q.subjectId) || 0) + 1
-      );
+    if (!userUid) {
+      // Aggregate counts/difficulty/special_tags in SQL instead of transferring every question row.
+      const questionSummary = await readCatalogQuestionSummary();
+      for (const row of questionSummary) {
+        if (!subjSet.has(row.subjectId) || !lectSet.has(row.lectureId)) continue;
+        const cnt = Number(row.count || 0);
+        if (cnt <= 0) continue;
+        totalVisibleQuestions += cnt;
+        questionCountByLecture.set(
+          row.lectureId,
+          (questionCountByLecture.get(row.lectureId) || 0) + cnt
+        );
+        questionCountBySubject.set(
+          row.subjectId,
+          (questionCountBySubject.get(row.subjectId) || 0) + cnt
+        );
 
-      const diffCounts = difficultyCountByLecture.get(q.lectureId) || {
-        Easy: 0,
-        Medium: 0,
-        Hard: 0,
-      };
-      if (q.difficulty === 'Easy' || q.difficulty === 'Medium' || q.difficulty === 'Hard') {
-        diffCounts[q.difficulty as DifficultyLevel]++;
-      }
-      difficultyCountByLecture.set(q.lectureId, diffCounts);
-
-      const qSpecTags = parseSpecialTags(q.specialTags);
-      if (qSpecTags.length > 0) {
-        const lectSpec = specialTagCountByLecture.get(q.lectureId) || {};
-        for (const st of qSpecTags) {
-          const normKey = st.toLowerCase();
-          const globalEntry = specialTagGlobalCounts.get(normKey);
-          const canonicalLabel = globalEntry ? globalEntry.label : st;
-          lectSpec[canonicalLabel] = (lectSpec[canonicalLabel] || 0) + 1;
-          specialTagGlobalCounts.set(normKey, {
-            label: canonicalLabel,
-            count: (globalEntry?.count || 0) + 1,
-          });
+        const diffCounts = difficultyCountByLecture.get(row.lectureId) || {
+          Easy: 0,
+          Medium: 0,
+          Hard: 0,
+        };
+        if (row.difficulty === 'Easy' || row.difficulty === 'Medium' || row.difficulty === 'Hard') {
+          diffCounts[row.difficulty as DifficultyLevel] += cnt;
         }
-        specialTagCountByLecture.set(q.lectureId, lectSpec);
-      }
+        difficultyCountByLecture.set(row.lectureId, diffCounts);
 
-      if (latestAttemptByQ.has(q.id)) {
-        const isCorrect = latestAttemptByQ.get(q.id) === true;
-        attemptedCountByLecture.set(
+        const qSpecTags = parseSpecialTags(row.specialTags);
+        if (qSpecTags.length > 0) {
+          const lectSpec = specialTagCountByLecture.get(row.lectureId) || {};
+          for (const st of qSpecTags) {
+            const normKey = st.toLowerCase();
+            const globalEntry = specialTagGlobalCounts.get(normKey);
+            const canonicalLabel = globalEntry ? globalEntry.label : st;
+            lectSpec[canonicalLabel] = (lectSpec[canonicalLabel] || 0) + cnt;
+            specialTagGlobalCounts.set(normKey, {
+              label: canonicalLabel,
+              count: (globalEntry?.count || 0) + cnt,
+            });
+          }
+          specialTagCountByLecture.set(row.lectureId, lectSpec);
+        }
+      }
+    } else {
+      const pubQuestions = await getQuestionMetadata();
+      const visibleQuestions = pubQuestions.filter(
+        (q) => subjSet.has(q.subjectId) && lectSet.has(q.lectureId)
+      );
+      totalVisibleQuestions = visibleQuestions.length;
+
+      // Fetch user attempts if authenticated to compute live progress & accuracy without double-counting
+      const userAttempts = await getLatestAnsweredQuestions(userUid);
+      const latestAttemptByQ = new Map(userAttempts.map(a => [a.questionId, a.isCorrect]));
+
+      for (const q of visibleQuestions) {
+        questionCountByLecture.set(
           q.lectureId,
-          (attemptedCountByLecture.get(q.lectureId) || 0) + 1
+          (questionCountByLecture.get(q.lectureId) || 0) + 1
         );
-        attemptedCountBySubject.set(
+        questionCountBySubject.set(
           q.subjectId,
-          (attemptedCountBySubject.get(q.subjectId) || 0) + 1
+          (questionCountBySubject.get(q.subjectId) || 0) + 1
         );
-        if (isCorrect) {
-          correctCountByLecture.set(
+
+        const diffCounts = difficultyCountByLecture.get(q.lectureId) || {
+          Easy: 0,
+          Medium: 0,
+          Hard: 0,
+        };
+        if (q.difficulty === 'Easy' || q.difficulty === 'Medium' || q.difficulty === 'Hard') {
+          diffCounts[q.difficulty as DifficultyLevel]++;
+        }
+        difficultyCountByLecture.set(q.lectureId, diffCounts);
+
+        const qSpecTags = parseSpecialTags(q.specialTags);
+        if (qSpecTags.length > 0) {
+          const lectSpec = specialTagCountByLecture.get(q.lectureId) || {};
+          for (const st of qSpecTags) {
+            const normKey = st.toLowerCase();
+            const globalEntry = specialTagGlobalCounts.get(normKey);
+            const canonicalLabel = globalEntry ? globalEntry.label : st;
+            lectSpec[canonicalLabel] = (lectSpec[canonicalLabel] || 0) + 1;
+            specialTagGlobalCounts.set(normKey, {
+              label: canonicalLabel,
+              count: (globalEntry?.count || 0) + 1,
+            });
+          }
+          specialTagCountByLecture.set(q.lectureId, lectSpec);
+        }
+
+        if (latestAttemptByQ.has(q.id)) {
+          const isCorrect = latestAttemptByQ.get(q.id) === true;
+          attemptedCountByLecture.set(
             q.lectureId,
-            (correctCountByLecture.get(q.lectureId) || 0) + 1
+            (attemptedCountByLecture.get(q.lectureId) || 0) + 1
           );
-          correctCountBySubject.set(
+          attemptedCountBySubject.set(
             q.subjectId,
-            (correctCountBySubject.get(q.subjectId) || 0) + 1
+            (attemptedCountBySubject.get(q.subjectId) || 0) + 1
           );
-        } else if(latestAttemptByQ.get(q.id)===false) {
-          incorrectCountByLecture.set(
-            q.lectureId,
-            (incorrectCountByLecture.get(q.lectureId) || 0) + 1
-          );
-          incorrectCountBySubject.set(
-            q.subjectId,
-            (incorrectCountBySubject.get(q.subjectId) || 0) + 1
-          );
+          if (isCorrect) {
+            correctCountByLecture.set(
+              q.lectureId,
+              (correctCountByLecture.get(q.lectureId) || 0) + 1
+            );
+            correctCountBySubject.set(
+              q.subjectId,
+              (correctCountBySubject.get(q.subjectId) || 0) + 1
+            );
+          } else if(latestAttemptByQ.get(q.id)===false) {
+            incorrectCountByLecture.set(
+              q.lectureId,
+              (incorrectCountByLecture.get(q.lectureId) || 0) + 1
+            );
+            incorrectCountBySubject.set(
+              q.subjectId,
+              (incorrectCountBySubject.get(q.subjectId) || 0) + 1
+            );
+          }
         }
       }
     }
@@ -2830,7 +2877,7 @@ export async function getPublishedCatalog(userUid?: string) {
       subjects: enrichedSubjects,
       lectures: enrichedLectures,
       specialTags: availableSpecialTags,
-      totalPublishedQuestions: visibleQuestions.length,
+      totalPublishedQuestions: totalVisibleQuestions,
     };
 
     if (!userUid) {
@@ -3242,6 +3289,57 @@ async function getQuestionMetadata() {
     return rows;
   } finally {
     if (questionMetadataRequest === pending) questionMetadataRequest = null;
+  }
+}
+
+function readCatalogQuestionSummary() {
+  return db
+    .select({
+      subjectId: questions.subjectId,
+      lectureId: questions.lectureId,
+      difficulty: questions.difficulty,
+      specialTags: questions.specialTags,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(questions)
+    .where(eq(questions.status, 'published'))
+    .groupBy(questions.subjectId, questions.lectureId, questions.difficulty, questions.specialTags)
+    .orderBy(sql`min(${questions.id}) ASC`)
+    .execute();
+}
+
+let publishedQuestionCountsCache: {
+  expiresAt: number;
+  rows: Array<{ subjectId: number; lectureId: number; count: number }>;
+} | null = null;
+function readPublishedQuestionCounts() {
+  return db
+    .select({
+      subjectId: questions.subjectId,
+      lectureId: questions.lectureId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(questions)
+    .where(eq(questions.status, 'published'))
+    .groupBy(questions.subjectId, questions.lectureId)
+    .execute();
+}
+let publishedQuestionCountsRequest: ReturnType<typeof readPublishedQuestionCounts> | null = null;
+async function getPublishedQuestionCounts() {
+  if (publishedQuestionCountsCache && Date.now() < publishedQuestionCountsCache.expiresAt) {
+    return publishedQuestionCountsCache.rows;
+  }
+  if (publishedQuestionCountsRequest) return publishedQuestionCountsRequest;
+  const pending = readPublishedQuestionCounts();
+  publishedQuestionCountsRequest = pending;
+  try {
+    const rows = await pending;
+    if (publishedQuestionCountsRequest === pending) {
+      publishedQuestionCountsCache = { rows, expiresAt: Date.now() + 60_000 };
+    }
+    return rows;
+  } finally {
+    if (publishedQuestionCountsRequest === pending) publishedQuestionCountsRequest = null;
   }
 }
 
@@ -4242,6 +4340,192 @@ export async function getStudentBookmarksAndReview(userUid: string, savedOnly = 
   }
 }
 
+interface DashboardLectureAttemptStat {
+  subjectId: number;
+  lectureId: number;
+  attempted: number;
+  correct: number;
+  incorrect: number;
+  lastAttemptAt: string | null;
+}
+
+interface DashboardTopicAttemptStat {
+  tagsRaw: string;
+  totalCnt: number;
+  correctCnt: number;
+}
+
+async function readStudentDashboardAttemptStats(userUid: string): Promise<{
+  totalAnswered: number;
+  totalCorrect: number;
+  totalIncorrect: number;
+  lecturesAttempted: number;
+  lectureStats: DashboardLectureAttemptStat[];
+  topicStats: DashboardTopicAttemptStat[];
+}> {
+  const result = await db.execute(sql`
+    WITH latest_per_question AS (
+      SELECT DISTINCT ON (qa.question_id)
+        qa.question_id,
+        qa.lecture_id,
+        qa.selected_option,
+        CASE
+          WHEN qa.grading_status IS NOT NULL AND qa.grading_status != 'graded' THEN NULL
+          ELSE qa.is_correct
+        END AS is_correct,
+        qa.answered_at
+      FROM public.question_attempts qa
+      WHERE qa.user_uid = ${userUid}
+        AND qa.question_id IS NOT NULL
+      ORDER BY qa.question_id, qa.answered_at DESC, qa.id DESC
+    ),
+    unique_latest AS (
+      SELECT
+        l.question_id,
+        l.lecture_id AS attempt_lecture_id,
+        l.is_correct,
+        l.answered_at,
+        q.id AS published_question_id,
+        q.subject_id AS published_subject_id,
+        q.lecture_id AS published_lecture_id,
+        COALESCE(q.tags, '') AS published_tags
+      FROM latest_per_question l
+      LEFT JOIN public.questions q
+        ON q.id = l.question_id
+       AND q.status = 'published'
+      WHERE l.selected_option IS NOT NULL
+    ),
+    summary_agg AS (
+      SELECT
+        count(*)::int AS total_answered,
+        count(*) FILTER (WHERE is_correct IS TRUE)::int AS total_correct,
+        count(*) FILTER (WHERE is_correct IS FALSE)::int AS total_incorrect,
+        count(DISTINCT attempt_lecture_id) FILTER (WHERE attempt_lecture_id IS NOT NULL)::int AS lectures_attempted
+      FROM unique_latest
+    ),
+    lecture_agg AS (
+      SELECT
+        published_subject_id AS subject_id,
+        published_lecture_id AS lecture_id,
+        count(*)::int AS attempted,
+        count(*) FILTER (WHERE is_correct IS TRUE)::int AS correct,
+        count(*) FILTER (WHERE is_correct IS FALSE)::int AS incorrect,
+        to_char(max(answered_at), 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS last_attempt_at
+      FROM unique_latest
+      WHERE published_question_id IS NOT NULL
+      GROUP BY published_subject_id, published_lecture_id
+    ),
+    topic_agg AS (
+      SELECT
+        published_tags AS tags_raw,
+        count(*)::int AS total_cnt,
+        count(*) FILTER (WHERE is_correct IS TRUE)::int AS correct_cnt,
+        max(answered_at) AS latest_at,
+        (array_agg(question_id ORDER BY answered_at DESC, question_id ASC))[1] AS first_qid
+      FROM unique_latest
+      WHERE is_correct IS NOT NULL
+      GROUP BY published_tags
+    )
+    SELECT
+      s.total_answered,
+      s.total_correct,
+      s.total_incorrect,
+      s.lectures_attempted,
+      COALESCE(
+        (SELECT jsonb_agg(jsonb_build_object(
+          'subjectId', l.subject_id,
+          'lectureId', l.lecture_id,
+          'attempted', l.attempted,
+          'correct', l.correct,
+          'incorrect', l.incorrect,
+          'lastAttemptAt', l.last_attempt_at
+        )) FROM lecture_agg l),
+        '[]'::jsonb
+      ) AS lecture_stats,
+      COALESCE(
+        (SELECT jsonb_agg(jsonb_build_object(
+          'tagsRaw', t.tags_raw,
+          'totalCnt', t.total_cnt,
+          'correctCnt', t.correct_cnt
+        ) ORDER BY t.latest_at DESC, t.first_qid ASC) FROM topic_agg t),
+        '[]'::jsonb
+      ) AS topic_stats
+    FROM summary_agg s
+  `);
+  const row = (result.rows?.[0] ?? {}) as Record<string, any>;
+  return {
+    totalAnswered: Number(row.total_answered ?? 0),
+    totalCorrect: Number(row.total_correct ?? 0),
+    totalIncorrect: Number(row.total_incorrect ?? 0),
+    lecturesAttempted: Number(row.lectures_attempted ?? 0),
+    lectureStats: Array.isArray(row.lecture_stats) ? row.lecture_stats : [],
+    topicStats: Array.isArray(row.topic_stats) ? row.topic_stats : [],
+  };
+}
+
+function computeTopicPerformanceFromAggregates(topicStats: DashboardTopicAttemptStat[]) {
+  const map = new Map<string, { total: number; correct: number; uniqueQuestions: number }>();
+
+  for (const row of topicStats) {
+    const rawTags = row.tagsRaw
+      ? row.tagsRaw
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : ['General Medical Concepts'];
+    const tags = rawTags.length > 0 ? rawTags : ['General Medical Concepts'];
+    const distinctTags = new Set(tags);
+
+    for (const tag of tags) {
+      const entry = map.get(tag) ?? { total: 0, correct: 0, uniqueQuestions: 0 };
+      entry.total += row.totalCnt;
+      entry.correct += row.correctCnt;
+      map.set(tag, entry);
+    }
+    for (const tag of distinctTags) {
+      map.get(tag)!.uniqueQuestions += row.totalCnt;
+    }
+  }
+
+  const metrics: Array<{
+    topic: string;
+    totalAttempts: number;
+    uniqueQuestionsAttempted: number;
+    correctAttempts: number;
+    accuracyPercentage: number;
+    isSmallSample: boolean;
+    classification: 'Needs Review' | 'Developing' | 'Strong' | 'Insufficient Sample';
+  }> = [];
+
+  for (const [topic, stats] of map.entries()) {
+    const accuracyPercentage =
+      stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
+    const isSmallSample = stats.total < 3;
+    let classification: 'Needs Review' | 'Developing' | 'Strong' | 'Insufficient Sample';
+    if (isSmallSample) {
+      classification = 'Insufficient Sample';
+    } else if (accuracyPercentage < 65) {
+      classification = 'Needs Review';
+    } else if (accuracyPercentage < 80) {
+      classification = 'Developing';
+    } else {
+      classification = 'Strong';
+    }
+
+    metrics.push({
+      topic,
+      totalAttempts: stats.total,
+      uniqueQuestionsAttempted: stats.uniqueQuestions,
+      correctAttempts: stats.correct,
+      accuracyPercentage,
+      isSmallSample,
+      classification,
+    });
+  }
+
+  return metrics.sort((a, b) => a.accuracyPercentage - b.accuracyPercentage);
+}
+
 /**
  * Student Dashboard & Progress Analytics using real database records.
  * Clearly distinguishes between unique questions attempted and total answers submitted.
@@ -4258,27 +4542,16 @@ export async function getStudentDashboardAnalytics(userUid: string) {
       .filter((l: any) => l.status === 'published')
       .sort((a: any, b: any) => (a.lectureNumber || 0) - (b.lectureNumber || 0));
 
-    const [userSessions, userAttempts, [bookmarkTotals], allQuestions, dailyGoal] =
+    const [userSessions, attemptStats, [bookmarkTotals], publishedQuestionCounts, dailyGoal] =
       await Promise.all([
         db
           .select({ ...getTableColumns(examSessions), questionOrderJson: sql<string>`'[]'` })
           .from(examSessions)
           .where(eq(examSessions.userUid, userUid))
           .orderBy(desc(examSessions.startedAt)),
-        db
-          .selectDistinctOn([questionAttempts.questionId], {
-            questionId: questionAttempts.questionId,
-            subjectId: questionAttempts.subjectId,
-            lectureId: questionAttempts.lectureId,
-            selectedOption: questionAttempts.selectedOption,
-            isCorrect: sql<boolean|null>`CASE WHEN ${questionAttempts.gradingStatus} IS NOT NULL AND ${questionAttempts.gradingStatus} != 'graded' THEN NULL ELSE ${questionAttempts.isCorrect} END`.as('is_correct'),
-            answeredAt: questionAttempts.answeredAt,
-          })
-          .from(questionAttempts)
-          .where(eq(questionAttempts.userUid, userUid))
-          .orderBy(questionAttempts.questionId, desc(questionAttempts.answeredAt), desc(questionAttempts.id)),
+        readStudentDashboardAttemptStats(userUid),
         db.select({ count: sql<number>`count(*)::int` }).from(bookmarks).where(eq(bookmarks.userUid, userUid)),
-        getQuestionMetadata(),
+        getPublishedQuestionCounts(),
         getDailyGoal(userUid).catch(error => {
           console.error('Failed to load daily study goal:', error);
           return null;
@@ -4288,81 +4561,86 @@ export async function getStudentDashboardAnalytics(userUid: string) {
     const completedSessions = userSessions.filter((s) => s.status === 'completed');
     const inProgressSessions = userSessions.filter((s) => s.status === 'in_progress');
 
-    const qMap = new Map(allQuestions.map((q) => [q.id, q]));
     const sMap = new Map<number, string>(allSubjects.map((s: any) => [s.id, s.title]));
     const lMap = new Map<number, string>(allLectures.map((l: any) => [l.id, l.title]));
-    const synthesizedAttempts: typeof userAttempts = [];
 
-    const combinedAttempts = [...userAttempts, ...synthesizedAttempts].sort((a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime());
-    const answeredAttempts = combinedAttempts.filter((a) => a.selectedOption !== null);
-
-    // Deduplicate by questionId (keeping the latest attempt per unique question)
-    // so each solved question in a lecture directly and accurately updates the lecture label
-    const latestAttemptByQuestionId = new Map<number, (typeof answeredAttempts)[0]>();
-    for (const att of answeredAttempts) {
-      if (att.questionId !== null && !latestAttemptByQuestionId.has(att.questionId)) {
-        latestAttemptByQuestionId.set(att.questionId, att);
-      }
+    let totalPublishedQuestions = 0;
+    const publishedCountBySubject = new Map<number, number>();
+    const publishedCountBySubjectLecture = new Map<string, number>();
+    for (const row of publishedQuestionCounts) {
+      const cnt = Number(row.count || 0);
+      totalPublishedQuestions += cnt;
+      publishedCountBySubject.set(row.subjectId, (publishedCountBySubject.get(row.subjectId) || 0) + cnt);
+      const key = `${row.subjectId}:${row.lectureId}`;
+      publishedCountBySubjectLecture.set(key, (publishedCountBySubjectLecture.get(key) || 0) + cnt);
     }
-    const uniqueLatestAttempts = Array.from(latestAttemptByQuestionId.values());
 
-    const totalAnswersSubmitted = uniqueLatestAttempts.length;
-    const totalCorrectAnswers = uniqueLatestAttempts.filter((a) => a.isCorrect).length;
-    const totalIncorrectAnswers = uniqueLatestAttempts.filter(a=>a.isCorrect===false).length;
+    const totalAnswersSubmitted = attemptStats.totalAnswered;
+    const totalCorrectAnswers = attemptStats.totalCorrect;
+    const totalIncorrectAnswers = attemptStats.totalIncorrect;
     const overallAccuracy =
       totalAnswersSubmitted > 0
-        ? Math.round((totalCorrectAnswers / Math.max(1,totalCorrectAnswers+totalIncorrectAnswers)) * 100)
+        ? Math.round((totalCorrectAnswers / Math.max(1, totalCorrectAnswers + totalIncorrectAnswers)) * 100)
         : 0;
+    const remainingUnansweredQuestions = Math.max(0, totalPublishedQuestions - totalAnswersSubmitted);
 
-    const uniqueQuestionIds = new Set(
-      uniqueLatestAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
-    );
-    const uniqueLecturesAttempted = new Set(
-      uniqueLatestAttempts.map((a: any) => a.lectureId).filter((id): id is number => id !== null)
-    );
-    const remainingUnansweredQuestions = Math.max(0, allQuestions.length - uniqueQuestionIds.size);
+    const lectureStatsBySubject = new Map<number, DashboardLectureAttemptStat[]>();
+    const lectureStatsByKey = new Map<string, DashboardLectureAttemptStat>();
+    for (const stat of attemptStats.lectureStats) {
+      const list = lectureStatsBySubject.get(stat.subjectId) ?? [];
+      list.push(stat);
+      lectureStatsBySubject.set(stat.subjectId, list);
+      lectureStatsByKey.set(`${stat.subjectId}:${stat.lectureId}`, stat);
+    }
 
     // Subject & Lecture breakdown (reflecting every solved question immediately)
     const subjectProgress = allSubjects.map((subj: any) => {
-      const subjQuestions = allQuestions.filter((q) => q.subjectId === subj.id);
-      const subjAttempts = uniqueLatestAttempts.filter((a) => a.questionId != null && qMap.get(a.questionId)?.subjectId === subj.id);
-      const subjUniqueIds = new Set(
-        subjAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
-      );
-      const subjCorrect = subjAttempts.filter((a) => a.isCorrect).length;
-      const subjIncorrect = subjAttempts.filter(a=>a.isCorrect===false).length;
+      const subjQuestionCount = publishedCountBySubject.get(subj.id) || 0;
+      const subjStats = lectureStatsBySubject.get(subj.id) ?? [];
+      let subjAttempted = 0;
+      let subjCorrect = 0;
+      let subjIncorrect = 0;
+      let latestAttempt: Date | null = null;
+      for (const stat of subjStats) {
+        subjAttempted += stat.attempted;
+        subjCorrect += stat.correct;
+        subjIncorrect += stat.incorrect;
+        if (stat.lastAttemptAt) {
+          const dt = new Date(stat.lastAttemptAt);
+          if (!latestAttempt || dt.getTime() > latestAttempt.getTime()) {
+            latestAttempt = dt;
+          }
+        }
+      }
       const accuracy =
-        subjAttempts.length > 0 ? Math.round((subjCorrect / Math.max(1,subjCorrect+subjIncorrect)) * 100) : 0;
-      const latestAttempt = subjAttempts[0]?.answeredAt ?? null;
+        subjAttempted > 0 ? Math.round((subjCorrect / Math.max(1, subjCorrect + subjIncorrect)) * 100) : 0;
 
       const lectureBreakdown = allLectures
         .filter((l: any) => l.subjectId === subj.id)
         .sort((a: any, b: any) => a.lectureNumber - b.lectureNumber)
         .map((lect: any) => {
-          const lectQuestions = subjQuestions.filter((q) => q.lectureId === lect.id);
-          const lectAttempts = subjAttempts.filter((a) => a.questionId != null && qMap.get(a.questionId)?.lectureId === lect.id);
-          const lectUniqueIds = new Set(
-            lectAttempts.map((a: any) => a.questionId).filter((id): id is number => id !== null)
-          );
-          const lectCorrect = lectAttempts.filter((a) => a.isCorrect).length;
-          const lectIncorrect = lectAttempts.filter(a=>a.isCorrect===false).length;
+          const lectQuestionCount = publishedCountBySubjectLecture.get(`${subj.id}:${lect.id}`) || 0;
+          const lectStat = lectureStatsByKey.get(`${subj.id}:${lect.id}`);
+          const lectAttempted = lectStat?.attempted || 0;
+          const lectCorrect = lectStat?.correct || 0;
+          const lectIncorrect = lectStat?.incorrect || 0;
           return {
             lectureId: lect.id,
             title: lect.title,
             description: lect.description,
             lectureNumber: lect.lectureNumber,
             pdfUrl: lect.pdfUrl,
-            totalPublishedQuestions: lectQuestions.length,
-            uniqueQuestionsAttempted: lectUniqueIds.size,
-            remainingUnansweredQuestions: Math.max(0, lectQuestions.length - lectUniqueIds.size),
-            totalAnswersSubmitted: lectAttempts.length,
+            totalPublishedQuestions: lectQuestionCount,
+            uniqueQuestionsAttempted: lectAttempted,
+            remainingUnansweredQuestions: Math.max(0, lectQuestionCount - lectAttempted),
+            totalAnswersSubmitted: lectAttempted,
             correctAnswers: lectCorrect,
             incorrectAnswers: lectIncorrect,
             accuracyPercentage:
-              lectAttempts.length > 0
-                ? Math.round((lectCorrect / Math.max(1,lectCorrect+lectIncorrect)) * 100)
+              lectAttempted > 0
+                ? Math.round((lectCorrect / Math.max(1, lectCorrect + lectIncorrect)) * 100)
                 : 0,
-            lastAttemptAt: lectAttempts[0]?.answeredAt ?? null,
+            lastAttemptAt: lectStat?.lastAttemptAt ? new Date(lectStat.lastAttemptAt) : null,
             activeSessionId: userSessions.find(session => session.lectureId === lect.id && session.mode !== 'exam' && session.status === 'in_progress')?.id ?? null,
             reviewSessionId: (userSessions.find(session => session.lectureId === lect.id && session.status === 'completed')
               ?? userSessions.find(session => session.lectureId === lect.id && session.mode !== 'exam' && session.totalQuestions > session.unansweredCount))?.id ?? null,
@@ -4376,10 +4654,10 @@ export async function getStudentDashboardAnalytics(userUid: string) {
         slug: subj.slug,
         displayOrder: subj.displayOrder,
         lectureCount: lectureBreakdown.length,
-        totalPublishedQuestions: subjQuestions.length,
-        uniqueQuestionsAttempted: subjUniqueIds.size,
-        remainingUnansweredQuestions: Math.max(0, subjQuestions.length - subjUniqueIds.size),
-        totalAnswersSubmitted: subjAttempts.length,
+        totalPublishedQuestions: subjQuestionCount,
+        uniqueQuestionsAttempted: subjAttempted,
+        remainingUnansweredQuestions: Math.max(0, subjQuestionCount - subjAttempted),
+        totalAnswersSubmitted: subjAttempted,
         correctAnswers: subjCorrect,
         incorrectAnswers: subjIncorrect,
         accuracyPercentage: accuracy,
@@ -4389,16 +4667,7 @@ export async function getStudentDashboardAnalytics(userUid: string) {
     });
 
     // Weak-topic analysis with small-sample transparency
-    const attemptsWithTags = uniqueLatestAttempts.map((att) => {
-      const liveQ = att.questionId ? qMap.get(att.questionId) : undefined;
-      return {
-        questionId: att.questionId,
-        isCorrect: att.isCorrect,
-        tags: liveQ?.tags || '',
-      };
-    });
-
-    const topicPerformance = computeTopicPerformance(attemptsWithTags.filter(a=>a.isCorrect!==null).map(a=>({...a,isCorrect:a.isCorrect as boolean})));
+    const topicPerformance = computeTopicPerformanceFromAggregates(attemptStats.topicStats);
 
     const seenLectureIds = new Set<number>();
     const deduplicatedSessions: typeof userSessions = [];
@@ -4447,14 +4716,14 @@ export async function getStudentDashboardAnalytics(userUid: string) {
         totalCompletedAttempts: completedSessions.length,
         inProgressCount: inProgressSessions.length,
         totalQuestionsAnswered: totalAnswersSubmitted,
-        uniqueQuestionsAttempted: uniqueQuestionIds.size,
-        totalPublishedQuestions: allQuestions.length,
+        uniqueQuestionsAttempted: totalAnswersSubmitted,
+        totalPublishedQuestions,
         totalCorrectAnswers,
         totalIncorrectAnswers,
         remainingUnansweredQuestions,
         overallAccuracy,
         accuracyPercentage: overallAccuracy,
-        lecturesAttemptedCount: uniqueLecturesAttempted.size,
+        lecturesAttemptedCount: attemptStats.lecturesAttempted,
         totalPublishedLectures: allLectures.length,
         bookmarkCount: bookmarkTotals.count,
       },

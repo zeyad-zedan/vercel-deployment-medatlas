@@ -1,6 +1,6 @@
 import type { ImportImageFile, QuestionImage } from './question-images.ts';
 import type { PracticalMockAttempt, PracticalMockCard, PracticalStationUpload } from './practical-mock.ts';
-import type { DailyGoal, DailyGoalTarget, TournamentBoard } from './study-rewards.ts';
+import type { DailyGoal, DailyGoalTarget, Tournament, TournamentBoard } from './study-rewards.ts';
 import { clearResetSessionStorage } from './session-progress.ts';
 import {
   signInWithPopup,
@@ -536,6 +536,14 @@ export const api = {
     apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/skip`, { method: 'POST', body: JSON.stringify({ stationIndex }) }),
   gradePracticalMock: (id: string, signal: AbortSignal) =>
     apiRequest<PracticalMockAttempt>(`/api/practical-mocks/${id}/grade`, { method: 'POST', signal }),
+  adminListPracticalMockAttempts: (id: string) =>
+    apiRequest<any>(`/api/practical-mocks/${id}/admin/attempts`),
+  adminGetPracticalMockAttempt: (id: string, uid: string) =>
+    apiRequest<any>(`/api/practical-mocks/${id}/admin/attempts/${encodeURIComponent(uid)}`),
+  adminSavePracticalMockGrades: (id: string, uid: string, payload: any) =>
+    apiRequest<{ saved: boolean; score: number; maxScore: number }>(`/api/practical-mocks/${id}/admin/attempts/${encodeURIComponent(uid)}/grades`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    }),
   // Public Catalog
   getCatalog: () =>
     apiRequest<{
@@ -839,6 +847,12 @@ export const api = {
   }),
   createTournament: (event: { title: string; startsAt: string; endsAt: string }) => apiRequest<{ id: number }>('/api/admin/tournaments', {
     method: 'POST', body: JSON.stringify(event),
+  }),
+  updateTournament: (id: number, event: { title: string; startsAt: string; endsAt: string }) => apiRequest<Tournament>(`/api/admin/tournaments/${id}`, {
+    method: 'PATCH', body: JSON.stringify(event),
+  }),
+  cancelTournament: (id: number) => apiRequest<Tournament>(`/api/admin/tournaments/${id}/cancel`, {
+    method: 'POST',
   }),
 
   getBookmarks: (savedOnly = false, review?: ReviewQuery) => {
