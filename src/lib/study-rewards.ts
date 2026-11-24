@@ -1,5 +1,5 @@
 export const dailyGoalTargets = [5, 10, 20] as const;
-export const tournamentsEnabled = false;
+export const tournamentsEnabled = true;
 export type DailyGoalTarget = (typeof dailyGoalTargets)[number];
 
 export interface DailyGoal {
